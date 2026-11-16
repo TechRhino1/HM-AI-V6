@@ -1,0 +1,792 @@
+{
+  "counts": {
+    "TREND_BULL": {
+      "MICRO_ACCOUNT_ADAPTIVE": 13,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 13,
+      "TREND_PULLBACK": 5,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 6
+    },
+    "GLOBAL": {
+      "MICRO_ACCOUNT_ADAPTIVE": 21,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 5,
+      "TREND_PULLBACK": 5,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 5
+    },
+    "TREND_BEAR": {
+      "MICRO_ACCOUNT_ADAPTIVE": 5,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 13,
+      "TREND_PULLBACK": 29,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 5
+    },
+    "REVERSAL": {
+      "MICRO_ACCOUNT_ADAPTIVE": 5,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 5,
+      "TREND_PULLBACK": 5,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 10
+    },
+    "RANGE": {
+      "MICRO_ACCOUNT_ADAPTIVE": 5,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 5,
+      "TREND_PULLBACK": 5,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 6,
+      "CHOCH_STRUCTURAL_REVERSAL": 5
+    },
+    "BREAKOUT": {
+      "MICRO_ACCOUNT_ADAPTIVE": 5,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 5,
+      "TREND_PULLBACK": 6,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 5
+    },
+    "LIQUIDITY_SWEEP": {
+      "MICRO_ACCOUNT_ADAPTIVE": 5,
+      "MICRO_LIQUIDITY_SWEEP": 5,
+      "M1_M5_FVG_SCALP": 5,
+      "TREND_FOLLOWING": 5,
+      "TREND_PULLBACK": 7,
+      "BREAKOUT_EXPANSION": 5,
+      "LIQUIDITY_SWEEP_REVERSAL": 5,
+      "RANGE_MEAN_REVERSION": 5,
+      "CHOCH_STRUCTURAL_REVERSAL": 5
+    }
+  },
+  "rewards": {
+    "TREND_BULL": {
+      "MICRO_ACCOUNT_ADAPTIVE": 6.794485949759726,
+      "MICRO_LIQUIDITY_SWEEP": 0.6727455844513446,
+      "M1_M5_FVG_SCALP": 0.6727455844513446,
+      "TREND_FOLLOWING": 7.161380037770334,
+      "TREND_PULLBACK": 0.6727455844513446,
+      "BREAKOUT_EXPANSION": 0.6727455844513446,
+      "LIQUIDITY_SWEEP_REVERSAL": 0.6727455844513446,
+      "RANGE_MEAN_REVERSION": 0.6727455844513446,
+      "CHOCH_STRUCTURAL_REVERSAL": 0.2386828178279847
+    },
+    "GLOBAL": {
+      "MICRO_ACCOUNT_ADAPTIVE": -0.8930544636357253,
+      "MICRO_LIQUIDITY_SWEEP": 0.7004847818110627,
+      "M1_M5_FVG_SCALP": 0.7004847818110627,
+      "TREND_FOLLOWING": 0.7004847818110627,
+      "TREND_PULLBACK": 0.7004847818110627,
+      "BREAKOUT_EXPANSION": 0.7004847818110627,
+      "LIQUIDITY_SWEEP_REVERSAL": 0.7004847818110627,
+      "RANGE_MEAN_REVERSION": 0.7004847818110627,
+      "CHOCH_STRUCTURAL_REVERSAL": 0.7004847818110627
+    },
+    "TREND_BEAR": {
+      "MICRO_ACCOUNT_ADAPTIVE": 0.8573101147245378,
+      "MICRO_LIQUIDITY_SWEEP": 0.8573101147245378,
+      "M1_M5_FVG_SCALP": 0.8573101147245378,
+      "TREND_FOLLOWING": 1.3784932025338252,
+      "TREND_PULLBACK": 3.4802188306189503,
+      "BREAKOUT_EXPANSION": 0.8573101147245378,
+      "LIQUIDITY_SWEEP_REVERSAL": 0.8573101147245378,
+      "RANGE_MEAN_REVERSION": 0.8573101147245378,
+      "CHOCH_STRUCTURAL_REVERSAL": 0.8573101147245378
+    },
+    "REVERSAL": {
+      "MICRO_ACCOUNT_ADAPTIVE": 1.2584689637862096,
+      "MICRO_LIQUIDITY_SWEEP": 1.2584689637862096,
+      "M1_M5_FVG_SCALP": 1.2584689637862096,
+      "TREND_FOLLOWING": 1.2584689637862096,
+      "TREND_PULLBACK": 1.2584689637862096,
+      "BREAKOUT_EXPANSION": 1.2584689637862096,
+      "LIQUIDITY_SWEEP_REVERSAL": 1.2584689637862096,
+      "RANGE_MEAN_REVERSION": 1.2584689637862096,
+      "CHOCH_STRUCTURAL_REVERSAL": 3.7688364965162564
+    },
+    "RANGE": {
+      "MICRO_ACCOUNT_ADAPTIVE": 1.4792238618542342,
+      "MICRO_LIQUIDITY_SWEEP": 1.4792238618542342,
+      "M1_M5_FVG_SCALP": 1.4792238618542342,
+      "TREND_FOLLOWING": 1.4792238618542342,
+      "TREND_PULLBACK": 1.4792238618542342,
+      "BREAKOUT_EXPANSION": 1.4792238618542342,
+      "LIQUIDITY_SWEEP_REVERSAL": 1.4792238618542342,
+      "RANGE_MEAN_REVERSION": 2.3244946400566526,
+      "CHOCH_STRUCTURAL_REVERSAL": 1.4792238618542342
+    },
+    "BREAKOUT": {
+      "MICRO_ACCOUNT_ADAPTIVE": 2.043697872719677,
+      "MICRO_LIQUIDITY_SWEEP": 2.043697872719677,
+      "M1_M5_FVG_SCALP": 2.043697872719677,
+      "TREND_FOLLOWING": 2.043697872719677,
+      "TREND_PULLBACK": 1.6961302072911597,
+      "BREAKOUT_EXPANSION": 2.043697872719677,
+      "LIQUIDITY_SWEEP_REVERSAL": 2.043697872719677,
+      "RANGE_MEAN_REVERSION": 2.043697872719677,
+      "CHOCH_STRUCTURAL_REVERSAL": 2.043697872719677
+    },
+    "LIQUIDITY_SWEEP": {
+      "MICRO_ACCOUNT_ADAPTIVE": 2.3070671677803114,
+      "MICRO_LIQUIDITY_SWEEP": 2.3070671677803114,
+      "M1_M5_FVG_SCALP": 2.3070671677803114,
+      "TREND_FOLLOWING": 2.3070671677803114,
+      "TREND_PULLBACK": 1.4893272946220193,
+      "BREAKOUT_EXPANSION": 2.3070671677803114,
+      "LIQUIDITY_SWEEP_REVERSAL": 2.3070671677803114,
+      "RANGE_MEAN_REVERSION": 2.3070671677803114,
+      "CHOCH_STRUCTURAL_REVERSAL": 2.3070671677803114
+    }
+  },
+  "priors": {
+    "TREND_BULL": {
+      "SWING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 6.428106008282929,
+          "beta": 2.0,
+          "pulls": 7,
+          "rewards": 17.5
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      },
+      "ALL": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 5.966672943759617,
+          "beta": 2.0,
+          "pulls": 8,
+          "rewards": 16.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      },
+      "SCALP": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.5204029246664725,
+          "pulls": 1,
+          "rewards": -0.5
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.75144747810816,
+          "pulls": 1,
+          "rewards": -0.5
+        }
+      }
+    },
+    "GLOBAL": {
+      "SWING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 4.545142158208134,
+          "beta": 3.609523081466806,
+          "pulls": 16,
+          "rewards": -4.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      }
+    },
+    "TREND_BEAR": {
+      "SCALP": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.2218338767478842,
+          "beta": 2.9234115826032205,
+          "pulls": 6,
+          "rewards": 1.5
+        },
+        "TREND_PULLBACK": {
+          "alpha": 5.5141594356803445,
+          "beta": 4.589614150051203,
+          "pulls": 15,
+          "rewards": 3.99
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      },
+      "DAY_TRADING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.110409292464261,
+          "beta": 2.2396034992713982,
+          "pulls": 2,
+          "rewards": 0.5
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.5581388076082927,
+          "beta": 4.851279343217447,
+          "pulls": 9,
+          "rewards": 1.5
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      }
+    },
+    "REVERSAL": {
+      "DAY_TRADING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.090024722636692,
+          "beta": 2.0,
+          "pulls": 1,
+          "rewards": 1.0
+        }
+      },
+      "SCALP": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 4.981952502124235,
+          "beta": 2.96,
+          "pulls": 4,
+          "rewards": 2.5
+        }
+      }
+    },
+    "RANGE": {
+      "DAY_TRADING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.419306123724947,
+          "beta": 2.0,
+          "pulls": 1,
+          "rewards": 1.68
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      }
+    },
+    "BREAKOUT": {
+      "DAY_TRADING": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 2.4796033353726212,
+          "pulls": 1,
+          "rewards": -0.5
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      }
+    },
+    "LIQUIDITY_SWEEP": {
+      "SCALP": {
+        "MICRO_ACCOUNT_ADAPTIVE": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "MICRO_LIQUIDITY_SWEEP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "M1_M5_FVG_SCALP": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_FOLLOWING": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "TREND_PULLBACK": {
+          "alpha": 3.0,
+          "beta": 3.3340993363136002,
+          "pulls": 2,
+          "rewards": -1.0
+        },
+        "BREAKOUT_EXPANSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "LIQUIDITY_SWEEP_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "RANGE_MEAN_REVERSION": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        },
+        "CHOCH_STRUCTURAL_REVERSAL": {
+          "alpha": 3.0,
+          "beta": 2.0,
+          "pulls": 0,
+          "rewards": 0.0
+        }
+      }
+    }
+  }
+}

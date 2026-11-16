@@ -1,0 +1,14 @@
+{
+  "active": "v1",
+  "versions": {
+    "v1": {
+      "file": "v1.json",
+      "sha256": "4684ef5ea26ebccb",
+      "parent": null,
+      "created": "2026-11-16T09:27:28Z",
+      "reason": "bootstrap: froze the state live trading was using",
+      "author": "system",
+      "validation": {}
+    }
+  }
+}
