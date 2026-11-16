@@ -39,7 +39,14 @@ SYMBOLS = {  # name: (MT5 symbol, sane close range -- fetch refuses anything out
     "SOLUSD": ("SOLUSD#", 0.1, 2_000, "bps"),
     "XAUUSD": ("GOLD.i#", 200, 10_000, "usd"),   # gold spread ~constant in $ (conservative at old, low prices)
 }
-TFS = ("M5", "H1", "H4", "D1")
+FOREX = {  # used by tools/range_research.py; spreads ~constant in price units
+    "EURUSD": ("EURUSD#", 0.5, 2.0, "usd"),
+    "GBPUSD": ("GBPUSD#", 0.8, 2.5, "usd"),
+    "USDJPY": ("USDJPY#", 70, 400, "usd"),  # 1970s ~300
+    "USDCAD": ("USDCAD#", 0.9, 1.8, "usd"),
+    "AUDUSD": ("AUDUSD#", 0.4, 1.2, "usd"),
+}
+TFS = ("M5", "M15", "H1", "H4", "D1")
 INFO_KEYS = ("point", "digits", "trade_contract_size", "volume_min", "trade_tick_value", "trade_tick_size",
              "swap_long", "swap_short", "swap_mode", "swap_rollover3days", "currency_profit", "spread")
 RISK_FRAC, ACCOUNTS = 0.025, (100.0, 545.0)
@@ -50,18 +57,22 @@ NS_MIN = 60_000_000_000
 
 # ── data ─────────────────────────────────────────────────────────────────────
 
-def fetch(path):
+def fetch(path, symbols=None):
     """Freeze closed bars (max terminal history) and symbol_info per symbol; refuse non-real prices."""
     import MetaTrader5 as mt5
     assert mt5.initialize(), mt5.last_error()
-    count = mt5.terminal_info().maxbars - 1
+    count = min(mt5.terminal_info().maxbars - 1, 50_000)
     out = {}
-    for name, (sym, lo, hi, _) in SYMBOLS.items():
+    for name, (sym, lo, hi, _) in (symbols or SYMBOLS).items():
         assert mt5.symbol_select(sym, True), sym
         info = mt5.symbol_info(sym)._asdict()
         frames = {}
         for tf in TFS:
-            r = mt5.copy_rates_from_pos(sym, getattr(mt5, "TIMEFRAME_" + tf), 1, count)  # pos 1: closed bars only
+            for _ in range(5):  # the terminal's IPC drops large requests while the live engine is busy
+                r = mt5.copy_rates_from_pos(sym, getattr(mt5, "TIMEFRAME_" + tf), 1, count)  # pos 1: closed bars only
+                if r is not None and len(r):
+                    break
+                import time; time.sleep(3); mt5.initialize()
             assert r is not None and len(r), f"{sym} {tf}: {mt5.last_error()}"
             df = pd.DataFrame(r)
             df["time"] = pd.to_datetime(df["time"], unit="s")
@@ -187,7 +198,10 @@ def run(A, sig, ex):
     replaced by longs on 5 random bars (seeded) held the same number of bars with the same ATR stop."""
     raw = {k: [] for k in ("strategy", "always_long", "flipped", "spread_x2", "time", "sd", "swap_r")}
     busy, long_only, rng, n = -1, all(sd_[1] == 1 for sd_ in sig), np.random.default_rng(0), len(A["c"])
-    for i, side, sd in sig:
+    ex0 = ex
+    for item in sig:  # (i, side, stop_dist[, target_r]) -- a per-trade target overrides ex["tgt"]
+        i, side, sd = item[:3]
+        ex = {**ex0, "tgt": item[3]} if len(item) > 3 else ex0
         if i < busy or not sd > 0:
             continue
         w = walk(A, i, side, sd, ex, side)
@@ -337,7 +351,7 @@ def research(data):
         rs = h.spread * info["point"]
         ref = {"bps": float(np.median(rs / h.close)), "usd": float(np.median(rs)), "model": SYMBOLS[name][3]}
         slip = 0.5 * ref["usd"]   # half the recent median spread: gold ~$0.10, as gold_research
-        P = {tf: prep(fr[tf], tf, info, ref) for tf in TFS}
+        P = {tf: prep(fr[tf], tf, info, ref) for tf in TFS if tf in fr}
         yr = P["H1"].groupby(P["H1"].t_open.dt.year).modeled.mean()      # real era: from the first year after
         bad_years = yr[yr >= 0.05].index                                  # which every year is >= 95% real spreads
         real_start = pd.Timestamp(f"{bad_years.max() + 1}-01-01") if len(bad_years) else P["H1"].t_open.iat[0]
@@ -346,12 +360,12 @@ def research(data):
         tp, v = (m5.high + m5.low + m5.close) / 3, m5.volume.clip(lower=1)
         m5["vwap"] = (tp * v).groupby(day).cumsum() / v.groupby(day).cumsum()
         P["M5"] = m5
-        A = {tf: arrays(P[tf], info, slip, weekends) for tf in TFS}
+        A = {tf: arrays(P[tf], info, slip, weekends) for tf in P}
         res[name] = {"symbol": blob["symbol"], "info": info, "slip": slip, "weekends": weekends, "spread_ref": ref,
                      "real_spread_from": str(real_start),
-                     "modeled_share": {tf: round(float(P[tf].modeled.mean()), 3) for tf in TFS},
-                     "bars": {tf: [str(P[tf].t_open.iat[0]), str(P[tf].t_open.iat[-1]), len(P[tf])] for tf in TFS},
-                     "median_spread": {tf: float(np.median(P[tf].spr)) for tf in TFS}}
+                     "modeled_share": {tf: round(float(P[tf].modeled.mean()), 3) for tf in P},
+                     "bars": {tf: [str(P[tf].t_open.iat[0]), str(P[tf].t_open.iat[-1]), len(P[tf])] for tf in P},
+                     "median_spread": {tf: float(np.median(P[tf].spr)) for tf in P}}
         jobs = []
         for tf in ("D1", "H4"):
             jobs.append(("donchian_ens", tf, [run(A[tf], *donchian(A[tf], a, b)) for a, b in ((20, 10), (55, 20), (100, 20))]))
