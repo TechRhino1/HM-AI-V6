@@ -63,6 +63,11 @@ def main():
         orchestrator.stop()
         return
 
+    # One engine per mode: a second one would place duplicate orders on the account.
+    from jarvis.common.single_instance import acquire_engine_lock, install_shutdown_signals
+    acquire_engine_lock(args.mode)
+    install_shutdown_signals()
+
     # Start Orchestrator loop
     orchestrator.start()
 

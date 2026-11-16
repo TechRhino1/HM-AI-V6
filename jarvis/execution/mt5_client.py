@@ -1010,7 +1010,8 @@ class MT5Client:
                     "comment": result.comment
                 }
 
-        return TimeoutGuard.run_sync(_send_pending, timeout_sec=5.0, default={"status": "FAILED", "reason": "Timeout"}, task_name=f"MT5_Pending_{symbol}")
+        # UNKNOWN, as for market orders: a timed-out send may have placed the order.
+        return TimeoutGuard.run_sync(_send_pending, timeout_sec=5.0, default={"status": "UNKNOWN", "reason": "Timeout"}, task_name=f"MT5_Pending_{symbol}")
 
     def get_pending_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Returns active pending orders from MT5 with 1.0s fast caching."""
@@ -1097,13 +1098,19 @@ class MT5Client:
             "action": getattr(mt5, "TRADE_ACTION_REMOVE", 8),
             "order": ticket
         }
-        with self._lock:
-            result = mt5.order_send(request)
-        if result and result.retcode in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
-            logger.info(f"⚡ PENDING ORDER CANCELLED: Ticket={ticket}")
-            return {"status": "CANCELLED", "ticket": ticket}
-        err_msg = result.comment if result else str(mt5.last_error())
-        return {"status": "FAILED", "reason": err_msg}
+
+        def _cancel():
+            with self._lock:
+                result = mt5.order_send(request)
+            if result and result.retcode in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
+                logger.info(f"⚡ PENDING ORDER CANCELLED: Ticket={ticket}")
+                return {"status": "CANCELLED", "ticket": ticket}
+            err_msg = result.comment if result else str(mt5.last_error())
+            return {"status": "FAILED", "reason": err_msg}
+
+        # It was the one order_send with no timeout: a hung terminal froze the caller.
+        return TimeoutGuard.run_sync(_cancel, timeout_sec=5.0, default={"status": "UNKNOWN", "reason": "Timeout"},
+                                     task_name=f"MT5_Cancel_{ticket}")
 
     def cancel_all_pending_orders(self) -> List[Dict[str, Any]]:
         """Cancels all currently active pending orders."""

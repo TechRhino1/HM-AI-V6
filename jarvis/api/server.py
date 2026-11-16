@@ -37,6 +37,10 @@ from jarvis.observability.metrics import REGISTRY
 
 logger = logging.getLogger("JARVIS_WebServer")
 
+# The only /api/ routes reachable without a session: the auth flow itself.
+PUBLIC_API_GETS = frozenset({"/api/auth/me", "/api/auth/verify"})
+PUBLIC_API_POSTS = frozenset({"/api/auth/login", "/api/auth/logout", "/api/auth/verify", "/api/auth/register"})
+
 
 def _status_class(status_code: int) -> str:
     """`2xx` / `4xx` / `5xx`. A status code is not a usable metric label: one
@@ -162,7 +166,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
     def _session_cookie(self, token: str, max_age: int) -> str:
         attrs = [f"jarvis_auth_token={token}", "Path=/", f"Max-Age={max_age}", "HttpOnly", "SameSite=Strict"]
-        if os.environ.get("JARVIS_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}:
+        # The tunnel terminates HTTPS and forwards plain HTTP: honour its proto header.
+        via_https = (self.headers.get("X-Forwarded-Proto", "") if getattr(self, "headers", None) else "").lower() == "https"
+        if via_https or os.environ.get("JARVIS_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}:
             attrs.append("Secure")
         return "; ".join(attrs)
 
@@ -576,8 +582,12 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             # Public read-only GET endpoints (page shells, static assets, telemetry, market data, and intelligence feeds)
             # are freely readable without login barriers on all devices (mobile, tablet, Wi-Fi, tunnels).
             # Only admin management routes (/api/admin/*) require an authenticated ADMIN session on GET.
-            if path.startswith("/api/admin/") and not self._check_auth():
-                self._send_json({"status": "UNAUTHORIZED", "error": "Authentication required for admin access"}, status_code=401)
+            # Every data API needs a session: account, positions, history and radar
+            # were readable by anyone holding the public tunnel URL. Page shells,
+            # static assets, health probes and the auth checks stay public so the
+            # login screen can load; localhost is still auto-admin.
+            if path.startswith("/api/") and path not in PUBLIC_API_GETS and not self._check_auth():
+                self._send_json({"status": "UNAUTHORIZED", "error": "Authentication required"}, status_code=401)
                 return
 
             if path in ("/health", "/ready"):
@@ -1288,6 +1298,16 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 status_code = 200 if success else 400
                 self._send_json({"status": "SUCCESS" if success else "FAILED", "message": msg, "error": msg if not success else None}, status_code=status_code)
                 return
+
+            if path.startswith("/api/") and path not in PUBLIC_API_POSTS and not self._check_auth():
+                self._send_json({"status": "UNAUTHORIZED", "error": "Authentication required"}, status_code=401)
+                return
+
+            # Lifting a risk halt re-bases the daily-loss limit: operator (ADMIN) only.
+            if path in ("/api/action/resume_trading", "/api/action/reset_drawdown"):
+                ok, _ = self._require_role("ADMIN")
+                if not ok:
+                    return
 
             # Protected Action Endpoints — Require Authentication + appropriate role
             if (path.startswith("/api/action/")

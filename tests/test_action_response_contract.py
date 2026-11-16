@@ -52,6 +52,9 @@ class _RouteHarness(JarvisRequestHandler):
     def _require_role(self, *allowed_roles):
         return True, None
 
+    def _check_auth(self):
+        return True
+
 
 def _post(path, body, client):
     payload = json.dumps(body).encode("utf-8")

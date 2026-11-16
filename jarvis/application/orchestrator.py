@@ -50,6 +50,10 @@ from jarvis.observability.instruments import DECISION_EVALUATIONS, DECISION_LATE
 
 logger = logging.getLogger("JARVIS_Orchestrator")
 
+# An order whose outcome is unknown keeps its risk reserved this long (until the
+# broker sync shows the position or proves there is none).
+UNKNOWN_ORDER_HOLD_SEC = 600.0
+
 # ── Shared scan pool ────────────────────────────────────────────────────────
 # `scan_all_modes` used to build a fresh ThreadPoolExecutor on every call
 # (`max(4, min(32, len(tasks)))` workers), so every radar tick paid pool-creation
@@ -127,6 +131,9 @@ class JarvisOrchestrator:
         # Tracks symbols currently being executed to prevent race-condition
         # multi-fires before MT5StateSynchronizer (1 s lag) can catch up.
         self._execution_in_progress: set = set()
+        # When each lock was CLAIMED: the watchdog ages locks by this, not by the
+        # previous execution (which is old for almost every new order).
+        self._execution_claimed_at: dict = {}
         self._execution_lock = threading.Lock()
         # Per-symbol last-execution timestamp for 10-min same-symbol cooldown
         self._last_execution_time: Dict[str, float] = {}
@@ -458,6 +465,16 @@ class JarvisOrchestrator:
             self._watchdog_thread.start()
             logger.info("HM Algo 2.0 Orchestrator and Watchdog started.")
 
+    def _release_stale_execution_locks(self, now: float) -> list:
+        """Free execution locks CLAIMED more than 60 s ago (a hung dispatch)."""
+        with self._execution_lock:
+            stale = [s for s in self._execution_in_progress
+                     if (now - self._execution_claimed_at.get(s, 0.0)) > 60.0]
+            for sym in stale:
+                logger.warning(f"Watchdog auto-releasing stale execution lock for {sym}.")
+                self._execution_in_progress.discard(sym)
+        return stale
+
     def _watchdog_loop(self):
         """Autonomous self-healing watchdog monitoring broker state, thread health, and stale locks."""
         logger.info("HM Algo 2.0 Autonomous Watchdog supervisor active.")
@@ -465,15 +482,7 @@ class JarvisOrchestrator:
             try:
                 now = time.time()
                 # 1. Stale Execution Lock Recovery
-                with self._execution_lock:
-                    stale_syms = []
-                    for sym in list(self._execution_in_progress):
-                        last_exec = self._last_execution_time.get(sym, 0.0)
-                        if (now - last_exec) > 60.0:  # Lock held longer than 60s without release
-                            stale_syms.append(sym)
-                    for sym in stale_syms:
-                        logger.warning(f"Watchdog auto-releasing stale execution lock for {sym}.")
-                        self._execution_in_progress.discard(sym)
+                self._release_stale_execution_locks(now)
 
                 # 2. Broker connection and market-data health.
                 # Two different links, previously conflated: DATA_FEED was keyed
@@ -538,6 +547,13 @@ class JarvisOrchestrator:
         self.state_manager.set_orchestrator_running(False)
         self.position_monitor.stop()
         self.state_synchronizer.stop()
+        # Never cut the terminal under an order still being dispatched: its
+        # outcome would be unknowable on the next start.
+        deadline = time.time() + 15.0
+        while self._execution_in_progress and time.time() < deadline:
+            time.sleep(0.2)
+        if self._execution_in_progress:
+            logger.error(f"Shutdown with execution still in flight for {sorted(self._execution_in_progress)}.")
         self.mt5_client.shutdown()
         if hasattr(self, "trade_memory") and self.trade_memory:
             try:
@@ -2086,6 +2102,7 @@ class JarvisOrchestrator:
                     claimed = False
                 else:
                     self._execution_in_progress.add(canonical_sym)
+                    self._execution_claimed_at[canonical_sym] = time.time()
                     claimed = True
 
             if not claimed:
@@ -2113,6 +2130,9 @@ class JarvisOrchestrator:
                             "refusing to retry until the broker state is confirmed.",
                             canonical_sym,
                         )
+                        # "Held" for real: the default 15 s reservation TTL lapsed
+                        # long before any sync could reconcile the order.
+                        self.risk_engine.reserve_risk(canonical_sym, est_risk_usd, ttl_sec=UNKNOWN_ORDER_HOLD_SEC)
                     else:
                         self.risk_engine.release_risk(canonical_sym)
                 except Exception as e:
@@ -2513,6 +2533,7 @@ class JarvisOrchestrator:
 
                     with self._execution_lock:
                         self._execution_in_progress.add(canonical_sym)
+                        self._execution_claimed_at[canonical_sym] = time.time()
 
                     exec_res = None
                     try:
@@ -2537,6 +2558,7 @@ class JarvisOrchestrator:
                         elif exec_res and exec_res.get("status") == "UNKNOWN":
                             # Same as run_cycle: the order may be live, so keep the reservation until sync reconciles.
                             logger.error(f"Arbiter order for {canonical_sym} has UNKNOWN outcome -- holding risk reservation.")
+                            self.risk_engine.reserve_risk(canonical_sym, est_risk_usd, ttl_sec=UNKNOWN_ORDER_HOLD_SEC)
                         else:
                             self.risk_engine.release_risk(canonical_sym)
                     except Exception as e:

@@ -304,6 +304,11 @@ def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trad
     except Exception as exc:
         logger.warning("Could not pre-import the intelligence API: %s", exc)
 
+    # One engine per mode: a second one would place duplicate orders on the account.
+    from jarvis.common.single_instance import acquire_engine_lock, install_shutdown_signals
+    acquire_engine_lock(mode)
+    install_shutdown_signals()
+
     # 2. Start Autonomous Orchestrator (defaults to LIVE mode; allows paper for testing)
     orchestrator = JarvisOrchestrator(mode=mode, trade_style=trade_style)
     actual_mode = orchestrator.mode.upper()
