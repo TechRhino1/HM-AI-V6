@@ -110,8 +110,19 @@ class JarvisOrchestrator:
         self.state_manager.set_execution_mode(ExecutionMode(self.mode.upper()))
         self.event_bus = GLOBAL_EVENT_BUS
 
-        self.ml_predictor = OnlineMLPredictor()
-        self.strategy_bandit = StrategyBandit()
+        # Learning governance (2026-11-16): live trading uses the FROZEN active
+        # version of each learned model; the shadow copies keep learning from every
+        # close and replace the active one only via tools/promote_model.py.
+        from jarvis.config.paths import resolve_db_path
+        from jarvis.learning import model_registry
+        _ml_seed = OnlineMLPredictor._resolve_model_path("jarvis_online_ml_weights.json")
+        _bandit_seed = resolve_db_path("jarvis_bandit_state.json")
+        self.ml_predictor = OnlineMLPredictor(
+            model_file=model_registry.active_path("online_ml", _ml_seed) or _ml_seed)
+        self.strategy_bandit = StrategyBandit(
+            state_file=model_registry.active_path("strategy_bandit", _bandit_seed) or _bandit_seed)
+        self.ml_predictor_shadow = OnlineMLPredictor()
+        self.strategy_bandit_shadow = StrategyBandit()
         self.risk_engine = RiskEngine(mode=self.mode)
         # Share the exact same CircuitBreaker and DrawdownGuard instances with RiskEngine
         # so pause states, consecutive loss counts, and drawdown limits stay 100% in sync.
@@ -970,10 +981,11 @@ class JarvisOrchestrator:
         # An unmeasured outcome is not a label. Training on `is_win=None` would teach
         # the model that a data gap is a loss.
         if pending and "features" in pending and is_win is not None:
+            # Shadow only: the live model is frozen until a validated promotion.
             if r_multiple is None:
-                self.ml_predictor.update_online(pending["features"], is_win)
+                self.ml_predictor_shadow.update_online(pending["features"], is_win)
             else:
-                self.ml_predictor.update_online(pending["features"], is_win, r_multiple=r_multiple)
+                self.ml_predictor_shadow.update_online(pending["features"], is_win, r_multiple=r_multiple)
 
         # 3. Update Multi-Armed Bandit with Thompson Sampling (§17)
         #
@@ -986,7 +998,7 @@ class JarvisOrchestrator:
         # A bandit reward of None is not a reward. Skipping keeps an unmeasured close
         # from being counted as a loss against the strategy that produced it.
         if is_win is not None:
-            self.strategy_bandit.record_outcome(
+            self.strategy_bandit_shadow.record_outcome(
                 strategy=strategy,
                 is_win=is_win,
                 r_multiple=r_multiple,
@@ -1018,17 +1030,10 @@ class JarvisOrchestrator:
         if new_equity > 0:
             self.drawdown_guard.update_equity_benchmarks(new_equity, float(data.get("balance", new_equity)))
 
-        # 5. Recalibrate confidence curve from recent closed trades (§17)
-        # `exit_price` is NULL for a trade whose outcome was never recorded, and
-        # `dict.get(key, 0)` only returns the default when the key is *missing* — a
-        # present-but-None value comes back as None and `None > 0` raises. Those rows
-        # are "not closed yet" for calibration purposes and must be filtered out.
-        all_closed = [
-            t for t in self.trade_memory.fetch_recent_trades(50)
-            if (t.get("exit_price") or 0) > 0
-        ]
-        if len(all_closed) >= 10:
-            self.decision_engine.calibrator.update_calibration_from_history(all_closed)
+        # 5. The confidence curve is no longer refit live (learning governance
+        # 2026-11-16): a curve fitted on the last 50 trades moved the live
+        # probability after every close with no validation. Calibration is fitted
+        # offline and promoted like any other model.
 
         # AI6: `None` must be printed as UNKNOWN. Formatting it with `%.2f`/`{:.2f}`
         # would render the string "None" and, in the old code, the value was
@@ -2029,9 +2034,12 @@ class JarvisOrchestrator:
             if hasattr(self, "llm_controller"):
                 try:
                     gov_directives = self.llm_controller.get_latest_directives()
-                    if gov_directives.risk_multiplier != 1.0 and hasattr(decision, "calculated_risk_percent"):
+                    # The governor may only REDUCE risk; raising it is not a learned
+                    # change anyone validated (it allowed up to 1.25x).
+                    _gov_mult = min(1.0, float(gov_directives.risk_multiplier))
+                    if _gov_mult < 1.0 and hasattr(decision, "calculated_risk_percent"):
                         decision.calculated_risk_percent = round(
-                            max(0.25, min(2.5, decision.calculated_risk_percent * gov_directives.risk_multiplier)), 2
+                            max(0.25, decision.calculated_risk_percent * _gov_mult), 2
                         )
                 except Exception as e:
                     logger.debug(f"LLM Governor risk scaling failed: {e}")

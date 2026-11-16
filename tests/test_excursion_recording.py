@@ -161,6 +161,8 @@ class TestTheCloseHandlerStopsFabricatingZeros:
         orch.position_monitor = monitor
         orch.ml_predictor = _Null()
         orch.strategy_bandit = _Null()
+        orch.ml_predictor_shadow = _Null()
+        orch.strategy_bandit_shadow = _Null()
         orch.circuit_breaker = _Null()
         orch.drawdown_guard = _Null()
         orch.decision_engine = _Null()

@@ -114,8 +114,8 @@ def _closed_trade_orchestrator():
     orch.trade_memory = MagicMock()
     orch.trade_memory.update_closed_trade.return_value = True
     orch.trade_memory.fetch_recent_trades.return_value = []
-    orch.ml_predictor = MagicMock()
-    orch.strategy_bandit = MagicMock()
+    orch.ml_predictor_shadow = MagicMock()
+    orch.strategy_bandit_shadow = MagicMock()
     orch.circuit_breaker = MagicMock()
     orch.risk_engine = None
     orch.drawdown_guard = MagicMock()
@@ -128,7 +128,7 @@ def test_zero_pnl_is_neutral_not_a_loss():
     orch._on_trade_closed({"ticket": 111, "symbol": "EURUSD", "pnl": 0.0})
 
     orch.circuit_breaker.record_trade_result.assert_not_called()
-    orch.strategy_bandit.record_outcome.assert_not_called()
+    orch.strategy_bandit_shadow.record_outcome.assert_not_called()
     # The scratch is still persisted as a real, measured 0.0.
     kwargs = orch.trade_memory.update_closed_trade.call_args.kwargs
     assert kwargs["pnl"] == 0.0

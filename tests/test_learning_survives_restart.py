@@ -82,8 +82,9 @@ def _orchestrator(db):
     orch.position_monitor = _FakeMonitor()
     ml = _Recorder()
     bandit = _Recorder()
-    orch.ml_predictor = ml
-    orch.strategy_bandit = bandit
+    # Closed trades teach the SHADOW models; live ones are frozen (governance 2026-11-16).
+    orch.ml_predictor_shadow = ml
+    orch.strategy_bandit_shadow = bandit
     orch.circuit_breaker = _Null()
     orch.drawdown_guard = _Null()
     orch.decision_engine = _Null()

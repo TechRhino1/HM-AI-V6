@@ -94,8 +94,21 @@ class AutonomousLLMSystemController:
         directives = self._evaluate_system_and_market()
 
         with self._lock:
+            previous = self._cached_directives
             self._cached_directives = directives
             self._last_eval_time = now
+        if previous is None or (
+            previous.risk_multiplier, previous.risk_posture,
+            {s: d.status for s, d in previous.symbol_directives.items()},
+        ) != (
+            directives.risk_multiplier, directives.risk_posture,
+            {s: d.status for s, d in directives.symbol_directives.items()},
+        ):
+            from jarvis.learning.model_registry import audit
+            audit("governor_directive", source=directives.source, posture=directives.risk_posture,
+                  risk_multiplier=directives.risk_multiplier,
+                  paused=[s for s, d in directives.symbol_directives.items() if d.status != "ENABLED"],
+                  reasoning=directives.macro_reasoning)
 
         # Publish to state manager for UI visibility
         try:

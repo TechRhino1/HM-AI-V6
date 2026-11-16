@@ -646,7 +646,7 @@ class TestOrchestratorMultiStyleRadar(unittest.TestCase):
     def test_closed_trade_self_learning_loop(self):
         """Verify _on_trade_closed triggers return-weighted ML and Thompson bandit updates."""
         ticket = 888777
-        initial_training_steps = self.orchestrator.ml_predictor.training_steps
+        initial_training_steps = self.orchestrator.ml_predictor_shadow.training_steps
 
         dummy_feat = self.orchestrator.ml_predictor.extract_features(
             context=MarketContext(
@@ -688,7 +688,7 @@ class TestOrchestratorMultiStyleRadar(unittest.TestCase):
         })
 
         self.assertNotIn(ticket, self.orchestrator._pending_features)
-        self.assertEqual(len(self.orchestrator.ml_predictor._grad_buffer), 1)
+        self.assertEqual(len(self.orchestrator.ml_predictor_shadow._grad_buffer), 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,24 @@ def _hermetic_trade_journal(monkeypatch):
                 pass
 
 
+# Keep tests out of data/models: building an orchestrator freezes the live learned
+# state into the model registry on first use. Redirected at conftest IMPORT time,
+# not in a fixture: importing jarvis.api.intelligence_api during collection starts
+# a pre-warm thread that builds a fallback orchestrator before any fixture runs.
+import tempfile as _tempfile  # noqa: E402
+
+import jarvis.learning.model_registry as _model_registry  # noqa: E402
+
+_MODEL_REGISTRY_ROOT = _tempfile.mkdtemp(prefix="jarvis_test_models_")
+_model_registry._root = lambda: _MODEL_REGISTRY_ROOT
+
+
+@pytest.fixture
+def _hermetic_model_registry():
+    """The test-run model registry root (see the import-time redirect above)."""
+    return _MODEL_REGISTRY_ROOT
+
+
 @pytest.fixture
 def managed_gold_exit(monkeypatch):
     """Gold with the managed exit (BE / partial / milestones / locks) it had before

@@ -598,7 +598,7 @@ class TestRegressionFixes(unittest.TestCase):
         self.assertEqual(recent[0].get("ticket"), 999333)
 
         # 3. Simulate trade close event
-        initial_training_steps = orch.ml_predictor.training_steps
+        initial_training_steps = orch.ml_predictor_shadow.training_steps
         orch._on_trade_closed({
             "ticket": 999333,
             "symbol": "XAUUSD",
@@ -609,7 +609,8 @@ class TestRegressionFixes(unittest.TestCase):
 
         # 4. Assert ML predictor received online update and pending features popped
         self.assertNotIn(999333, orch._pending_features, "Ticket must be popped from _pending_features after close")
-        self.assertEqual(len(orch.ml_predictor._grad_buffer), 1, "ML grad buffer must record gradient step")
+        self.assertEqual(len(orch.ml_predictor_shadow._grad_buffer), 1, "ML grad buffer must record gradient step")
+        self.assertEqual(len(orch.ml_predictor._grad_buffer), 0, "the LIVE model is frozen: only the shadow learns")
 
         # After 2 more trade closes (batch_size=3), training_steps increments
         dummy_feat = orch.ml_predictor.extract_feature_vector(
@@ -621,7 +622,7 @@ class TestRegressionFixes(unittest.TestCase):
         orch._pending_features[999335] = {"features": dummy_feat}
         orch._on_trade_closed({"ticket": 999334, "pnl": 20.0, "exit_price": 2410.0, "equity": 10070.0})
         orch._on_trade_closed({"ticket": 999335, "pnl": -10.0, "exit_price": 2395.0, "equity": 10060.0})
-        self.assertEqual(orch.ml_predictor.training_steps, initial_training_steps + 1, "ML training_steps must increment when mini-batch completes")
+        self.assertEqual(orch.ml_predictor_shadow.training_steps, initial_training_steps + 1, "ML training_steps must increment when mini-batch completes")
 
         # 5. Assert trade_memory row was updated with exit metrics
         closed_rows = [t for t in orch.trade_memory.fetch_recent_trades(1) if t.get("ticket") == 999333]

@@ -46,6 +46,9 @@ GATE_SPECS: Tuple[GateSpec, ...] = (
     GateSpec("Risk/Reward >= 1.5", "hard", category="geometry"),
     GateSpec("Valid Stop Loss Distance", "hard", category="geometry"),
     GateSpec("Positive Expected Value", "hard", category="edge"),
+    # Was emitted by the decision engine but missing here, so it fell through as
+    # an "unknown" (softenable) gate. Beating the honest base rate IS the edge.
+    GateSpec("Honest Base Rate + 5%", "hard", category="edge"),
     GateSpec("Spread Protection", "hard", category="liquidity"),
     GateSpec("Volatility Spike Circuit Breaker", "hard", category="risk"),
     GateSpec("No Active Macro Shock", "hard", category="macro"),
@@ -76,6 +79,7 @@ GATE_SPECS: Tuple[GateSpec, ...] = (
     GateSpec("JPY Momentum Guard", "soft", 0.03, "trend"),
     GateSpec("SOL Confluence Guard", "soft", 0.03, "confluence"),
     GateSpec("US30 Confluence Guard", "soft", 0.03, "confluence"),
+    GateSpec("ML Meta-Label Confirmation", "soft", 0.03, "probability"),
 )
 
 GATE_NAMES: Tuple[str, ...] = tuple(spec.name for spec in GATE_SPECS)

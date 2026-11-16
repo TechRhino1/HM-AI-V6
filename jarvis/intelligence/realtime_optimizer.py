@@ -68,10 +68,8 @@ class RealtimeOptimizer:
                 adj = {"win_p_delta": 0.0, "score_delta": 0.0, "rr_delta": 0.0}
             elif win_rate < 0.55:
                 adj = {"win_p_delta": 0.0, "score_delta": 0.0, "rr_delta": 0.0}
-            elif win_rate > 0.68:
-                adj = {"win_p_delta": -0.02, "score_delta": -2.0, "rr_delta": -0.05}
-            elif win_rate > 0.62:
-                adj = {"win_p_delta": -0.01, "score_delta": -1.0, "rr_delta": 0.0}
+            # No loosening after a winning streak (learning governance 2026-11-16):
+            # relaxing thresholds on recent luck is pro-cyclical and unvalidated.
             with self._lock:
                 self._cache[key] = (now, adj)
             return adj
