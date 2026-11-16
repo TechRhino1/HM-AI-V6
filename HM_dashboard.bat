@@ -1,8 +1,8 @@
 @echo off
-title HM Algo 2.0 Dashboard (UI + REST API only)
+title HM-AI-V6 Dashboard (UI + REST API only)
 cd /d "%~dp0"
 echo ======================================================================
-echo    Starting HM Algo 2.0 Dashboard  ^(UI + REST API only^)
+echo    Starting HM-AI-V6 (HM Algo 6.0) Dashboard  ^(UI + REST API only^)
 echo ======================================================================
 echo.
 echo  This starts the web terminal on http://127.0.0.1:8501 and NOTHING else.

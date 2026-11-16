@@ -1,2 +1,3 @@
-"""HM Algo 2.0 Package"""
-__version__ = "3.0.0"
+"""HM-AI-V6 (HM Algo 6.0) Package"""
+__version__ = "6.0.0"
+

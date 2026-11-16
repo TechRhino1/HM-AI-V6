@@ -1,4 +1,4 @@
-# HM Algo 2.0 — Institutional Quantitative MT5 Trading System
+# HM-AI-V6 (HM Algo 6.0) — Institutional Quantitative MT5 Trading System
 
 An institutional-grade, multi-factor adaptive algorithmic trading architecture built for MetaTrader 5 (MT5). The system integrates Smart Money Concepts (ICT/SMC), Wyckoff accumulation/distribution frameworks, Minervini Trend Templates, Volatility Contraction Patterns (VCP), dynamic Fractional Kelly risk management, and a **calibrated win-rate pipeline** to achieve high-expectancy trade execution.
 

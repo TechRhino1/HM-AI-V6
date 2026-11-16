@@ -1,5 +1,5 @@
 """
-HM Algo 2.0 — Platform Supervisor and CLI Manager.
+HM-AI-V6 (HM Algo 6.0) — Platform Supervisor and CLI Manager.
 """
 import sys
 import os
@@ -33,7 +33,7 @@ def print_status_hud():
     snap = GLOBAL_STATE.get_state_snapshot()
     acc = snap.get("account") or {}
     print("\n" + "=" * 60)
-    print("              HM Algo 2.0 COMMAND CENTER              ")
+    print("              HM-AI-V6 COMMAND CENTER                 ")
     print("=" * 60)
     print(f"STATUS:          {'🟢 OPERATIONAL' if not snap['safe_mode'] else '🟡 SAFE MODE'}")
     print(f"EXECUTION MODE:  {snap['execution_mode']}")
