@@ -1163,6 +1163,26 @@ class JarvisOrchestrator:
             profile=profile,
         )
 
+    @staticmethod
+    def _mark_risk_refusal(decision, auth_res: dict) -> None:
+        """A risk-engine refusal must be visible on the decision.
+
+        The decision engine had already said EXECUTE, and nothing reset it, so the
+        radar kept showing "SELL READY / gate passed" for a trade the risk engine
+        refused every cycle (e.g. gold: min-lot risk $48.89 over its $28 cap).
+        """
+        if decision is None or getattr(decision, "decision", None) != "EXECUTE":
+            return
+        reasons = auth_res.get("reasons") or [auth_res.get("reason") or "Risk constraints"]
+        decision.decision = "WAIT"
+        decision.execution_authorized = False
+        waiting = getattr(decision, "waiting_reasons", None)
+        if isinstance(waiting, list):
+            for r in reasons:
+                tagged = f"RISK: {r}"
+                if tagged not in waiting:
+                    waiting.append(tagged)
+
     def _is_unsplittable_book(
         self,
         entry_price: float,
@@ -2015,6 +2035,9 @@ class JarvisOrchestrator:
                 entry_authorized_override=entry_override,
             )
 
+        if not auth_res.get("authorized"):
+            self._mark_risk_refusal(decision, auth_res)
+
         # Circuit Breaker check (backstop — also checked inside risk_engine)
         cb_status = self.circuit_breaker.check_status()
         if cb_status.get('active') and decision.decision == 'EXECUTE':
@@ -2120,7 +2143,8 @@ class JarvisOrchestrator:
             "decision": decision,
             "context": context,
             "authorized": auth_res.get("authorized", False),
-            "auth_reason": auth_res.get("reason", ""),
+            # The risk engine reports a `reasons` list; backstops set `reason`.
+            "auth_reason": auth_res.get("reason") or "; ".join(auth_res.get("reasons") or []),
             "dry_run": bool(dry_run),
             "execution": exec_res
         }
@@ -2355,7 +2379,12 @@ class JarvisOrchestrator:
                     )
                     _sl_px = float(getattr(decision, "stop_loss", 0.0) or 0.0)
                     if self._is_unsplittable_book(_entry_px, _sl_px, _equity, _spec, _vol_min):
-                        if decision.risk_reward_ratio < 2.00:
+                        # Judge the RR the trade will actually carry: fixed-target
+                        # symbols (gold 2.5R) get their TP rewritten at dispatch
+                        # (execution_engine), so the decision's planned RR is stale.
+                        from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
+                        _fixed_r = getattr(get_symbol_profile_config(sym), "fixed_target_r", None)
+                        if (_fixed_r or decision.risk_reward_ratio) < 2.00:
                             logger.info(
                                 f"🚫 UNSPLIT_RR_GATE: {sym} {candidate.trade_style} {candidate.bias} "
                                 f"RR={decision.risk_reward_ratio:.2f} < 2.00 — all-or-nothing book; "
@@ -2522,6 +2551,7 @@ class JarvisOrchestrator:
                     # Single trade executed this pass
                     break
                 else:
+                    self._mark_risk_refusal(decision, auth_res)
                     reasons_disp = auth_res.get('reasons') or auth_res.get('reason') or 'Risk constraints'
                     logger.info(f"Arbiter selection {canonical_sym} ({candidate.trade_style}) withheld by risk engine: {reasons_disp}. Evaluating next ranked candidate...")
 

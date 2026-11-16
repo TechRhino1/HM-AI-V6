@@ -173,10 +173,11 @@ class ExitPolicy:
 
             fixed_target = getattr(cfg, "fixed_target_r", None)
             if fixed_target:
-                # Run to the fixed target or the stop; only the default time stop remains.
+                # Run to the fixed target or the stop; only the style's own time stop
+                # remains. It was forced to 120 min for every style, which cut a
+                # 2.5R SWING/H4/D1 gold trade off two hours after entry.
                 be_trig = fast_cash_r = trail_act = 1e9
                 milestones = []
-                time_stop_min = DEFAULT_TIME_STOP_MINUTES
 
             pol = cls(
                 symbol=str(symbol),
