@@ -180,6 +180,9 @@ class JarvisOrchestrator:
         # needs the UI.
         self.mt5_client = MT5Client(magic_number=magic_number, mode=self.mode, auto_init=False)
         self.data_feed = DataFeedEngine(self.mt5_client)
+        # Demo-only forward test of the ETHUSD Donchian H4 ensemble (research rank 1).
+        from jarvis.forward_tests.donchian_eth_h4 import DonchianForwardTest
+        self.forward_test = DonchianForwardTest(self)
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()
@@ -2608,6 +2611,9 @@ class JarvisOrchestrator:
                 self._orchestration_loop_single_pass()
             except Exception as e:
                 logger.error(f"Orchestration loop error: {e}", exc_info=True)
+            forward_test = getattr(self, "forward_test", None)
+            if forward_test is not None:
+                forward_test.step()   # acts once per completed H4 bar; never raises
 
             try:
                 session = SessionEngine.get_current_session()

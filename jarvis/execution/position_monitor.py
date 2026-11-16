@@ -958,6 +958,10 @@ class PositionMonitorEngine:
         balance: float = 10000.0,
         emergency_brake: bool = False,
     ):
+        # Forward-test positions (comment "FT_...") follow their own pre-registered
+        # rules (jarvis/forward_tests); discretionary layers here would change them.
+        if str(getattr(pos, "comment", "") or "").startswith("FT_"):
+            return
         symbol  = pos.symbol
         from jarvis.data.symbol_registry import resolve as _res
         try:
