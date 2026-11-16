@@ -33,10 +33,15 @@ def verify_execution_mode(mode: str) -> str:
 
 @dataclass
 class RiskSettings:
-    max_risk_per_trade_pct: float = 0.5
+    # Unified risk policy (approved 2026-11-16): one source of truth for every
+    # account size. Sizing targets max_risk_per_trade_pct; a broker-minimum lot
+    # may risk up to min_lot_max_risk_pct, otherwise the trade is skipped.
+    max_risk_per_trade_pct: float = 1.0
+    min_lot_max_risk_pct: float = 2.5
     max_portfolio_risk_pct: float = 2.5
-    max_daily_loss_pct: float = 4.0
-    max_drawdown_pct: float = 10.0
+    max_daily_loss_pct: float = 5.0
+    max_weekly_loss_pct: float = 10.0
+    max_drawdown_pct: float = 20.0
     max_open_positions: int = 3
     max_symbol_positions: int = 2
     min_rr_ratio: float = 2.0
@@ -144,6 +149,8 @@ class JarvisConfig:
                     ("max_risk_per_trade_pct", "max_risk_per_trade_pct", float),
                     ("max_portfolio_risk_pct", "max_portfolio_risk_pct", float),
                     ("max_daily_loss_pct", "max_daily_loss_pct", float),
+                    ("max_weekly_loss_pct", "max_weekly_loss_pct", float),
+                    ("min_lot_max_risk_pct", "min_lot_max_risk_pct", float),
                     ("max_drawdown_pct", "max_drawdown_pct", float),
                     ("max_open_positions", "max_open_positions", int),
                     ("max_symbol_positions", "max_symbol_positions", int),

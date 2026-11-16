@@ -129,7 +129,7 @@ def test_the_shared_file_still_reproduces_the_original_defect(tmp_path, monkeypa
     status = shared.check_limits(777.0, 777.0)
     assert status["passed"] is False
     assert status["total_dd_pct"] > 90.0, status
-    assert shared.get_risk_multiplier(777.0) == 0.0
+    assert shared.get_risk_multiplier(777.0) <= 0.25  # the deepest tier for the configured cap
 
 
 @pytest.mark.drawdown_persistence

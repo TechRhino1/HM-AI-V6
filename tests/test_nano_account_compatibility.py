@@ -19,23 +19,12 @@ def test_account_tier_nano_detection():
     assert is_nano_account(850.0) is False
 
 def test_nano_risk_caps():
-    # Nano tier (< $250)
-    usd, pct = get_nano_risk_cap(100.0, "EURUSD")
-    assert usd == 5.00
-    assert pct == 5.0
-
-    usd, pct = get_nano_risk_cap(100.0, "XAUUSD")
-    assert usd == 6.00
-    assert pct == 6.0
-
-    # Micro tier ($250 - $2500)
-    usd, pct = get_nano_risk_cap(850.0, "EURUSD")
-    assert usd == 12.00
-    assert pct == 2.50
-
-    usd, pct = get_nano_risk_cap(850.0, "XAUUSD")
-    assert usd == 28.00
-    assert pct == 5.50
+    # Risk policy 2026-11-16: a minimum lot may risk 2.5% of equity, any symbol, any size.
+    for equity in (100.0, 850.0, 5000.0):
+        for sym in ("EURUSD", "XAUUSD", "BTCUSD"):
+            usd, pct = get_nano_risk_cap(equity, sym)
+            assert pct == 2.5
+            assert usd == pytest.approx(equity * 0.025)
 
     # Max lot cap
     assert get_max_lot_cap(50.0) == 0.01
@@ -55,25 +44,23 @@ def test_position_sizing_on_100_dollar_account():
         "volume_step": 0.01
     }
     
-    # 1. Standard EURUSD 30-pip stop: entry=1.08500, sl=1.08200 (distance=0.00300)
-    # Risk for 0.01 lot = 0.01 * 100,000 * 0.00300 = $3.00 (3.0% of $100)
-    # Allowed under nano tier (risk <= $5.00, <= 5.0% and <= $3.50 floor)
+    # 1. EURUSD 20-pip stop: 0.01 lot risks $2.00 (2.0% of $100)
+    # Allowed: within the 2.5% minimum-lot ceiling.
     lots = PositionSizer.calculate_lot_size(
         account_balance=100.0,
         entry_price=1.08500,
-        sl_price=1.08200,
+        sl_price=1.08300,
         risk_pct=0.50,
         symbol_info=eurusd_info
     )
     assert lots == 0.01
 
-    # 2. Wide EURUSD 70-pip stop: entry=1.08500, sl=1.07800 (distance=0.00700)
-    # Risk for 0.01 lot = 0.01 * 100,000 * 0.00700 = $7.00 (7.0% of $100)
-    # Rejected because $7.00 > $5.00 ceiling
+    # 2. EURUSD 30-pip stop: 0.01 lot risks $3.00 (3.0%)
+    # Rejected: above the $2.50 / 2.5% minimum-lot ceiling.
     lots_wide = PositionSizer.calculate_lot_size(
         account_balance=100.0,
         entry_price=1.08500,
-        sl_price=1.07800,
+        sl_price=1.08200,
         risk_pct=0.50,
         symbol_info=eurusd_info
     )
@@ -89,21 +76,17 @@ def test_gold_sizing_on_100_dollar_account():
         "volume_max": 100.0,
         "volume_step": 0.01
     }
-    # Tight gold scalp: $5.00 stop distance (e.g. 2700.00 to 2695.00)
-    # Risk for 0.01 lot = 0.01 * 100 * 5.00 = $5.00
-    # Allowed on nano account (<= $6.00 gold ceiling)
+    # Tight gold scalp: $2.00 stop -> 0.01 lot risks $2.00, within the $2.50 ceiling.
     lots_gold_tight = PositionSizer.calculate_lot_size(
         account_balance=100.0,
         entry_price=2700.00,
-        sl_price=2695.00,
+        sl_price=2698.00,
         risk_pct=0.50,
         symbol_info=xau_info
     )
     assert lots_gold_tight == 0.01
 
-    # Wide gold stop: $12.00 stop distance (2700.00 to 2688.00)
-    # Risk for 0.01 lot = 0.01 * 100 * 12.00 = $12.00
-    # Rejected because $12.00 > $6.00 gold ceiling
+    # Wide gold stop: $12.00 -> $12.00 at 0.01 lot, far above the $2.50 ceiling: skipped.
     lots_gold_wide = PositionSizer.calculate_lot_size(
         account_balance=100.0,
         entry_price=2700.00,
@@ -197,8 +180,8 @@ def test_exposure_manager_nano_account():
     assert any("Max Concurrent Positions reached" in b for b in res2["breaches"])
 
 def test_dashboard_manual_risk_nano_validation():
-    # On $100 equity:
-    # 0.01 lots EURUSD with 30-pip stop ($3.00 risk) should pass
+    # On $100 equity (2.5% minimum-lot ceiling = $2.50):
+    # 0.01 lots EURUSD with a 20-pip stop ($2.00 risk) should pass
     class DummyHandler:
         pass
     dummy = DummyHandler()
@@ -209,7 +192,7 @@ def test_dashboard_manual_risk_nano_validation():
         dummy,
         symbol="EURUSD",
         price=1.0850,
-        sl=1.0820,
+        sl=1.0830,
         lots=0.01,
         equity=100.0
     )

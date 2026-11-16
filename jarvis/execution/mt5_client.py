@@ -1087,6 +1087,19 @@ class MT5Client:
         o = orders[0]
         return {"sl": float(o.sl or 0.0), "volume_initial": float(o.volume_initial or 0.0)}
 
+    def calc_margin(self, symbol: str, side: str, volume: float, price: float) -> Optional[float]:
+        """Margin the broker would require for this order; None when unknown (paper/offline)."""
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
+            return None
+        try:
+            order_type = mt5.ORDER_TYPE_BUY if str(side).upper() == "BUY" else mt5.ORDER_TYPE_SELL
+            with self._lock:
+                m = mt5.order_calc_margin(order_type, self.resolve_symbol_name(symbol), float(volume), float(price))
+            return float(m) if m is not None else None
+        except Exception as e:
+            logger.debug(f"order_calc_margin failed for {symbol}: {e}")
+            return None
+
     def cancel_pending_order(self, ticket: int) -> Dict[str, Any]:
         """Cancels a pending order by ticket."""
         self._pending_orders_cache = (0.0, [])

@@ -174,7 +174,7 @@ class TestInstitutionalEntryAndLotSizingFixes(unittest.TestCase):
             account_balance=500.0,
             entry_price=2400.0,
             sl_price=2398.0,  # $2.00 stop distance
-            risk_pct=0.5,
+            risk_pct=1.0,     # policy target (2026-11-16): $5.00 on $500 -> 0.02 lots
             symbol_info=sym_gold,
             model_confidence=0.75,
             pattern_sample_size=20

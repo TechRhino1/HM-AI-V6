@@ -80,7 +80,7 @@ class TestALargeLossIsNeverReanchored:
         assert r["daily_loss_pct"] == 40.0
         assert r["total_dd_pct"] == 40.0
         assert r["passed"] is False
-        assert len(r["breaches"]) == 2
+        assert len(r["breaches"]) == 3  # daily, weekly (policy 2026-11-16) and total
 
     def test_the_baselines_survive_the_loss(self):
         g = anchored(1000.0)
@@ -141,11 +141,12 @@ class TestALargeLossIsNeverReanchored:
 # ---------------------------------------------------------------------------
 
 class TestDefaults:
-    def test_the_default_caps_are_4_and_10_percent(self):
+    def test_the_default_caps_are_the_2026_11_16_policy(self):
         """These are the shipped limits; a change here moves real money."""
         g = DrawdownGuard(db_path="")
-        assert g.max_daily_loss_pct == 4.0
-        assert g.max_total_drawdown_pct == 10.0
+        assert g.max_daily_loss_pct == 5.0
+        assert g.max_weekly_loss_pct == 10.0
+        assert g.max_total_drawdown_pct == 20.0
 
     def test_the_caps_are_overridable(self):
         g = DrawdownGuard(db_path="", max_daily_loss_pct=1.0, max_total_drawdown_pct=2.0)
@@ -205,7 +206,7 @@ class TestUpdateEquityBenchmarks:
 class TestCheckLimits:
     def test_the_result_contract(self):
         r = anchored(1000.0).check_limits(1000.0, 1000.0)
-        assert set(r) == {"passed", "daily_loss_pct", "total_dd_pct", "breaches"}
+        assert set(r) == {"passed", "daily_loss_pct", "total_dd_pct", "weekly_loss_pct", "breaches"}
         assert isinstance(r["passed"], bool)
         assert isinstance(r["breaches"], list)
 
@@ -235,14 +236,15 @@ class TestCheckLimits:
         assert r["total_dd_pct"] == 0.0
         assert r["passed"] is True
 
-    def test_both_breaches_are_reported_together(self):
+    def test_every_breach_is_reported_together(self):
         r = anchored(1000.0).check_limits(500.0, 500.0)
-        assert len(r["breaches"]) == 2
+        assert len(r["breaches"]) == 3
+        assert any("Max Weekly Loss" in b for b in r["breaches"])
         assert any("Max Daily Loss" in b for b in r["breaches"])
         assert any("Max Portfolio Drawdown" in b for b in r["breaches"])
 
     def test_the_message_carries_the_numbers(self):
-        r = anchored(1000.0).check_limits(950.0, 950.0)
+        r = anchored(1000.0, max_daily_loss_pct=4.0).check_limits(950.0, 950.0)
         assert "5.00%" in r["breaches"][0]
         assert "4.00%" in r["breaches"][0]
 
@@ -253,7 +255,7 @@ class TestCheckLimits:
 
     def test_it_anchors_on_first_use_so_the_first_reading_is_always_zero(self):
         r = guard().check_limits(1000.0, 1000.0)
-        assert r == {"passed": True, "daily_loss_pct": 0.0, "total_dd_pct": 0.0, "breaches": []}
+        assert r == {"passed": True, "daily_loss_pct": 0.0, "total_dd_pct": 0.0, "weekly_loss_pct": 0.0, "breaches": []}
 
     def test_a_fresh_guard_at_zero_equity_passes(self):
         """peak<=0 short-circuits both percentages — unknown reads as safe. Pinned."""
@@ -457,7 +459,7 @@ class TestGetRiskMultiplier:
         (920.0, 0.0),  (100.0, 0.0),     # >= 8%
     ])
     def test_the_bands(self, equity, expected):
-        g = anchored(1000.0)
+        g = anchored(1000.0, max_total_drawdown_pct=10.0)  # bands for the tight 10% cap
         assert g.get_risk_multiplier(equity) == expected
 
     def test_full_size_is_cut_before_the_halt_fires(self):
@@ -531,5 +533,42 @@ class TestRecoveryWindow:
     def test_recovery_does_not_change_the_result_contract(self):
         g = anchored(1000.0, max_daily_loss_pct=5.0, max_total_drawdown_pct=15.0)
         r = g.check_limits(945.0, 945.0, allow_recovery=True)
-        assert set(r) == {"passed", "daily_loss_pct", "total_dd_pct", "breaches"}
+        assert set(r) == {"passed", "daily_loss_pct", "total_dd_pct", "weekly_loss_pct", "breaches"}
         assert r["breaches"] == []
+
+
+class TestWeeklyLossLimit:
+    """Risk policy 2026-11-16: a weekly halt independent of the daily one."""
+
+    def test_losses_spread_over_days_trip_the_weekly_cap(self):
+        days = {"d": datetime(2026, 3, 2, 12, 0, tzinfo=timezone.utc)}  # Monday
+        g = DrawdownGuard(db_path="", clock=lambda: days["d"], max_daily_loss_pct=5.0,
+                          max_weekly_loss_pct=10.0, max_total_drawdown_pct=50.0)
+        g.update_equity_benchmarks(1000.0, 1000.0)
+        equity = 1000.0
+        for day in (3, 4, 5):                           # three 4% days, none breaches daily
+            days["d"] = datetime(2026, 3, day, 12, 0, tzinfo=timezone.utc)
+            g.update_equity_benchmarks(equity, equity)
+            equity *= 0.96
+            r = g.check_limits(equity, equity)
+        assert r["daily_loss_pct"] < 5.0
+        assert r["weekly_loss_pct"] >= 10.0
+        assert any("Max Weekly Loss" in b for b in r["breaches"])
+
+    def test_the_weekly_baseline_rolls_over_on_a_new_iso_week(self):
+        days = {"d": datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc)}  # Friday
+        g = DrawdownGuard(db_path="", clock=lambda: days["d"])
+        g.update_equity_benchmarks(1000.0, 1000.0)
+        g.check_limits(920.0, 920.0)
+        days["d"] = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)  # next Monday
+        r = g.check_limits(920.0, 920.0)
+        assert r["weekly_loss_pct"] == 0.0
+
+    @pytest.mark.drawdown_persistence
+    def test_the_weekly_baseline_persists(self, tmp_path):
+        clock = lambda: datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc)
+        db = str(tmp_path / "dd.db")
+        g = DrawdownGuard(db_path=db, clock=clock)
+        g.update_equity_benchmarks(1000.0, 1000.0)
+        g2 = DrawdownGuard(db_path=db, clock=clock)
+        assert g2.weekly_start_equity == 1000.0

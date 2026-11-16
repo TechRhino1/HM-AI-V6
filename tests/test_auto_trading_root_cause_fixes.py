@@ -45,7 +45,7 @@ def test_execution_engine_auto_size_down():
     
     engine = ExecutionEngine(mt5_client=mt5, state_manager=state_mgr)
     
-    # 0.05 lots with 24 pip stop (0.00240) = $12.00 risk. Budget is 0.50% of 843.36 = $4.22.
+    # 0.05 lots with 24 pip stop (0.00240) = $12.00 risk. Budget is the 1.00% policy target of 843.36 = $8.43.
     decision = DecisionObject(
         symbol="EURUSD",
         timestamp=datetime.now(timezone.utc),
@@ -74,11 +74,11 @@ def test_execution_engine_auto_size_down():
     # Must NOT be blocked! Sizing down must execute order
     assert result.get("status") in ("SUCCESS", "FILLED") or result.get("retcode") == 10009
     
-    # Check that send_market_order was called with sized down lots (<= 0.02 lots)
+    # Check that send_market_order was called with sized down lots (<= 0.03 lots = $7.20)
     assert mt5.send_market_order.called
     call_kwargs = mt5.send_market_order.call_args.kwargs or {}
     executed_lots = call_kwargs.get("volume") or mt5.send_market_order.call_args[0][2]
-    assert executed_lots <= 0.02, f"Expected lots <= 0.02 to fit $4.22 budget, got {executed_lots}"
+    assert executed_lots <= 0.03, f"Expected lots <= 0.03 to fit $8.43 budget, got {executed_lots}"
     assert executed_lots >= 0.01
 
 def test_execution_engine_minimum_lot_allowance():
@@ -239,3 +239,33 @@ def test_adversarial_threat_runway_designates_tp1():
     rep = da.critique_opportunity(ctx, regime, "BUY")
     # Verify minor level 4032.0 was filtered out, and major level 4044.59 was picked
     assert rep.threat_price_level == 4044.59
+
+
+def test_execution_engine_refuses_an_order_that_would_overrun_margin():
+    """Risk policy 2026-11-16: the order being placed counts toward the 40% margin limit."""
+    mt5 = MagicMock()
+    mt5.send_market_order.return_value = {"retcode": 10009, "deal": 1, "order": 2, "status": "SUCCESS"}
+    mt5.get_symbol_trading_spec.return_value = {
+        "point": 0.00001, "digits": 5, "trade_tick_size": 0.00001, "trade_tick_value": 1.0,
+        "volume_min": 0.01, "volume_step": 0.01, "volume_max": 100.0, "trade_stops_level": 0, "spread": 10,
+    }
+    mt5.calc_margin.return_value = 300.0          # this order alone needs 35.6% of equity
+    state_mgr = MagicMock()
+    state_mgr.is_safe_mode = False
+    state_mgr.safe_mode = False
+    state_mgr.account.equity = 843.36
+    state_mgr.account.balance = 843.36
+    state_mgr.account.margin = 100.0               # 11.9% already in use -> 47.4% after
+    state_mgr.is_live_allowed.return_value = True
+    decision = DecisionObject(
+        symbol="EURUSD", timestamp=datetime.now(timezone.utc),
+        regime=RegimeOutput(primary_regime=MarketRegime.TREND_BULL, confidence=0.8, probabilities={}),
+        bias="BUY", probabilities={"buy": 0.85, "sell": 0.10, "no_trade": 0.05}, strategy="TREND_PULLBACK",
+        entry_price=1.08500, stop_loss=1.08260, take_profit=1.09000, risk_reward_ratio=2.08,
+        calculated_risk_percent=0.5, expected_value=15.0, model_confidence=0.85, adversarial_penalty=5.0,
+        invalidation_levels=[], bull_case=[], bear_case=[], risk_factors=[],
+        quality_gate=TradeQualityGateResult(passed=True, checks={}), decision="EXECUTE", execution_authorized=True,
+    )
+    result = ExecutionEngine(mt5_client=mt5, state_manager=state_mgr).execute_decision(decision, lots=0.01)
+    assert result.get("status") == "BLOCKED" and "Margin" in result.get("reason", "")
+    assert not mt5.send_market_order.called

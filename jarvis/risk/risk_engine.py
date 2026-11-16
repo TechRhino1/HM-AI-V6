@@ -84,7 +84,8 @@ class RiskEngine:
         # See jarvis.config.paths.mode_scoped_db_path.
         self.drawdown_guard = DrawdownGuard(
             max_daily_loss_pct, max_drawdown_pct,
-            db_path=mode_scoped_db_path("jarvis_drawdown_state.db", mode, is_backtest)
+            db_path=mode_scoped_db_path("jarvis_drawdown_state.db", mode, is_backtest),
+            max_weekly_loss_pct=float(getattr(risk, "max_weekly_loss_pct", 10.0) or 10.0),
         )
         self.exposure_manager = ExposureManager(
             max_open_positions=max_open_positions,
@@ -596,17 +597,10 @@ class RiskEngine:
             _daily_for_size = 1.0 if recovery_mode else daily_risk_mult
             combined_multiplier = heat_res.risk_multiplier * dd_risk_mult * _daily_for_size * streak_mult * corr_scaling_factor
 
-            # Micro-account adaptive risk boost: the base 0.5% is designed for
-            # $10k+ accounts.  On a $100 account 0.5% = $0.50, which cannot buy
-            # even one micro lot of Gold.  The industry standard for micro/cent
-            # accounts is 1-2% risk per trade.
+            # One target for every account size (risk policy 2026-11-16). The old
+            # micro boost (0.5% x 3.5 under $250) is gone: a small account that
+            # cannot fit a minimum lot within min_lot_max_risk_pct skips the trade.
             base_risk = self.max_risk_per_trade_pct
-            if account.equity < 250.0:
-                base_risk = min(base_risk * 3.5, 2.5)   # 0.5% → 1.75% (cap 2.5%)
-            elif account.equity < 500.0:
-                base_risk = min(base_risk * 3.0, 2.0)   # 0.5% → 1.5% (cap 2.0%)
-            elif account.equity < 1000.0:
-                base_risk = min(base_risk * 2.5, 1.75)  # 0.5% → 1.25% (cap 1.75%)
             if recovery_mode:
                 # The channel is explicitly capped at 0.5% regardless of the
                 # micro-account risk boost; the lot cap below enforces it.

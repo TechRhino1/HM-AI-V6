@@ -35,52 +35,28 @@ def is_nano_account(equity: float) -> bool:
     """True if account is in nano tier (< $250 equity)."""
     return float(equity) < 250.0
 
-def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
-    """
-    Returns (max_risk_usd, max_risk_pct) allowed for the account tier and symbol.
-    Unified source of truth for execution engine, sizing, and dashboard validation.
-    """
-    eq = float(equity)
-    sym = (symbol or "").upper()
-    is_gold = "XAU" in sym or "GOLD" in sym
+def _risk_policy():
+    from jarvis.config.settings import SETTINGS
+    return SETTINGS.risk
 
-    if eq < 250.0:
-        return (6.00, 6.0) if is_gold else (5.00, 5.0)
-    elif eq < 2500.0:
-        if is_gold:
-            return (28.00, 5.50)
-        # BTC's 0.01-lot day-trading stops (~$1,500-2,000) cost $15-20; the $12
-        # cap blocked every one of them on a ~$500 account (operator, 2026-11-14).
-        if sym.startswith("BTC"):  # BTCUSD / BTCUSD#, not ETHBTC
-            return (20.00, 4.00)
-        return (12.00, 2.50)
-    else:
-        return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
+
+def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
+    """(max_risk_usd, max_risk_pct) a broker-minimum-lot trade may risk.
+
+    One rule for every account size and symbol (risk policy 2026-11-16):
+    ``min_lot_max_risk_pct`` of equity. A setup whose minimum lot would risk
+    more is skipped, so wide-stop symbols (gold, BTC) wait until the account
+    can afford them instead of taking an outsized loss. ``symbol`` is kept for
+    call-site compatibility; the cap no longer varies by symbol.
+    """
+    pct = float(_risk_policy().min_lot_max_risk_pct)
+    return float(equity) * pct / 100.0, pct
+
 
 def get_milestone_risk_budget(equity: float, symbol: str = "") -> tuple[float, float]:
-    """
-    Returns (max_risk_usd, max_risk_pct) calibrated to the account growth milestone tier.
-    Enforces invariant dollar risk for small/micro accounts ($100 - $1,000+).
-    """
-    eq = float(equity)
-    sym = (symbol or "").upper()
-    is_gold = "XAU" in sym or "GOLD" in sym
-
-    if eq < 150.0:
-        # Tier 1 ($100 - $150 Seed Sniper): strict $2.00-$2.50 risk budget
-        return (3.00, 3.0) if is_gold else (2.50, 2.5)
-    elif eq < 250.0:
-        # Tier 2 ($150 - $250 Micro Compounder): $3.00-$4.50 risk budget
-        return (5.00, 3.0) if is_gold else (4.00, 2.5)
-    elif eq < 500.0:
-        # Tier 3 ($250 - $500 Small Accelerator): $5.00-$8.00 risk budget
-        return (8.00, 2.5) if is_gold else (7.00, 2.0)
-    elif eq < 1000.0:
-        # Tier 4 ($500 - $1,000 Standard Transition): $10.00-$15.00 risk budget
-        return (15.00, 2.0) if is_gold else (12.00, 1.8)
-    else:
-        # Tier 5 (>= $1,000 Institutional): Percentage based
-        return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
+    """(target_risk_usd, target_risk_pct) for a normally sized trade: ``max_risk_per_trade_pct``."""
+    pct = float(_risk_policy().max_risk_per_trade_pct)
+    return float(equity) * pct / 100.0, pct
 
 def get_max_lot_cap(equity: float, symbol: str = "") -> float:
     """

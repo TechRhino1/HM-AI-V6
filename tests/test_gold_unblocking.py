@@ -80,13 +80,14 @@ def _make_decision(symbol: str = "XAUUSD", **kwargs) -> DecisionObject:
 
 
 class TestGoldMicroAccountSizing:
-    def test_gold_min_lot_allowed_under_28_dollar_allowance(self):
-        """A $507 account with a 24-point Gold stop ($24 risk, 4.73%) must be approved at 0.01 lot."""
+    def test_gold_min_lot_allowed_within_the_policy_ceiling(self):
+        """A $507 account with a 12-point Gold stop ($12 risk, 2.37%) is approved at 0.01 lot
+        (risk policy 2026-11-16: min lot may risk up to 2.5% = $12.68)."""
         info = _gold_symbol_info("GOLD.i#")
         lots = PositionSizer.calculate_lot_size(
             account_balance=507.0,
             entry_price=4150.00,
-            sl_price=4126.00,  # 24 point stop distance = $24.00 on 0.01 lot
+            sl_price=4138.00,  # 12 point stop distance = $12.00 on 0.01 lot
             risk_pct=1.25,
             symbol_info=info,
             model_confidence=0.85,
@@ -94,7 +95,7 @@ class TestGoldMicroAccountSizing:
         assert lots == 0.01, f"Expected 0.01 lot, got {lots}"
 
     def test_gold_excessive_stop_distance_rejected(self):
-        """A $507 account with a 35-point Gold stop ($35 risk, 6.90%) must be rejected (> $28 / 5.5%)."""
+        """A $507 account with a 35-point Gold stop ($35 risk, 6.90%) must be rejected (> 2.5%)."""
         info = _gold_symbol_info("GOLD.i#")
         lots = PositionSizer.calculate_lot_size(
             account_balance=507.0,
@@ -195,8 +196,8 @@ class TestTradeGuardAndRiskEngineGoldAuthorization:
             decision="EXECUTE",
             bias="BUY",
             entry_price=4150.0,
-            stop_loss=4126.0,
-            take_profit=4198.0,
+            stop_loss=4138.0,   # $12 at 0.01 lot: inside the 2.5% min-lot ceiling
+            take_profit=4174.0,
             model_confidence=0.85,
             ai_score=85.7,
             risk_reward_ratio=2.0,

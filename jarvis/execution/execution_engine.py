@@ -396,23 +396,18 @@ class ExecutionEngine:
 
             
 
-            # Micro-account capital preservation guard:
-
-            # If minimum lot forced risk > $12.00 on account < $500, REJECT ORDER!
-
+            # Capital preservation: the minimum lot may not risk more than the
+            # policy's min-lot ceiling (it was a hard-coded $12 under $500).
+            from jarvis.risk.account_tier import get_nano_risk_cap
             min_lot_risk_usd = vol_min * executable_sl_dist * dollar_risk_per_price_unit
-
-            if account_equity < 500.0 and min_lot_risk_usd > 12.0:
-
+            min_lot_cap_usd, min_lot_cap_pct = get_nano_risk_cap(account_equity, decision.symbol)
+            if min_lot_risk_usd > min_lot_cap_usd + 1e-9:
                 logger.error(
-
                     f"🛑 EXECUTION BLOCKED for {decision.symbol}: Minimum lot {vol_min} would risk "
-
-                    f"${min_lot_risk_usd:.2f} on equity ${account_equity:.2f} (max $12.00 allowed)."
-
+                    f"${min_lot_risk_usd:.2f} on equity ${account_equity:.2f} "
+                    f"(max {min_lot_cap_pct:.2f}% = ${min_lot_cap_usd:.2f})."
                 )
-
-                return {"status": "BLOCKED", "reason": f"Risk ${min_lot_risk_usd:.2f} exceeds micro account ceiling $12.00"}
+                return {"status": "BLOCKED", "reason": f"Risk ${min_lot_risk_usd:.2f} exceeds min-lot ceiling ${min_lot_cap_usd:.2f}"}
 
 
 
@@ -468,16 +463,11 @@ class ExecutionEngine:
             _risk_usd = executable_sl_dist * dollar_risk_per_price_unit * float(lots)
             from jarvis.risk.account_tier import get_nano_risk_cap
             _max_allowed_usd, _max_allowed_pct = get_nano_risk_cap(_equity, decision.symbol)
-            if _equity < 250.0:
-                _pct_budget = _equity * (_max_allowed_pct / 100.0)
-                _budget_usd = max(min(_pct_budget, _max_allowed_usd), min(3.50, _max_allowed_usd))
-                _display_pct = (_budget_usd / _equity) * 100.0
-            elif _equity < 2500.0 and float(lots) <= _vol_min + 1e-9:
-                # Minimum-lot allowance for accounts under $2,500 (§3 & account_tier):
-                # When broker enforces minimum lot (0.01 or 0.02) that exceeds the 0.50% nominal target,
-                # permit execution up to the calibrated tier ceiling ($12 non-gold / $28 gold, max 2.5% / 5.5%).
+            # Risk policy: a broker-minimum lot may use the min-lot ceiling; any
+            # larger size must fit the per-trade target.
+            if float(lots) <= _vol_min + 1e-9:
                 _budget_usd = min(_max_allowed_usd, _equity * (_max_allowed_pct / 100.0))
-                _display_pct = (_budget_usd / _equity) * 100.0
+                _display_pct = _max_allowed_pct
             else:
                 _budget_usd = _equity * (_max_pct / 100.0)
                 _display_pct = _max_pct
@@ -520,6 +510,20 @@ class ExecutionEngine:
                 }
 
 
+
+        # Free-margin protection, counting THIS order (the exposure check only
+        # sees margin already in use).
+        if _acct and float(getattr(_acct, "equity", 0.0) or 0.0) > 0 and hasattr(self.mt5_client, "calc_margin"):
+            from jarvis.risk.exposure import MAX_MARGIN_UTILIZATION_PCT
+            _need = self.mt5_client.calc_margin(decision.symbol, decision.bias, float(lots), float(decision.entry_price))
+            if isinstance(_need, (int, float)):
+                _used_pct = (float(getattr(_acct, "margin", 0.0) or 0.0) + _need) / float(_acct.equity) * 100.0
+                if _used_pct > MAX_MARGIN_UTILIZATION_PCT:
+                    logger.error(
+                        f"🛑 REJECTED DISPATCH for {decision.symbol}: margin after this order "
+                        f"{_used_pct:.1f}% of equity > {MAX_MARGIN_UTILIZATION_PCT:.0f}% limit."
+                    )
+                    return {"status": "BLOCKED", "reason": f"Margin {_used_pct:.1f}% > {MAX_MARGIN_UTILIZATION_PCT:.0f}% limit"}
 
         # Pre-quantize initial levels
 

@@ -72,6 +72,9 @@ def test_drawdown_tier_multiplier_scaling():
     re.drawdown_guard.max_total_drawdown_pct = 15.0
     # Re-anchor peak equity at 10,000
     re.drawdown_guard.reset_baselines(10000.0)
+    # The drawdown below accrued over earlier weeks: keep the weekly halt
+    # (policy 2026-11-16) out of a test about the peak-drawdown tiers.
+    re.drawdown_guard.max_weekly_loss_pct = 100.0
 
     sym_info = {
         "volume_min": 0.01,
@@ -126,6 +129,7 @@ def test_drawdown_tier_multiplier_scaling():
 def test_get_risk_status_diagnostics():
     """Verify that get_risk_status returns comprehensive metrics."""
     re = RiskEngine(is_backtest=True)
+    re.drawdown_guard.max_total_drawdown_pct = 10.0  # the 10%-cap tier ladder
     re.drawdown_guard.reset_baselines(10000.0)
     status = re.get_risk_status(9600.0, 10000.0)
     assert status["total_dd_pct"] == 4.0

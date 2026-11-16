@@ -12,12 +12,16 @@ AI_ADAPTIVE_MAX_TRADES_PER_SYMBOL = 2 # Adaptive limit: Allowed if all 15 condit
 HARD_MAX_TRADES_PER_SYMBOL = 2        # Hard ceiling: Never exceeded under any circumstances
 MAX_PORTFOLIO_RISK_PCT = 2.5          # Hard ceiling for total combined open monetary risk
 
+
+# Used margin may not exceed this share of equity, counting the order being placed.
+MAX_MARGIN_UTILIZATION_PCT = 40.0
+
 class ExposureManager:
     def __init__(
         self,
         max_open_positions: int = 3,
         max_symbol_positions: int = 2,
-        max_margin_utilization_pct: float = 40.0,
+        max_margin_utilization_pct: float = MAX_MARGIN_UTILIZATION_PCT,
         max_notional_exposure_pct: float = 200.0,
         max_portfolio_risk_pct: float = 2.5
     ):

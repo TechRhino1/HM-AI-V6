@@ -27,7 +27,7 @@ from jarvis.config.paths import resolve_db_path
 from jarvis.data.schema_version import migrate
 
 # D3: 1 = `drawdown_state` as it exists today.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _migration_1(conn: sqlite3.Connection) -> None:
@@ -42,7 +42,16 @@ def _migration_1(conn: sqlite3.Connection) -> None:
     return None
 
 
-MIGRATIONS = {1: _migration_1}
+def _migration_2(conn: sqlite3.Connection) -> None:
+    """Weekly loss limit (risk policy 2026-11-16): a second, weekly baseline."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(drawdown_state)")}
+    if "weekly_start_equity" not in cols:
+        conn.execute("ALTER TABLE drawdown_state ADD COLUMN weekly_start_equity REAL DEFAULT 0.0")
+    if "week_key" not in cols:
+        conn.execute("ALTER TABLE drawdown_state ADD COLUMN week_key TEXT DEFAULT ''")
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2}
 
 # Approved 2026-10-23 risk policy: de-risk from 2.5% daily loss, hard halt at
 # 5.0% (the configured limit), and a capped recovery window up to 6.5% that is
@@ -64,7 +73,7 @@ def _utc_now() -> datetime:
     return _default_broker_clock()
 
 class DrawdownGuard:
-    def __init__(self, max_daily_loss_pct: float = 4.0, max_total_drawdown_pct: float = 10.0, db_path: str = "jarvis_drawdown_state.db", clock: Optional[Callable[[], datetime]] = None):
+    def __init__(self, max_daily_loss_pct: float = 5.0, max_total_drawdown_pct: float = 20.0, db_path: str = "jarvis_drawdown_state.db", clock: Optional[Callable[[], datetime]] = None, max_weekly_loss_pct: float = 10.0):
         # Injectable clock, same convention as circuit_breaker: live trading uses
         # the real wall clock, a backtest advances on bar time. NOTE the day
         # boundary below is UTC, not the broker's trading day — see set_clock().
@@ -85,11 +94,14 @@ class DrawdownGuard:
             pass
         self.max_daily_loss_pct = max_daily_loss_pct
         self.max_total_drawdown_pct = max_total_drawdown_pct
+        self.max_weekly_loss_pct = max_weekly_loss_pct
         self.daily_start_equity: float = 0.0
+        self.weekly_start_equity: float = 0.0
         self.peak_equity: float = 0.0
         self.db_path = db_path
         # Day the in-memory baselines belong to; a change rolls the daily cap over.
         self._last_seen_date = self._today()
+        self._last_seen_week = self._week()
         if self.db_path:
             self._init_db()
             self._load_state()
@@ -105,6 +117,10 @@ class DrawdownGuard:
 
     def _today(self) -> str:
         return self._now().date().isoformat()
+
+    def _week(self) -> str:
+        y, w, _ = self._now().date().isocalendar()
+        return f"{y}-W{w:02d}"
 
     def _connect(self) -> sqlite3.Connection:
         """Open the state DB with WAL and a busy timeout.
@@ -145,14 +161,26 @@ class DrawdownGuard:
         conn = self._connect()
         try:
             with conn:
-                cursor = conn.execute('SELECT daily_start_equity, peak_equity, last_saved_date FROM drawdown_state WHERE id = 1')
+                try:
+                    cursor = conn.execute('SELECT daily_start_equity, peak_equity, last_saved_date, weekly_start_equity, week_key FROM drawdown_state WHERE id = 1')
+                except sqlite3.OperationalError:
+                    # A file the migration did not touch (e.g. stamped newer by
+                    # another build) may lack the weekly columns: read v1 shape.
+                    cursor = conn.execute('SELECT daily_start_equity, peak_equity, last_saved_date, 0.0, NULL FROM drawdown_state WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
-                    self.daily_start_equity, self.peak_equity, last_saved_date_str = row
+                    self.daily_start_equity, self.peak_equity, last_saved_date_str, weekly, week_key = row
+                    self.weekly_start_equity = float(weekly or 0.0)
                     
-                    # Check for daily reset
+                    # Check for daily / weekly reset
+                    stale = False
                     if last_saved_date_str != self._today():
                         self.daily_start_equity = 0.0
+                        stale = True
+                    if (week_key or "") != self._week():
+                        self.weekly_start_equity = 0.0
+                        stale = True
+                    if stale:
                         self._save_state()
                 else:
                     conn.execute('INSERT INTO drawdown_state (id, daily_start_equity, peak_equity, last_saved_date) VALUES (1, 0.0, 0.0, ?)',
@@ -166,11 +194,21 @@ class DrawdownGuard:
         conn = self._connect()
         try:
             with conn:
-                conn.execute('''
-                    UPDATE drawdown_state
-                    SET daily_start_equity = ?, peak_equity = ?, last_saved_date = ?
-                    WHERE id = 1
-                ''', (self.daily_start_equity, self.peak_equity, self._today()))
+                try:
+                    conn.execute('''
+                        UPDATE drawdown_state
+                        SET daily_start_equity = ?, peak_equity = ?, last_saved_date = ?,
+                            weekly_start_equity = ?, week_key = ?
+                        WHERE id = 1
+                    ''', (self.daily_start_equity, self.peak_equity, self._today(),
+                          self.weekly_start_equity, self._week()))
+                except sqlite3.OperationalError:
+                    # v1-shaped file (see _load_state): keep the daily/peak state.
+                    conn.execute('''
+                        UPDATE drawdown_state
+                        SET daily_start_equity = ?, peak_equity = ?, last_saved_date = ?
+                        WHERE id = 1
+                    ''', (self.daily_start_equity, self.peak_equity, self._today()))
         finally:
             conn.close()
 
@@ -199,6 +237,7 @@ class DrawdownGuard:
         try, and an operator who just moved money must say so explicitly.
         """
         self.daily_start_equity = float(current_equity)
+        self.weekly_start_equity = float(current_equity)
         self.peak_equity = float(current_equity)
         self._save_state()
 
@@ -210,6 +249,11 @@ class DrawdownGuard:
         if current_date != self._last_seen_date:
             self._last_seen_date = current_date
             self.daily_start_equity = 0.0
+            changed = True
+        current_week = self._week()
+        if current_week != self._last_seen_week:
+            self._last_seen_week = current_week
+            self.weekly_start_equity = 0.0
             changed = True
 
         # No automatic re-anchoring: a 40% loss and a 40% withdrawal are
@@ -223,6 +267,9 @@ class DrawdownGuard:
         # Both baselines move UP only (or from an unset/zeroed state).
         if self.daily_start_equity <= 0:
             self.daily_start_equity = current_equity
+            changed = True
+        if self.weekly_start_equity <= 0:
+            self.weekly_start_equity = current_equity
             changed = True
         if self.peak_equity <= 0 or current_equity > self.peak_equity:
             self.peak_equity = current_equity
@@ -278,13 +325,10 @@ class DrawdownGuard:
             0.0,
             ((self.daily_start_equity - current_equity) / self.daily_start_equity) * 100.0,
         )
-        from jarvis.risk.account_tier import is_nano_account
-        if is_nano_account(current_equity):
-            derisk_start = 3.5
-            daily_cap = max(self.max_daily_loss_pct, 6.0)
-        else:
-            derisk_start = min(DAILY_DERISK_START_PCT, self.max_daily_loss_pct)
-            daily_cap = self.max_daily_loss_pct
+        # Same limits for every account size (risk policy 2026-11-16); the nano
+        # tier used to widen them to 6% daily / 12% total.
+        derisk_start = min(DAILY_DERISK_START_PCT, self.max_daily_loss_pct)
+        daily_cap = self.max_daily_loss_pct
 
         if daily_loss < derisk_start:
             return 1.0
@@ -311,17 +355,13 @@ class DrawdownGuard:
         if self.peak_equity > 0:
             total_dd_pct = max(0.0, ((self.peak_equity - current_equity) / self.peak_equity) * 100.0)
 
-        # Calibrate limits for nano account tier (< $250) so a standard 0.01 lot stop (~$3.00)
-        # does not prematurely trip the daily loss or circuit breaker.
-        from jarvis.risk.account_tier import is_nano_account
-        if is_nano_account(current_equity):
-            effective_daily_cap = max(self.max_daily_loss_pct, 6.0)
-            effective_total_cap = max(self.max_total_drawdown_pct, 12.0)
-            effective_recovery_max = max(recovery_max_pct, 8.0)
-        else:
-            effective_daily_cap = self.max_daily_loss_pct
-            effective_total_cap = self.max_total_drawdown_pct
-            effective_recovery_max = recovery_max_pct
+        effective_daily_cap = self.max_daily_loss_pct
+        effective_total_cap = self.max_total_drawdown_pct
+        effective_recovery_max = recovery_max_pct
+
+        weekly_loss_pct = 0.0
+        if self.weekly_start_equity > 0:
+            weekly_loss_pct = max(0.0, ((self.weekly_start_equity - current_equity) / self.weekly_start_equity) * 100.0)
 
         breaches = []
         daily_breached = daily_loss_pct >= effective_daily_cap
@@ -338,6 +378,8 @@ class DrawdownGuard:
         )
         if daily_breached and not recovery_zone:
             breaches.append(f"Max Daily Loss breached ({daily_loss_pct:.2f}% >= {effective_daily_cap:.2f}%). Trading halted for today.")
+        if weekly_loss_pct >= self.max_weekly_loss_pct:
+            breaches.append(f"Max Weekly Loss breached ({weekly_loss_pct:.2f}% >= {self.max_weekly_loss_pct:.2f}%). Trading halted for the week.")
         if total_breached:
             breaches.append(f"Max Portfolio Drawdown breached ({total_dd_pct:.2f}% >= {effective_total_cap:.2f}%). Circuit breaker triggered.")
 
@@ -345,6 +387,7 @@ class DrawdownGuard:
             "passed": len(breaches) == 0,
             "daily_loss_pct": round(daily_loss_pct, 2),
             "total_dd_pct": round(total_dd_pct, 2),
+            "weekly_loss_pct": round(weekly_loss_pct, 2),
             "breaches": breaches
         }
 

@@ -70,8 +70,9 @@ class TestRiskCeilingIsEnforced(unittest.TestCase):
         Guards against someone 'restoring' the 1.50 literal without reading why
         it was there.
         """
-        scaled = SETTINGS.risk.max_risk_per_trade_pct * 1.35 * 1.15
-        self.assertGreater(scaled, SETTINGS.risk.max_risk_per_trade_pct,
+        base = 0.5  # the configured limit when the regression shipped
+        scaled = base * 1.35 * 1.15
+        self.assertGreater(scaled, base,
                            "multipliers must be able to push past the base, or this test is moot")
         self.assertLess(scaled, 1.50,
                         "the old 1.50 literal never bound this case -- that was the bug")

@@ -120,38 +120,17 @@ class PositionSizer:
         # inflated 0.776% but over 2x the honest 0.575% -- so such a trade is now
         # refused. That is the correct answer to "you cannot risk 0.5% here",
         # but it does mean small accounts stop trading wide-stop symbols.
-        is_micro_account = account_balance <= 500.0
-        is_high_conviction = (model_confidence >= 0.70) or (combined_scaler >= 1.10)
-
-        if is_micro_account:
-            # Nano accounts (< $250): require calibrated risk capital (1.25% - 2.50%)
-            # to enable valid 0.01 lot execution on tight intraday stops
-            if is_high_conviction:
-                conviction_metric = max(
-                    (model_confidence - 0.60) / 0.30 if model_confidence >= 0.60 else 0.0,
-                    (combined_scaler - 1.0) / 0.40 if combined_scaler > 1.0 else 0.0,
-                    min(1.0, kelly_pct / 20.0) if kelly_pct > 0.0 else 0.0
-                )
-                micro_target_pct = 2.00 + (0.50 * conviction_metric)
-                scaled = micro_target_pct * invalidation_risk_coefficient
-                effective_risk_pct = min(2.50, max(1.50, scaled)) if invalidation_risk_coefficient >= 1.0 else max(0.80, scaled)
-                logger.info(
-                    f"[{sym_name}] HIGH CONVICTION NANO SCALING: risk target {effective_risk_pct:.2f}% "
-                    f"(balance ${account_balance:.0f}, model_conf={model_confidence:.2f}, scaler={combined_scaler:.2f}, kelly={kelly_pct:.2f}%)"
-                )
-            else:
-                base_micro = max(1.25, float(risk_pct))
-                scaled = base_micro * invalidation_risk_coefficient * combined_scaler
-                effective_risk_pct = min(2.50, max(1.25, scaled))
-        else:
-            ceiling = float(risk_pct) if risk_pct and risk_pct > 0 else 0.0
-            scaled = risk_pct * invalidation_risk_coefficient * combined_scaler
-            effective_risk_pct = min(ceiling, max(0.10, scaled)) if ceiling > 0 else max(0.10, scaled)
-            if ceiling > 0 and scaled > ceiling + 1e-9:
-                logger.debug(
-                    "[%s] risk clamped: multipliers wanted %.2f%%, ceiling is %.2f%% "
-                    "(max_risk_per_trade_pct)", sym_name, scaled, ceiling,
-                )
+        # One sizing rule for every account size (risk policy 2026-11-16): the
+        # multipliers may only REDUCE risk below the configured target. The old
+        # micro branch lifted small accounts to 1.25-2.5% per trade.
+        ceiling = float(risk_pct) if risk_pct and risk_pct > 0 else 0.0
+        scaled = risk_pct * invalidation_risk_coefficient * combined_scaler
+        effective_risk_pct = min(ceiling, max(0.10, scaled)) if ceiling > 0 else max(0.10, scaled)
+        if ceiling > 0 and scaled > ceiling + 1e-9:
+            logger.debug(
+                "[%s] risk clamped: multipliers wanted %.2f%%, ceiling is %.2f%% "
+                "(max_risk_per_trade_pct)", sym_name, scaled, ceiling,
+            )
         logger.debug(
             f"[{sym_name}] risk target {effective_risk_pct:.2f}% "
             f"(base {risk_pct:.2f}% after vol_scalar {vol_scalar:.2f}; "
@@ -160,20 +139,13 @@ class PositionSizer:
         from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit
         from jarvis.risk.account_tier import (
             get_nano_risk_cap,
-            get_milestone_risk_budget,
             get_max_lot_cap as tier_lot_cap
         )
         
         sym_key = sym_name if sym_name else (str(symbol_info.get("canonical", "EURUSD")).upper() if symbol_info else "EURUSD")
         max_dollars, max_pct = get_nano_risk_cap(account_balance, sym_key)
-        milestone_dollars, milestone_pct = get_milestone_risk_budget(account_balance, sym_key)
 
         risk_amount_dollars = account_balance * (effective_risk_pct / 100.0)
-        if account_balance < 250.0:
-            # Anchor risk amount to milestone budget ($2.50 FX / $3.00 Gold on Tier 1)
-            risk_amount_dollars = min(risk_amount_dollars, milestone_dollars)
-        elif account_balance < 2500.0:
-            risk_amount_dollars = min(risk_amount_dollars, max_dollars)
         dollar_risk_per_unit = get_dollar_risk_per_price_unit(sym_key, symbol_info)
         dollar_risk_per_lot = risk_distance * dollar_risk_per_unit
 
@@ -198,22 +170,13 @@ class PositionSizer:
             actual_risk_dollars = min_vol * dollar_risk_per_lot
             actual_risk_pct = (actual_risk_dollars / (account_balance + 1e-9)) * 100.0
 
-            if account_balance < 250.0:
-                min_lot_ok = (
-                    actual_risk_dollars <= max_dollars + 1e-9
-                    and actual_risk_pct <= max_pct + 1e-9
-                )
-                cap_text = f"${max_dollars:.2f} / {max_pct:.2f}% absolute"
-            elif account_balance < 2500.0:
-                min_lot_ok = (
-                    actual_risk_dollars <= max_dollars + 1e-9
-                    and actual_risk_pct <= max_pct + 1e-9
-                )
-                cap_text = f"${max_dollars:.2f} / {max_pct:.2f}% absolute"
-            else:
-                max_pct_std = max(float(risk_pct), 1.0)
-                min_lot_ok = actual_risk_pct <= max_pct_std + 1e-9
-                cap_text = f"{max_pct_std:.2f}%"
+            # The broker minimum may exceed the target; allow it only up to the
+            # policy's min-lot ceiling, for every account size.
+            min_lot_ok = (
+                actual_risk_dollars <= max_dollars + 1e-9
+                and actual_risk_pct <= max_pct + 1e-9
+            )
+            cap_text = f"${max_dollars:.2f} / {max_pct:.2f}%"
 
             if not min_lot_ok:
                 logger.error(
@@ -245,19 +208,11 @@ class PositionSizer:
             final_lots = min(final_lots, lot_cap)
 
         # Volume step rounding (floor to prevent exceeding risk budget)
-        steps = math.floor(((final_lots - min_vol) / vol_step) + 1e-9)
+        # 1e-6, not 1e-9: an exact budget (e.g. 0.02 lots) computes as 0.0199999... and
+        # lost a whole step; the removed milestone round-up used to mask this.
+        steps = math.floor(((final_lots - min_vol) / vol_step) + 1e-6)
         final_lots = min(max_vol, max(min_vol, min_vol + steps * vol_step))
 
-        # Discrete milestone rounding: if the remainder is >= 70% of step and next step
-        # stays strictly within the milestone dollar budget, promote to enable book splitting
-        next_step = final_lots + vol_step
-        if (
-            account_balance < 500.0
-            and next_step <= lot_cap
-            and (raw_lots - final_lots) >= (vol_step * 0.70)
-            and (next_step * dollar_risk_per_lot) <= (milestone_dollars + 1e-9)
-        ):
-            final_lots = next_step
 
         digits = max(0, min(4, int(round(-math.log10(vol_step))))) if vol_step < 1.0 else 0
         return round(final_lots, digits)

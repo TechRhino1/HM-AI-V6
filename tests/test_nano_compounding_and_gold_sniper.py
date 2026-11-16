@@ -23,28 +23,12 @@ from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
 class TestNanoCompoundingAndGoldSniper(unittest.TestCase):
 
     def test_milestone_risk_budgets_progression(self):
-        """Verifies deterministic progression of milestone risk budgets from $100 to $1,000+."""
-        # Tier 1: $100 - $150
-        fx_t1_usd, fx_t1_pct = get_milestone_risk_budget(100.0, "EURUSD")
-        gold_t1_usd, gold_t1_pct = get_milestone_risk_budget(100.0, "XAUUSD")
-        self.assertEqual(fx_t1_usd, 2.50)
-        self.assertEqual(fx_t1_pct, 2.5)
-        self.assertEqual(gold_t1_usd, 3.00)
-        self.assertEqual(gold_t1_pct, 3.0)
-
-        # Tier 2: $150 - $250
-        fx_t2_usd, fx_t2_pct = get_milestone_risk_budget(180.0, "EURUSD")
-        gold_t2_usd, gold_t2_pct = get_milestone_risk_budget(180.0, "XAUUSD")
-        self.assertEqual(fx_t2_usd, 4.00)
-        self.assertEqual(gold_t2_usd, 5.00)
-
-        # Tier 3: $250 - $500
-        fx_t3_usd, _ = get_milestone_risk_budget(300.0, "EURUSD")
-        self.assertEqual(fx_t3_usd, 7.00)
-
-        # Tier 4: $500 - $1,000
-        fx_t4_usd, _ = get_milestone_risk_budget(750.0, "EURUSD")
-        self.assertEqual(fx_t4_usd, 12.00)
+        """Risk policy 2026-11-16: the per-trade budget is 1% of equity and grows with it."""
+        for equity in (100.0, 180.0, 300.0, 750.0, 5000.0):
+            for sym in ("EURUSD", "XAUUSD"):
+                usd, pct = get_milestone_risk_budget(equity, sym)
+                self.assertEqual(pct, 1.0)
+                self.assertAlmostEqual(usd, equity * 0.01)
 
     def test_max_lot_caps_by_tier_and_asset(self):
         """Verifies lot caps permit 0.02 on FX on $100 while keeping Gold strictly capped at 0.01."""
@@ -118,8 +102,9 @@ class TestNanoCompoundingAndGoldSniper(unittest.TestCase):
         dollar_risk = 2.00 * 100.0 * lots
         self.assertEqual(dollar_risk, 2.00)
 
-    def test_gold_on_160_dollar_account_unlocks_002_lots_tier2(self):
-        """Verifies Gold on a $160 account unlocks 0.02 lots for a tight $2.00 stop."""
+    def test_gold_size_never_rounds_up_past_the_risk_budget(self):
+        """Risk policy 2026-11-16 removed the 'milestone' round-up: on $160 with a $2.00
+        gold stop the sizer's budget is $3.68 (2.30%), so 0.02 lots ($4.00) would exceed it."""
         symbol_info = {
             "name": "XAUUSD",
             "symbol": "XAUUSD",
@@ -132,8 +117,6 @@ class TestNanoCompoundingAndGoldSniper(unittest.TestCase):
             "trade_tick_value": 1.0,
             "trade_tick_size": 0.01,
         }
-        # Entry 2650.00, SL 2648.00 ($2.00 distance = $200 / lot risk)
-        # On $160 account, Tier 2 budget is $5.00
         lots = PositionSizer.calculate_lot_size(
             account_balance=160.0,
             entry_price=2650.00,
@@ -143,10 +126,17 @@ class TestNanoCompoundingAndGoldSniper(unittest.TestCase):
             model_confidence=0.85,
             target_rr=3.0
         )
+        self.assertEqual(lots, 0.01)
+        self.assertLessEqual(2.00 * 100.0 * lots, 160.0 * 0.025)
+
+    def test_an_exact_budget_is_not_floored_a_step_short(self):
+        """$400 at the 1% ceiling = $4.00 = exactly 0.02 lots of a 20-pip EURUSD stop.
+        Float arithmetic gives 0.0199999..., which the old 1e-9 tolerance floored to 0.01."""
+        info = {"name": "EURUSD", "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01,
+                "trade_contract_size": 100000.0, "trade_tick_value": 1.0, "trade_tick_size": 0.00001}
+        lots = PositionSizer.calculate_lot_size(400.0, 1.08500, 1.08300, 1.0, info,
+                                                model_confidence=0.60, pattern_sample_size=5)
         self.assertEqual(lots, 0.02)
-        dollar_risk = 2.00 * 100.0 * lots
-        self.assertEqual(dollar_risk, 4.00)
-        self.assertLessEqual(dollar_risk, 5.00)
 
     def test_gold_profile_configuration_and_killzones(self):
         """Verifies Gold profile has institutional settings and London/NY prime hours."""
