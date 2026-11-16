@@ -223,7 +223,9 @@ class TestDynamicLevelsAndRefactoring(unittest.TestCase):
         probs = self.strategy_selector.select_strategy_probabilities(reg_range, context=ctx_sweep, account_equity=10000.0)
 
         # Liquidity sweep reversal should receive dominant Bayesian probability weight
-        self.assertGreater(probs.get("LIQUIDITY_SWEEP_REVERSAL", 0.0), 0.30)
+        # Globally banned on evidence (symbol_profile_config.GLOBALLY_BANNED_STRATEGIES,
+        # 2026-11-16): a sweep context no longer routes into the sweep reversal.
+        self.assertEqual(probs.get("LIQUIDITY_SWEEP_REVERSAL", 0.0), 0.0)
         self.assertEqual(probs.get("BREAKOUT_EXPANSION", 0.0), 0.0)  # Always 0 on Forex
 
     def test_backtesting_engine_consumes_dynamic_scale_out_plan(self):

@@ -609,6 +609,19 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
     ),
 }
 
+# Strategies disabled for every symbol on evidence (2026-11-16 audit). Remove a
+# name only with new evidence from the decision journal / analytics endpoint.
+#   LIQUIDITY_SWEEP_REVERSAL: live demo expectancy -0.21R over 33 closed trades
+#   (2.4 standard errors below zero; -0.51R on the journal's own R), sweep/
+#   structure signals showed no directional edge on 12 months of H1
+#   (hit rate 0.49 vs 0.49 base), and the session-sweep variant lost in the
+#   gold research (reports/GOLD_RESEARCH_2026-11-16.md).
+GLOBALLY_BANNED_STRATEGIES = ("LIQUIDITY_SWEEP_REVERSAL",)
+for _cfg in SYMBOL_PROFILES.values():
+    for _name in GLOBALLY_BANNED_STRATEGIES:
+        if _name not in _cfg.banned_strategies:
+            _cfg.banned_strategies.append(_name)
+
 # Alias resolution mapping
 _ALIAS_TO_CANONICAL: Dict[str, str] = {
     "GOLD": "XAUUSD", "GOLD#": "XAUUSD", "GOLD.I#": "XAUUSD", "GOLD.I": "XAUUSD", "XAUUSD#": "XAUUSD", "XAUUSD.I#": "XAUUSD", "XAUUSD.I": "XAUUSD",
