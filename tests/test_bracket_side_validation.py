@@ -133,6 +133,10 @@ class TestTheSyncRefusesIt:
         test above would pass while destroying the data."""
         db, _row = self._setup(tmp_path)
         try:
+            # The parsed exit stop only fills a MISSING bracket (a journaled one
+            # is the initial stop and is kept), so the control starts without one.
+            db._get_conn().execute("UPDATE executed_trades SET sl = 0 WHERE ticket = 555111000")
+            db._get_conn().commit()
             # 1.0900 < entry 1.1000: correct side for a BUY stop.
             self._run_sync(db, self._deals("[sl1.0900]"))
             sl, _tp = _row()

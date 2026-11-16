@@ -508,7 +508,7 @@ class TestCancelledOrderGhostStamp(unittest.TestCase):
             except OSError:
                 pass
 
-    def _fake_mt5(self, ghost_deals, filled_deals):
+    def _fake_mt5(self, ghost_deals, filled_deals, ghost_state=2):
         from types import SimpleNamespace
 
         # The stamping loop sits behind `if not deals: return`, so the window
@@ -530,7 +530,7 @@ class TestCancelledOrderGhostStamp(unittest.TestCase):
             # date-window form used by the main deal scan
             return [decoy] + list(ghost_deals) + list(filled_deals)
 
-        cancelled_order = SimpleNamespace(ticket=98001, state=2, time_done=1792501084)
+        cancelled_order = SimpleNamespace(ticket=98001, state=ghost_state, time_done=1792501084)
         filled_order = SimpleNamespace(ticket=98002, state=2, time_done=1792501100)
         return SimpleNamespace(
             terminal_info=lambda: SimpleNamespace(connected=True),
@@ -539,10 +539,50 @@ class TestCancelledOrderGhostStamp(unittest.TestCase):
             history_orders_get=lambda *a, **k: [cancelled_order, filled_order],
         )
 
-    def _sync(self, ghost_deals, filled_deals):
-        fake = self._fake_mt5(ghost_deals, filled_deals)
+    def _sync(self, ghost_deals, filled_deals, ghost_state=2):
+        fake = self._fake_mt5(ghost_deals, filled_deals, ghost_state)
         with patch("jarvis.data.database.broker_utc_offset", return_value=0):
             self.db.sync_mt5_history(days=1, mt5_module=fake)
+
+    def test_expired_and_partial_order_states(self):
+        """MT5 ORDER_STATE_EXPIRED is 6 (it was missing); PARTIAL (3) is not terminal."""
+        for state, should_close in ((6, True), (5, True), (3, False), (8, False)):
+            self.tearDown(); self.setUp()
+            self.db.log_trade(
+                ticket=98001, position_id=None, symbol="XAUUSD", action="SELL",
+                entry=4131.63, sl=4136.0, tp=4120.0, volume=0.01,
+                score=51.0, regime="TREND_BEAR", ev=None, origin="broker",
+            )
+            self._sync(ghost_deals=[], filled_deals=[], ghost_state=state)
+            closed_at = self.db._get_conn().execute(
+                "SELECT closed_at FROM executed_trades WHERE ticket = 98001"
+            ).fetchone()[0]
+            self.assertEqual(closed_at is not None, should_close, f"state={state}")
+
+    def test_trailed_exit_stop_does_not_overwrite_initial_stop(self):
+        from types import SimpleNamespace
+
+        # BUY 4131.63, initial SL 4127.60; trail tightened to 4130.00 and was hit.
+        self.db.log_trade(
+            ticket=98002, position_id=98002, symbol="XAUUSD", action="BUY",
+            entry=4131.63, sl=4127.6, tp=4140.0, volume=0.01,
+            score=51.0, regime="TREND_BULL", ev=None, origin="broker",
+        )
+        entry_deal = SimpleNamespace(
+            ticket=4, position_id=98002, entry=0, type=0, price=4131.63,
+            volume=0.01, profit=0.0, swap=0.0, commission=0.0,
+            time=1792501000, magic=888999, comment="", symbol="XAUUSD",
+        )
+        exit_deal = SimpleNamespace(
+            ticket=5, position_id=98002, entry=1, type=1, price=4130.0,
+            volume=0.01, profit=-1.63, swap=0.0, commission=0.0,
+            time=1792501900, magic=888999, comment="[sl 4130.00]", symbol="XAUUSD",
+        )
+        self._sync(ghost_deals=[], filled_deals=[entry_deal, exit_deal])
+        sl = self.db._get_conn().execute(
+            "SELECT sl FROM executed_trades WHERE ticket = 98002"
+        ).fetchone()[0]
+        self.assertAlmostEqual(sl, 4127.6)
 
     def test_cancelled_never_filled_row_is_stamped_closed(self):
         self.db.log_trade(

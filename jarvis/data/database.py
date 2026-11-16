@@ -849,8 +849,12 @@ class SQLiteTradeDB:
                                           THEN 'broker' ELSE origin END,
                             position_id = CASE WHEN ? IS NOT NULL THEN ? ELSE position_id END,
                             closed_at = CASE WHEN ? IS NOT NULL THEN ? ELSE closed_at END,
-                            sl = CASE WHEN ? > 0 THEN ? ELSE sl END,
-                            tp = CASE WHEN ? > 0 THEN ? ELSE tp END
+                            -- Fill only a missing bracket: the exit comment's
+                            -- `[sl X]` is the FINAL (trailed) stop, and overwriting
+                            -- the journaled initial stop with it shrinks the
+                            -- recorded risk and inflates every R-multiple.
+                            sl = CASE WHEN (sl IS NULL OR sl = 0) AND ? > 0 THEN ? ELSE sl END,
+                            tp = CASE WHEN (tp IS NULL OR tp = 0) AND ? > 0 THEN ? ELSE tp END
                         WHERE id = ?
                     ''', (pnl, exec_label, exit_p,
                           pid, pid,
@@ -877,7 +881,7 @@ class SQLiteTradeDB:
             # Reconciliation rule for an open row keyed by ticket:
             #   * the order exists in the broker history window,
             #   * its final state is a terminal NON-fill (CANCELLED=2,
-            #     REJECTED=8, EXPIRED=5, PENDING_CANCEL=3), and
+            #     REJECTED=5, EXPIRED=6 — MetaTrader5.ORDER_STATE_*), and
             #   * no deal was ever booked for that ticket,
             # → the trade will never happen: stamp `closed_at` with the
             #   order's own terminal time and leave the outcome NULL. An
@@ -898,7 +902,9 @@ class SQLiteTradeDB:
             # produced deals, so it is not touched; a no-deal row whose order
             # ended REJECTED/CANCELLED/EXPIRED is stamped closed too. Rows
             # for paper tickets (no broker order at all) are left alone.
-            TERMINAL_NON_FILL_STATES = {2, 3, 5, 8}  # CANCELLED, PENDING_CANCEL, EXPIRED, REJECTED
+            # Was {2, 3, 5, 8}: 3 is PARTIAL and 8 REQUEST_MODIFY, while EXPIRED (6)
+            # was missing, so every expired limit order stayed "open" forever.
+            TERMINAL_NON_FILL_STATES = {2, 5, 6}  # CANCELED, REJECTED, EXPIRED
             order_map: dict = {}
             try:
                 hist_orders = mt5.history_orders_get(from_date, to_date) or []

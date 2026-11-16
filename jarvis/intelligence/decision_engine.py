@@ -869,13 +869,19 @@ class DecisionEngine:
         # Authenticated Institutional Reversal Setup
         metals_smt_rev = getattr(context, "metals_smt", {}) or {}
         has_smt_rev = bool(metals_smt_rev.get("smt_active", False) and metals_smt_rev.get("smt_type") in ("BULLISH_SMT", "BEARISH_SMT"))
+        # The reversal evidence must point the trade's way. It used to accept a
+        # CHoCH/sweep in EITHER direction, or any non-neutral bias (true on most
+        # bars), so a BEARISH CHoCH could validate a BUY and lift the
+        # counter-trend vetoes below.
+        rev_dir = "BULLISH" if tentative_bias == "BUY" else "BEARISH"
         is_validated_reversal = (
             strategy in ("LIQUIDITY_SWEEP_REVERSAL", "CHOCH_STRUCTURAL_REVERSAL")
             and (
-                bool(getattr(context.liquidity, "sweep_detected", False))
-                or bool(getattr(context.structure, "choch", False))
+                (bool(getattr(context.liquidity, "sweep_detected", False))
+                 and getattr(context.liquidity, "sweep_type", "") == f"{rev_dir}_SWEEP")
+                or (bool(getattr(context.structure, "choch", False))
+                    and getattr(context.structure, "choch_type", "") == rev_dir)
                 or has_smt_rev
-                or getattr(context.structure, "bias", "") in ("BULLISH", "BEARISH")
             )
             and (
                 (tentative_bias == "BUY" and (getattr(context.momentum, "bullish_divergence", False) or has_smt_rev or getattr(context.structure, "discount_premium_zone", "") in ("DISCOUNT", "EQUILIBRIUM"))) or

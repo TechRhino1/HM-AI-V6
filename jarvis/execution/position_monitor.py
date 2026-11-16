@@ -849,6 +849,26 @@ class PositionMonitorEngine:
         self._initial_risk_dist[pos.ticket] = dist
         return dist
 
+    def _recover_open_state(self, pos: PositionSnapshot, atr: float, pip_size: float) -> None:
+        """Rebuild 1R and the partial-taken flag from the broker on first sight.
+
+        That state lives only in memory, so after a restart 1R was re-derived from
+        the already-ratcheted stop (thresholds fired ~5x early, the stop jumped)
+        and the partial close was taken a second time.
+        """
+        getter = getattr(self.mt5_client, "get_opening_order", None)
+        try:
+            order = getter(pos.ticket) if callable(getter) else None
+        except Exception:
+            return
+        if not isinstance(order, dict):
+            return
+        if order["sl"] > 0:
+            self._ensure_valid_initial_sl_dist(pos, order["sl"], atr, pip_size)
+            self._initial_sl[pos.ticket] = order["sl"]
+        if order["volume_initial"] > 0 and pos.volume < order["volume_initial"] - 1e-9:
+            self._partially_closed_tickets.add(pos.ticket)
+
     def _should_harvest_proximity(
         self,
         progress_to_tp: float,
@@ -1048,6 +1068,8 @@ class PositionMonitorEngine:
                 actions.append(f"EMERGENCY_BRAKE→BE@{new_sl:.4f}")
 
         else:
+            if pos.ticket not in self._initial_risk_dist:
+                self._recover_open_state(pos, atr, pip_size)
             # ── 0. Partial Profit-Taking (§B-2 / §B-3, Suppressed in Grace Period) ──
             if not in_grace_period and (not is_manual or effective_manual_mode in ("AUTO_PILOT", "FULL")) and pos.ticket not in self._partially_closed_tickets and pos.volume >= 0.02:
                 decision_obj = self.state_manager.latest_decisions.get(symbol)
@@ -1064,7 +1086,11 @@ class PositionMonitorEngine:
                 if not (0.0 < target_pct < 1.0):
                     target_pct = getattr(_p, "fast_cash_volume_pct", PARTIAL_CLOSE_PCT)
 
-                risk_dist_init = abs(pos.open_price - pos.sl) if pos.sl > 0 else (atr * 1.5)
+                # Frozen 1R: the live stop has already been ratcheted by milestones,
+                # and measuring R against it fired the partial ~5x too early.
+                risk_dist_init = self._initial_risk_dist.get(pos.ticket) or (
+                    abs(pos.open_price - pos.sl) if pos.sl > 0 else (atr * 1.5)
+                )
                 current_r = ((c_price - pos.open_price) if pos.type == "BUY" else (pos.open_price - c_price)) / max(risk_dist_init, 1e-6)
                 p_trigger_r = getattr(_p, "fast_cash_r", PARTIAL_TP_TRIGGER_R)
                 if first_target is None:
@@ -1336,7 +1362,14 @@ class PositionMonitorEngine:
             # ── 3.2 Near-TP Proximity Harvesting & Lock (Institutional TP Protection) ────
             # When price achieves >= 94% of the planned target move OR comes within proximity buffer
             # of TP (e.g. 1.5x spread or 0.10x ATR), prevent missed fills and sudden givebacks.
-            if pos.tp > 0:
+            #
+            # A fixed-target policy (profit_locks=False, e.g. gold's 2.5R) is what the
+            # backtest validated: stop and target stay put. Every discretionary lock,
+            # harvest, reversal exit and TP rewrite below is live-only and would make
+            # the live trade a different strategy from the one that was tested.
+            locks_on = getattr(policy, "profit_locks", True)
+            discretionary = locks_on and not in_grace_period
+            if locks_on and pos.tp > 0:
                 tp_distance = abs(pos.tp - pos.open_price)
                 if tp_distance > 1e-6:
                     dist_to_tp = (pos.tp - c_price) if pos.type == "BUY" else (c_price - pos.tp)
@@ -1399,7 +1432,9 @@ class PositionMonitorEngine:
                                 actions.append(f"PROX_LOCK_82%@{new_sl:.{digits}f}")
 
             # ── 3.5 Live MFE Scale-Out & Retracement Protection (E2) ───────────
-            if pos.type == "BUY":
+            if not locks_on:
+                pass
+            elif pos.type == "BUY":
                 peak_mfe = self._peak_favorable_price[pos.ticket] - pos.open_price
                 if peak_mfe >= (atr * 1.5):
                     current_gain = c_price - pos.open_price
@@ -1421,7 +1456,7 @@ class PositionMonitorEngine:
                             actions.append(f"MFE_RETRACE_50%_LOCK@{new_sl:.4f}")
 
             # ── 3.8 Market Direction Reversal & Structural Invalidation Guard ────
-            if not in_grace_period:
+            if discretionary:
                 rev_sl, rev_act, should_close, rev_reason = self._check_market_direction_reversal(
                     pos=pos,
                     ctx=ctx,
@@ -1446,7 +1481,7 @@ class PositionMonitorEngine:
                     actions.append(rev_act)
 
             # ── 4. Regime, VWAP & Momentum discretionary checks (Suppressed in Grace Period) ──
-            if not in_grace_period:
+            if discretionary:
                 new_sl, act = self._check_regime_invalidation(
                     pos, ctx, regime, c_price, atr, new_sl, digits=digits, pip_size=pip_size
                 )
@@ -1481,7 +1516,7 @@ class PositionMonitorEngine:
 
             # ── 5.1 Dynamic Take Profit (TP) Adaptation ─────────────────────
             current_r = ((c_price - pos.open_price) if pos.type == "BUY" else (pos.open_price - c_price)) / max(risk_dist, 1e-6)
-            if not in_grace_period and ml_prob is not None:
+            if discretionary and ml_prob is not None:
                 init_tp = self._initial_tp.get(pos.ticket, pos.tp)
                 init_tp_r = abs(init_tp - pos.open_price) / max(risk_dist, 1e-6) if init_tp > 0 else 2.5
                 adx_val = float(getattr(ctx.momentum, "adx", 20.0) or 20.0)
@@ -1522,7 +1557,7 @@ class PositionMonitorEngine:
                             actions.append(f"ML_TP_CONTRACT_{contracted_r:.1f}R(p={ml_prob:.2f})")
 
             # ── 5.2 Dynamic ML Stop Loss (SL) Tightening ───────────────────
-            if not in_grace_period and ml_prob is not None:
+            if discretionary and ml_prob is not None:
                 entry_prob = self._entry_ml_prob.get(pos.ticket, ml_prob)
                 prob_deteriorated = (ml_prob < 0.40) or (entry_prob - ml_prob >= 0.18)
 
@@ -2229,20 +2264,20 @@ class PositionMonitorEngine:
                 bos_type = str(getattr(struct, "bos_type", "NONE") or "").upper()
                 struct_bias = str(getattr(struct, "bias", "NEUTRAL") or "").upper()
 
-                if is_buy:
-                    if choch and ("BEAR" in choch_type):
-                        reversal_signals.append(f"BEARISH_CHOCH({choch_type})")
-                    if bos and ("BEAR" in bos_type):
-                        reversal_signals.append(f"BEARISH_BOS({bos_type})")
-                    if struct_bias == "BEARISH":
-                        reversal_signals.append("STRUCT_BIAS_BEARISH")
-                else:
-                    if choch and ("BULL" in choch_type):
-                        reversal_signals.append(f"BULLISH_CHOCH({choch_type})")
-                    if bos and ("BULL" in bos_type):
-                        reversal_signals.append(f"BULLISH_BOS({bos_type})")
-                    if struct_bias == "BULLISH":
-                        reversal_signals.append("STRUCT_BIAS_BULLISH")
+                # CHoCH, BOS and bias all derive from the same close-beyond-last-swing
+                # test (market_structure.py), so one adverse break is ONE signal.
+                # Counted as three, a single H1 wick satisfied the multi-factor
+                # thresholds alone and closed trades at market in every profit phase.
+                adverse = "BEAR" if is_buy else "BULL"
+                hits = [
+                    name for name, on in (
+                        (f"CHOCH({choch_type})", choch and adverse in choch_type),
+                        (f"BOS({bos_type})", bos and adverse in bos_type),
+                        ("BIAS", struct_bias == f"{adverse}ISH"),
+                    ) if on
+                ]
+                if hits:
+                    reversal_signals.append(f"{adverse}ISH_STRUCT_BREAK({'+'.join(hits)})")
 
             # 2. Momentum: Strong Trend Score Inversion & Divergence
             mom = getattr(ctx, "momentum", None)

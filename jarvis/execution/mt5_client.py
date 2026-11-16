@@ -237,9 +237,12 @@ class MT5Client:
                 "trade_contract_size": s.contract_size,
                 "trade_tick_value": s.pip_value_per_lot,
                 "trade_tick_size": s.pip_size,
-                "point": s.pip_size,
+                # MT5 semantics: point = 10^-digits, spread in points. `point` was the
+                # pip size while spread was pips*10, so paper's minimum stop distance
+                # came out ~10x too wide (14 pips on EURUSD, $300 on BTCUSD).
+                "point": 10 ** -s.digits,
                 "digits": s.digits,
-                "spread": int(s.typical_spread_pips * 10),
+                "spread": int(round(s.typical_spread_pips * s.pip_size / (10 ** -s.digits))),
             })
             self._symbol_spec_cache[resolved] = (now_ts, dict(spec_dict))
             return spec_dict
@@ -1064,6 +1067,25 @@ class MT5Client:
             self._pending_orders_cache = (now_ts, list(res))
         return res
 
+    def get_opening_order(self, position_ticket: int) -> Optional[Dict[str, float]]:
+        """Original SL and volume of the order that opened a position.
+
+        MT5 copies the opening order ticket into the position id, so this is the
+        broker's own record of 1R and the pre-partial volume — state the monitor
+        otherwise only holds in memory and loses on restart. None when unknown.
+        """
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
+            return None
+        try:
+            orders = mt5.history_orders_get(ticket=int(position_ticket)) or []
+        except Exception as e:
+            logger.debug(f"Opening order lookup failed for #{position_ticket}: {e}")
+            return None
+        if not orders:
+            return None
+        o = orders[0]
+        return {"sl": float(o.sl or 0.0), "volume_initial": float(o.volume_initial or 0.0)}
+
     def cancel_pending_order(self, ticket: int) -> Dict[str, Any]:
         """Cancels a pending order by ticket."""
         self._pending_orders_cache = (0.0, [])
@@ -1351,6 +1373,13 @@ class MT5Client:
                         final_sl = cur_price + min_stop_dist
                     if final_tp > 0 and (cur_price - final_tp) < min_stop_dist:
                         final_tp = cur_price - min_stop_dist
+
+                # The stop-level clamp must never loosen a stop already resting on
+                # the position (e.g. a TP-only modify while the SL sits inside the
+                # stop level): a rejected modify keeps protection, a loosened one loses it.
+                # Only the clamp is constrained; a caller asking for a wider stop gets it.
+                if final_sl > 0 and p.sl > 0 and final_sl != float(sl):
+                    final_sl = max(final_sl, p.sl) if is_buy else min(final_sl, p.sl)
 
                 request = {
                     "action": getattr(mt5, "TRADE_ACTION_SLTP", 6),

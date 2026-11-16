@@ -291,3 +291,38 @@ class TestMarketDirectionReversalGuard(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestSingleStructureBreakIsOneSignal(TestMarketDirectionReversalGuard):
+    """CHoCH, BOS and bias all come from one close beyond the last swing
+    (market_structure.py). Counted as three signals, a single H1 break met the
+    "confluent reversal" thresholds alone and closed winners at market."""
+
+    def _run(self, side):
+        is_buy = side == "BUY"
+        adverse = "BEARISH" if is_buy else "BULLISH"
+        price = 1.10260 if is_buy else 1.09740  # +1.30R on a 20-pip risk
+        pos = PositionSnapshot(
+            ticket=1100, symbol="EURUSD", type=side, volume=0.10, open_price=1.10000,
+            current_price=price, sl=1.09800 if is_buy else 1.10200,
+            tp=1.10500 if is_buy else 1.09500, profit=26.0, swap=0.0, commission=0.0,
+            open_time=datetime.now(timezone.utc).isoformat(), magic=JARVIS_MAGIC_NUMBER,
+        )
+        ctx = MarketContext(
+            symbol="EURUSD", timestamp=datetime.now(timezone.utc), current_price=price,
+            bid=price - 0.00005, ask=price + 0.00005,
+            structure=StructureContext(bias=adverse, choch=True, choch_type=adverse, bos=True, bos_type=adverse),
+            liquidity=LiquidityContext(), volatility=VolatilityContext(atr=0.0020),
+            momentum=MomentumContext(trend_score=0.0), session=SessionContext(is_prime_session=True),
+        )
+        return self.monitor._check_market_direction_reversal(
+            pos=pos, ctx=ctx, c_price=price, atr=0.0020, risk_dist=0.00200, current_r=1.30,
+            digits=5, current_sl=pos.sl, policy=self.policy,
+        )
+
+    def test_single_break_locks_profit_instead_of_closing(self):
+        for side in ("BUY", "SELL"):
+            with self.subTest(side=side):
+                new_sl, action, should_close, _ = self._run(side)
+                self.assertFalse(should_close)
+                self.assertIn("REVERSAL_LOCK_50%", action or "")

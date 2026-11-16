@@ -534,8 +534,12 @@ class BacktestEngine:
                 result = ""
 
                 # 5.1a Stop hit (conservative: low <= SL for BUY, high >= SL for SELL)
-                if (low <= open_trade["sl"]) if open_trade["type"] == "BUY" else (high >= open_trade["sl"]):
-                    exit_price = open_trade["sl"]
+                # Tested against the stop resting when the bar OPENED. The ratchet
+                # above used this bar's high/close; stopping out at that new level
+                # on this same bar's low assumes the high printed first and booked
+                # profitable "trail" exits the live trade may never have had.
+                if (low <= bar_start_sl) if open_trade["type"] == "BUY" else (high >= bar_start_sl):
+                    exit_price = bar_start_sl
                     if open_trade.get("be_locked", False) or open_trade.get("partial_closed", False):
                         result = "BE/TRAIL_SL"
                     else:
