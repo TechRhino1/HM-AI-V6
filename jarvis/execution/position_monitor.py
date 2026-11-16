@@ -1693,12 +1693,12 @@ class PositionMonitorEngine:
             if pos.sl > 0 and new_sl > pos.sl:
                 new_sl = pos.sl
 
-        # Ensure new_tp does not encroach inside broker stop distance
-        if new_tp > 0:
-            if pos.type == "BUY" and new_tp <= c_price + min_stop_dist:
-                new_tp = round(c_price + min_stop_dist, digits)
-            elif pos.type == "SELL" and new_tp >= c_price - min_stop_dist:
-                new_tp = round(c_price - min_stop_dist, digits)
+        # Price is inside the broker's stop zone of the target: it has arrived. Bank it instead of
+        # pushing the TP away (it used to step away on every tick and almost never fill).
+        if new_tp > 0 and ((new_tp - c_price) if pos.type == "BUY" else (c_price - new_tp)) <= min_stop_dist:
+            if self._execute_exit(pos, reason="TP_ZONE_HARVEST"):
+                return
+            new_tp = pos.tp
 
         # Pre-dispatch monetary risk check: modification must never increase monetary risk!
         init_risk = self._initial_risk_usd.get(pos.ticket)
