@@ -729,7 +729,8 @@ class RiskEngine:
             }
 
     def _recovery_today(self) -> str:
-        return datetime.now(timezone.utc).date().isoformat()
+        # The injected clock (bar time in backtests), not the wall clock.
+        return datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
 
     def _can_take_recovery_attempt(self) -> bool:
         today = self._recovery_today()

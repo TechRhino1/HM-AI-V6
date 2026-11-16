@@ -1685,7 +1685,11 @@ class DecisionEngine:
                 logger.info(f"[{context.symbol}] Empirical pattern edge: WinRate={pattern_memory['win_rate']*100:.0f}%, EV={pattern_memory['avg_ev']:.2f}")
 
         # 2. Apply Post-News Stop-Hunt Liquidity Sweep Reaction (B5-WIRING)
-        news_reaction = GLOBAL_NEWS_ENGINE.evaluate_post_news_sweep_reaction(
+        # Backtests have no point-in-time calendar: this compared TODAY's releases
+        # with the wall clock, so a historical bar got a boost if a real event had
+        # just happened when the backtest ran (non-deterministic + look-ahead).
+        from jarvis.config.runtime import is_offline
+        news_reaction = {} if is_offline() else GLOBAL_NEWS_ENGINE.evaluate_post_news_sweep_reaction(
             symbol=context.symbol,
             sweep_detected=context.liquidity.sweep_detected,
             sweep_type=context.liquidity.sweep_type,

@@ -36,6 +36,10 @@ def _mean_r_multiple(trades: List[Dict[str, Any]], spec: Any = None) -> float:
     return float(np.mean(rs)) if rs else 0.0
 
 
+
+# Most bars any role needs from the past (indicators look back <= ~300).
+MTF_TAIL_BARS = 500
+
 class BacktestEngine:
     def __init__(
         self,
@@ -52,6 +56,11 @@ class BacktestEngine:
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster(parallel=False)
+        # No point-in-time economic calendar exists for historical bars. Without
+        # this the macro analyst fell back to TODAY's live calendar, scoring every
+        # historical bar against this week's events (-5 per upcoming USD HIGH
+        # event) — a bias that also made identical backtests differ day to day.
+        self.analyst_cluster.macro_analyst.news_calendar = []
         # AI8: a simulation must not be decided by weights learned from live trading.
         #
         # `DecisionEngine` owns every component on the decision path that is stateful
@@ -203,10 +212,12 @@ class BacktestEngine:
             if tf not in prepared:
                 continue
             frame, done_ns = prepared[tf]
-            mask = done_ns <= cutoff
-            if not mask.any():
+            # Binary search + bounded tail: the boolean mask + full copy was
+            # O(history) per bar, i.e. quadratic over a run.
+            idx = int(np.searchsorted(done_ns, cutoff, side="right"))
+            if idx == 0:
                 continue
-            slices[role] = frame.loc[mask].copy()
+            slices[role] = frame.iloc[max(0, idx - MTF_TAIL_BARS):idx].copy()
         return slices
 
     def run_backtest(
@@ -314,7 +325,13 @@ class BacktestEngine:
         # higher-timeframe bar leaks future prices into the decision.
         active_style = normalise_style(trade_style) if trade_style else None
         role_tf = style_timeframes(active_style) if active_style else None
-        mtf_source = {tf: full_df_indexed for tf in set(role_tf.values())} if role_tf else {}
+        # Real per-timeframe bars when the caller supplies them (mtf_frames=
+        # {"M5": df, "M15": df, ...}); otherwise every role falls back to the H1
+        # frame, which is what all runs did before (M5/M15 roles saw H1 bars).
+        real_frames = kwargs.get("mtf_frames") or {}
+        mtf_source = (
+            {tf: real_frames.get(tf, full_df_indexed) for tf in set(role_tf.values())} if role_tf else {}
+        )
         mtf_prepared = self._prepare_mtf(mtf_source, role_tf) if role_tf else {}
 
         spec = resolve_symbol(symbol)

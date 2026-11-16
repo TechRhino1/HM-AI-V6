@@ -21,7 +21,12 @@ class PerformanceMetricsCalculator:
                 "sortino_ratio": 0.0,
                 "calmar_ratio": 0.0,
                 "wins": 0,
-                "losses": 0
+                "losses": 0,
+                "max_consecutive_losses": 0,
+                "payoff_ratio": 0.0,
+                "recovery_factor": 0.0,
+                "avg_r": None,
+                "risk_of_ruin_pct": 0.0,
             }
 
         pnls = [float(t.get("pnl", 0.0)) for t in trades]
@@ -95,6 +100,22 @@ class PerformanceMetricsCalculator:
             (2.5 * max_dd_pct)
         )
 
+        # Longest losing streak, payoff (avg win / avg loss), recovery factor and,
+        # where trades carry R, average R. Risk of ruin = share of 2,000 seeded
+        # bootstrap paths of these same trades that lose half the account.
+        streak = max_streak = 0
+        for p in pnls:
+            streak = streak + 1 if p < 0 else 0
+            max_streak = max(max_streak, streak)
+        payoff = (gross_profit / win_count) / (gross_loss / loss_count) if win_count and loss_count else 0.0
+        recovery_factor = net_profit / max_dd_dollars if max_dd_dollars > 0 else 0.0
+        rs = [float(t["r_multiple"]) for t in trades if t.get("r_multiple") is not None]
+        avg_r = round(float(np.mean(rs)), 3) if rs else None
+        from jarvis.backtesting.monte_carlo import MonteCarloSimulator
+        n_paths = max(200, min(2000, 2_000_000 // max(1, total_trades)))  # bound the paths x trades matrix
+        ruin = MonteCarloSimulator(num_simulations=n_paths, seed=7, noise_std=0.0).run_simulation(
+            [{"pnl": p} for p in pnls], initial_balance)["risk_of_ruin_pct"]
+
         return {
             "total_trades": total_trades,
             "win_rate_pct": round(win_rate, 2),
@@ -108,5 +129,10 @@ class PerformanceMetricsCalculator:
             "calmar_ratio": round(calmar, 2),
             "multi_objective_fitness": round(multi_objective_fitness, 2),
             "wins": win_count,
-            "losses": loss_count
+            "losses": loss_count,
+            "max_consecutive_losses": max_streak,
+            "payoff_ratio": round(payoff, 2),
+            "recovery_factor": round(recovery_factor, 2),
+            "avg_r": avg_r,
+            "risk_of_ruin_pct": ruin,
         }

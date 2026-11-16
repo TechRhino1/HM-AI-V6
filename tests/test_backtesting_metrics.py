@@ -95,9 +95,9 @@ class TestEmptyInput:
         assert set(full) - set(empty) == {"multi_objective_fitness"}
         assert set(empty) - set(full) == set()
 
-    def test_the_empty_block_still_carries_the_shared_twelve_keys(self):
+    def test_the_empty_block_still_carries_the_shared_keys(self):
         empty = PerformanceMetricsCalculator.calculate_metrics([])
-        assert len(empty) == 12
+        assert len(empty) == 17  # 12 + streak, payoff, recovery, avg R, risk of ruin (2026-11-16)
 
     def test_a_list_of_only_empty_dicts_is_not_the_empty_case(self):
         """``if not trades`` is False for ``[{}, {}]`` — it takes the full
@@ -544,4 +544,28 @@ class TestHousekeeping:
             "total_trades", "win_rate_pct", "profit_factor",
             "expectancy_dollars", "net_profit", "max_drawdown_dollars",
             "max_drawdown_pct", "sharpe_ratio", "sortino_ratio",
-            "calmar_ratio", "multi_objective_fitness", "wins", "losses"}
+            "calmar_ratio", "multi_objective_fitness", "wins", "losses",
+            "max_consecutive_losses", "payoff_ratio", "recovery_factor", "avg_r", "risk_of_ruin_pct"}
+
+
+
+class TestRiskAddenda:
+    """2026-11-16 additions: streak, payoff, recovery factor, avg R, seeded risk of ruin."""
+
+    def test_streak_payoff_and_recovery(self):
+        m = raw([{"pnl": p} for p in (10, -5, -5, -5, 20, -5)])
+        assert m["max_consecutive_losses"] == 3
+        assert m["payoff_ratio"] == 3.0            # avg win 15 / avg loss 5
+        assert m["recovery_factor"] == round(10 / 15, 2)
+
+    def test_avg_r_only_when_trades_carry_r(self):
+        assert raw([{"pnl": 1.0}])["avg_r"] is None
+        assert raw([{"pnl": 1.0, "r_multiple": 2.0}, {"pnl": -1.0, "r_multiple": -1.0}])["avg_r"] == 0.5
+
+    def test_risk_of_ruin_is_deterministic_and_sensible(self):
+        losing = [{"pnl": -300.0}] * 5 + [{"pnl": 100.0}]
+        a = PerformanceMetricsCalculator.calculate_metrics(losing, 1000.0)["risk_of_ruin_pct"]
+        b = PerformanceMetricsCalculator.calculate_metrics(losing, 1000.0)["risk_of_ruin_pct"]
+        assert a == b and a > 50.0
+        safe = [{"pnl": 10.0}] * 6
+        assert PerformanceMetricsCalculator.calculate_metrics(safe, 1000.0)["risk_of_ruin_pct"] == 0.0

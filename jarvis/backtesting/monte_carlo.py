@@ -6,8 +6,14 @@ from typing import List, Dict, Any
 import numpy as np
 
 class MonteCarloSimulator:
-    def __init__(self, num_simulations: int = 500):
+    def __init__(self, num_simulations: int = 500, seed: int = 7, noise_std: float = 2.0,
+                 ruin_fraction: float = 0.5):
+        # Seeded: identical inputs must give identical risk figures (it drew from
+        # the global unseeded RNG, so every report differed run to run).
         self.num_simulations = num_simulations
+        self.seed = seed
+        self.noise_std = noise_std          # $ slippage noise per trade (0 = pure resampling)
+        self.ruin_fraction = ruin_fraction  # "ruin" = equity at or below this share of the start
 
     def run_simulation(self, trades: List[Dict[str, Any]], initial_balance: float = 10000.0) -> Dict[str, Any]:
         if not trades:
@@ -16,34 +22,17 @@ class MonteCarloSimulator:
         pnls = np.array([t["pnl"] for t in trades])
         n_trades = len(pnls)
 
-        final_balances = []
-        max_drawdowns = []
-        ruin_count = 0
-
-        for _ in range(self.num_simulations):
-            # Resample trade returns with replacement
-            sampled_pnls = np.random.choice(pnls, size=n_trades, replace=True)
-            # Add stochastic slippage noise
-            noise = np.random.normal(0.0, 2.0, size=n_trades)
-            sim_pnls = sampled_pnls + noise
-
-            eq_curve = [initial_balance]
-            for p in sim_pnls:
-                eq_curve.append(eq_curve[-1] + p)
-
-            eq_curve = np.array(eq_curve)
-            if np.any(eq_curve <= initial_balance * 0.5):
-                ruin_count += 1
-
-            final_balances.append(eq_curve[-1])
-
-            # Calculate max DD for this path
-            running_max = np.maximum.accumulate(eq_curve)
-            drawdowns = (running_max - eq_curve) / (running_max + 1e-9) * 100.0
-            max_drawdowns.append(np.max(drawdowns))
-
-        final_balances = np.array(final_balances)
-        max_drawdowns = np.array(max_drawdowns)
+        rng = np.random.default_rng(self.seed)
+        # Vectorised: all paths at once (it was a Python loop over paths x trades).
+        sim = rng.choice(pnls, size=(self.num_simulations, n_trades), replace=True)
+        if self.noise_std > 0:
+            sim = sim + rng.normal(0.0, self.noise_std, size=sim.shape)
+        eq = np.concatenate([np.full((self.num_simulations, 1), float(initial_balance)),
+                             initial_balance + np.cumsum(sim, axis=1)], axis=1)
+        ruin_count = int(np.any(eq <= initial_balance * self.ruin_fraction, axis=1).sum())
+        final_balances = eq[:, -1]
+        running_max = np.maximum.accumulate(eq, axis=1)
+        max_drawdowns = np.max((running_max - eq) / (running_max + 1e-9) * 100.0, axis=1)
 
         var_95 = np.percentile(final_balances, 5)
         median_dd = np.median(max_drawdowns)
