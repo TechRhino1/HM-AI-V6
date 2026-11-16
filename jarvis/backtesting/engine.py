@@ -40,6 +40,12 @@ def _mean_r_multiple(trades: List[Dict[str, Any]], spec: Any = None) -> float:
 # Most bars any role needs from the past (indicators look back <= ~300).
 MTF_TAIL_BARS = 500
 
+
+# Minutes per bar for the frame being stepped (see _run_backtest_impl).
+_TF_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+# position_monitor's live SCALP_STAGNATION rule: a scalp not in profit after 45 min is closed.
+SCALP_STAGNATION_MINUTES = 45
+
 class BacktestEngine:
     def __init__(
         self,
@@ -338,7 +344,12 @@ class BacktestEngine:
         spread_dist = spread_pips * spec.pip_size
         actual_slippage_delta = self.slippage_pips * spec.pip_size
         cost_price_equiv = self.slippage_pips * spec.pip_size / 2.0  # half-spread as cost basis
-        _tf_minutes = 60  # H1 assumed
+        # Bar length of the frame being stepped. It was hard-coded to 60, so an M5
+        # run aged trades 12x too fast (the 90-min scalp time stop fired after
+        # 2 bars). Bar-counted limits below were calibrated on H1 and are scaled
+        # to the real bar length with _bar_scale.
+        _tf_minutes = int(_TF_MINUTES.get(str(timeframe or "H1").upper(), 60))
+        _bar_scale = 60.0 / _tf_minutes
 
         cooldown_mgr = LossCooldownManager()
         cooldown_mgr.set_clock(lambda: 0)  # No wall-clock in backtest
@@ -406,9 +417,17 @@ class BacktestEngine:
                         stag_limit = int(base_stag * 1.25)
                     else:
                         stag_limit = base_stag
+                    stag_limit = max(1, int(round(stag_limit * _bar_scale)))  # H1 hours -> bars
 
                 risk_dist = open_trade.get("risk_dist", 0.0)
-                if open_trade["bars_held"] >= stag_limit and open_trade["mfe"] < (risk_dist * 0.25):
+                # Live parity: position_monitor closes a SCALP that is not in profit
+                # after 45 minutes (SCALP_STAGNATION); the backtest never did.
+                _cur_r = ((float(current_bar["close"]) - open_trade["entry"]) if open_trade["type"] == "BUY"
+                          else (open_trade["entry"] - float(current_bar["close"]))) / max(risk_dist, 1e-9)
+                _scalp_stall = (str(open_trade.get("trade_style", "")).upper() == "SCALP"
+                                and open_trade["bars_held"] * _tf_minutes >= SCALP_STAGNATION_MINUTES
+                                and _cur_r <= 0.0)
+                if (open_trade["bars_held"] >= stag_limit and open_trade["mfe"] < (risk_dist * 0.25)) or _scalp_stall:
                     # A stagnation exit is a market order, so it takes adverse
                     # slippage. Only stop exits used to be charged, which made
                     # the time stop look free.
@@ -796,7 +815,7 @@ class BacktestEngine:
                             else:
                                 tp_price = entry_price + direction_sign * float(exit_geom.tp_r) * actual_risk_dist
                             exit_policy_for_trade = exit_geom.to_policy(symbol, spec)
-                            trade_max_bars = geom_max_bars
+                            trade_max_bars = max(1, int(round(geom_max_bars * _bar_scale)))  # H1-calibrated
                         else:
                             tp_price = decision.take_profit + price_shift
                             trade_style_cand = getattr(decision, "trade_style", "SWING")

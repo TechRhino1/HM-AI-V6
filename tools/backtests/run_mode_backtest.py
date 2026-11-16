@@ -135,7 +135,7 @@ def run_one(args: Dict[str, Any]) -> Dict[str, Any]:
             timeframe=primary,
             wr_profile=prof,
             trade_style=style,
-            mtf_source=frames,
+            mtf_frames=frames,  # was mtf_source=, which the engine never read
         )
         elapsed = time.time() - t0
 
