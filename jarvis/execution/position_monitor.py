@@ -1255,24 +1255,8 @@ class PositionMonitorEngine:
             # lower-high resistance for a SELL). Falls back to None when the
             # structure context is unavailable, in which case the ATR trail and
             # the R-milestones still provide progressive locking.
-            struct_level: Optional[float] = None
-            try:
-                st = getattr(ctx, "structure", None)
-                if st is not None:
-                    if pos.type == "BUY" and getattr(st, "higher_lows", False):
-                        sw_low = float(getattr(st, "swing_low", 0.0) or 0.0)
-                        dz_low = float(st.demand_zone[0]) if getattr(st, "demand_zone", None) else 0.0
-                        candidates = [lvl for lvl in (sw_low, dz_low) if lvl > pos.open_price]
-                        if candidates:
-                            struct_level = max(candidates)
-                    elif pos.type == "SELL" and getattr(st, "lower_highs", False):
-                        sw_high = float(getattr(st, "swing_high", 0.0) or 0.0)
-                        sz_high = float(st.supply_zone[1]) if getattr(st, "supply_zone", None) else 0.0
-                        candidates = [lvl for lvl in (sw_high, sz_high) if 0 < lvl < pos.open_price]
-                        if candidates:
-                            struct_level = min(candidates)
-            except Exception:
-                struct_level = None
+            from jarvis.execution.exit_policy import struct_level_for
+            struct_level = struct_level_for(pos.type, pos.open_price, getattr(ctx, "structure", None))
 
             regime_str = (regime.primary_regime.value if hasattr(regime, "primary_regime") else str(regime)) if regime else None
             exit_dec = evaluate_exit(

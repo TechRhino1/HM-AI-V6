@@ -110,6 +110,12 @@ class ExitPolicy:
     # False for fixed-target symbols: skips the short-target breakeven and the
     # progress-to-TP ratchets, which apply regardless of the R levels above.
     profit_locks: bool = True
+    # "legacy": the ratchet stack below. "institutional": stop untouched until +be_at_r, then
+    # breakeven + buffer, a chandelier (best price since entry - k x ATR, LeBeau) and a swing
+    # (structure) trail, whichever is tighter; no partials, milestones or progress locks.
+    trail_mode: str = "legacy"
+    chandelier_atr_mult: float = 3.0
+    be_at_r: float = 1.0
 
     # ── Construction ────────────────────────────────────────────────────────
     @classmethod
@@ -346,6 +352,10 @@ def evaluate_exit(
         dec.actions.append("TIME_STOP")
         return dec
 
+    if policy.trail_mode == "institutional":
+        return _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, _peak_r * risk_dist,
+                                    atr, struct_level, buffer_dist, policy)
+
     # ── 1. Partial profit banking (risk reduction) ──────────────────────────
     # Take a partial BEFORE moving to breakeven so the position is de-risked
     # while still giving the remainder room to run.
@@ -519,6 +529,53 @@ def evaluate_exit(
         if current_sl > 0 and dec.new_sl > current_sl:
             dec.new_sl = current_sl
 
+    return dec
+
+
+def struct_level_for(side: str, entry: float, st: Any) -> Optional[float]:
+    """The structural ratchet reference live and backtest both use: for a BUY the highest of the
+    swing low / demand-zone low above entry while higher lows hold; mirrored for a SELL."""
+    try:
+        if st is None:
+            return None
+        if str(side).upper() == "BUY" and getattr(st, "higher_lows", False):
+            sw = float(getattr(st, "swing_low", 0.0) or 0.0)
+            dz = float(st.demand_zone[0]) if getattr(st, "demand_zone", None) else 0.0
+            c = [x for x in (sw, dz) if x > entry]
+            return max(c) if c else None
+        if str(side).upper() == "SELL" and getattr(st, "lower_highs", False):
+            sw = float(getattr(st, "swing_high", 0.0) or 0.0)
+            sz = float(st.supply_zone[1]) if getattr(st, "supply_zone", None) else 0.0
+            c = [x for x in (sw, sz) if 0 < x < entry]
+            return min(c) if c else None
+    except Exception:
+        pass
+    return None
+
+
+def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_dist, atr,
+                         struct_level, buffer_dist, policy) -> ExitDecision:
+    """Initial stop until +be_at_r; then the tightest of breakeven+buffer, the chandelier
+    (best price since entry - k x ATR) and the last swing beyond entry - 0.25 ATR. One-way."""
+    if peak_dist < policy.be_at_r * risk_dist:
+        return dec
+    sgn = 1 if is_buy else -1
+    cands = [(entry + sgn * buffer_dist, "BE_1R")]
+    if atr > 0:
+        cands.append((entry + sgn * (peak_dist - policy.chandelier_atr_mult * atr),
+                      f"CHANDELIER_{policy.chandelier_atr_mult:.1f}ATR"))
+        if struct_level and sgn * (struct_level - entry) > 0:
+            cands.append((struct_level - sgn * 0.25 * atr, "STRUCT_TRAIL"))
+    guard = max(policy.pip_size * 2.0, 1e-5)
+    for level, tag in cands:
+        level = round(level, policy.digits)
+        if sgn * (price - level) <= guard:                 # never at or through the market
+            continue
+        if dec.new_sl == 0 or sgn * (level - dec.new_sl) > 0:
+            dec.new_sl = level
+            dec.actions.append(f"{tag}@{level}")
+    dec.be_locked = sgn * (dec.new_sl - entry) >= 0
+    dec.trail_active = True
     return dec
 
 

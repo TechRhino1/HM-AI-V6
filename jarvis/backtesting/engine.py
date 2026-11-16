@@ -487,17 +487,10 @@ class BacktestEngine:
                 # stop arithmetic must reference a *tradable* price. Using the bar
                 # close avoids the lookahead of assuming we exit at the extreme.
                 # Phase 2: Pass structural levels for trailing (match live position monitor)
-                struct_level = None
-                try:
-                    # Extract structural S/R from context if available
-                    if hasattr(context, 'structure'):
-                        st = context.structure
-                        if open_trade["type"] == "BUY":
-                            struct_level = float(getattr(st, 'swing_low', 0.0) or 0.0)
-                        else:
-                            struct_level = float(getattr(st, 'swing_high', 0.0) or 0.0)
-                except Exception:
-                    struct_level = None
+                # Same filter as live (higher lows / lower highs, beyond entry): it used the raw swing.
+                from jarvis.execution.exit_policy import struct_level_for
+                struct_level = struct_level_for(open_trade["type"], float(open_trade["entry"]),
+                                                getattr(context, "structure", None))
 
                 exit_dec = evaluate_exit(
                     side=open_trade["type"],
