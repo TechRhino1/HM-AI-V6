@@ -27,6 +27,10 @@ logging.basicConfig(
 logger = logging.getLogger("JARVIS_Main")
 
 def main():
+    # Rotating JSON log under data/logs (production was console-only). Called at
+    # run time, not import time, so importing this module (tests) writes nothing.
+    from jarvis.observability.logging_setup import add_file_logging
+    add_file_logging()
     parser = argparse.ArgumentParser(description="HM Algo 2.0 — Professional Trading Intelligence Platform")
     parser.add_argument("--mode", type=str, default=SETTINGS.trading.default_mode, choices=["paper", "live", "demo"], help="Execution mode")
 

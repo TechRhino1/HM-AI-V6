@@ -174,6 +174,30 @@ def configure_logging(
     return handler
 
 
+def add_file_logging(path: Optional[str] = None, max_bytes: int = 20_000_000, backups: int = 5,
+                     level: int = logging.INFO) -> logging.Handler:
+    """Persist logs to a rotating JSON file (production only logged to the console).
+
+    Default ``<DATA_DIR>/logs/hm_engine.log``, 20 MB x 5 files. Idempotent.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    if path is None:
+        from jarvis.config.paths import DATA_DIR
+        path = os.path.join(DATA_DIR, "logs", "hm_engine.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        if getattr(existing, "_jarvis_file_handler", False):
+            root.removeHandler(existing)
+    handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+    handler.setFormatter(JsonFormatter())
+    handler.setLevel(level)
+    handler._jarvis_file_handler = True
+    root.addHandler(handler)
+    return handler
+
+
 def log_event(
     logger: logging.Logger,
     level: int,

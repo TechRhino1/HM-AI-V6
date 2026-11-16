@@ -282,6 +282,10 @@ def _start_background_tunnel(port: int = 8501):
     t_cf.start()
 
 def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trade_style: str = "ALL"):
+    # Rotating JSON log under data/logs (production was console-only). Called at
+    # run time, not import time, so importing this module (tests) writes nothing.
+    from jarvis.observability.logging_setup import add_file_logging
+    add_file_logging()
     local_ip = get_local_wifi_ip()
 
     # Remote tunnels start automatically by default for mobile phone access (disable with JARVIS_ENABLE_TUNNEL=0 if needed)

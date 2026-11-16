@@ -133,6 +133,12 @@ import jarvis.observability.decision_journal as _decision_journal  # noqa: E402
 _DECISION_JOURNAL_DIR = _tempfile.mkdtemp(prefix="jarvis_test_decisions_")
 _decision_journal._dir = lambda: _DECISION_JOURNAL_DIR
 
+# Tests that drive hm_start()/main() must not attach a file handler to the real
+# data/logs (it would also capture every later test's log lines).
+import jarvis.observability.logging_setup as _logging_setup  # noqa: E402
+
+_logging_setup.add_file_logging = lambda *a, **k: None
+
 
 @pytest.fixture
 def _hermetic_model_registry():
