@@ -787,6 +787,17 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
                 opps.sort(key=radar_sort_key, reverse=True)
                 self._send_json({"opportunities": opps})
+            elif path == "/api/analytics/performance":
+                from jarvis.analytics.performance import performance_report, GROUPS
+                from jarvis.data.database import TRADE_DB
+                by = (query.get("by", ["symbol"])[0] or "symbol").strip()
+                if by not in GROUPS:
+                    self._send_json({"status": "FAILED", "error": f"by must be one of {list(GROUPS)}"}, status_code=400)
+                else:
+                    mode = (query.get("mode", [""])[0] or "").strip() or None
+                    acct_raw = (query.get("account", [""])[0] or "").strip()
+                    acct = int(acct_raw) if acct_raw.isdigit() else None
+                    self._send_json(performance_report(TRADE_DB, group_by=by, execution_mode=mode, account_login=acct))
             elif path == "/api/history":
                 try:
                     from jarvis.data.database import TRADE_DB

@@ -909,6 +909,8 @@ class JarvisOrchestrator:
             # pass None (written as NULL) when it never sampled this ticket.
             excursions = self.position_monitor.pop_excursions(ticket)
             mfe, mae = excursions if excursions else (None, None)
+            from jarvis.data import database
+            database.TRADE_DB.record_excursions(ticket, mfe, mae)
             # A price of 0 means the event did not carry one; pass it as None so
             # the column stays NULL ("not recorded") rather than 0.0, which would
             # claim the trade exited at zero — the same reason the `executed_trades`
@@ -2165,7 +2167,7 @@ class JarvisOrchestrator:
                 lots=lots
             )
 
-        return {
+        result = {
             "symbol": symbol,
             "trade_style": active_trade_style,
             "decision": decision,
@@ -2176,6 +2178,9 @@ class JarvisOrchestrator:
             "dry_run": bool(dry_run),
             "execution": exec_res
         }
+        from jarvis.observability import decision_journal
+        decision_journal.record(result)
+        return result
 
     def scan_all_modes(
         self,

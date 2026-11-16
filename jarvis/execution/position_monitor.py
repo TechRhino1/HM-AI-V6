@@ -383,6 +383,8 @@ class PositionMonitorEngine:
         res = self.mt5_client.close_position(pos.ticket)
         if res and res.get("status") in ("CLOSED", "PARTIALLY_CLOSED"):
             self._remember_closed_excursions(pos.ticket)
+            from jarvis.data import database
+            database.TRADE_DB.set_exit_reason(pos.ticket, reason)  # why the ENGINE closed it
             return True
         return False
 
@@ -1733,6 +1735,10 @@ class PositionMonitorEngine:
             if self._last_action.get(pos.ticket) != action_key:
                 res = self.mt5_client.modify_position(pos.ticket, sl=new_sl, tp=new_tp)
                 status = res.get("status") if res else "FAILED"
+                if status == "MODIFIED":
+                    # Trailing / break-even / de-risk history, one row per change.
+                    from jarvis.data import database
+                    database.TRADE_DB.log_sl_event(pos.ticket, pos.sl, new_sl, pos.tp, new_tp, ",".join(actions))
                 if status == "MODIFIED" or (status == "FAILED" and "No changes" in str(res.get("reason", ""))):
                     self._last_action[pos.ticket] = action_key
                     log_tag = "[MANUAL]" if is_manual else "[AI-ML]"

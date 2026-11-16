@@ -1212,6 +1212,11 @@ class ExecutionEngine:
                     # unclassifiable.
 
                     execution_mode=self._execution_mode(res),
+                    account_login=getattr(getattr(self.state_manager, "account", None), "login", None),
+                    server=getattr(getattr(self.state_manager, "account", None), "server", None),
+                    strategy=getattr(decision, "strategy", None),
+                    trade_style=getattr(decision, "trade_style", None),
+                    planned_rr=getattr(decision, "risk_reward_ratio", None),
 
                 )
 

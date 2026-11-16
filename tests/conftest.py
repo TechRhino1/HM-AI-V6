@@ -127,6 +127,12 @@ import jarvis.learning.model_registry as _model_registry  # noqa: E402
 _MODEL_REGISTRY_ROOT = _tempfile.mkdtemp(prefix="jarvis_test_models_")
 _model_registry._root = lambda: _MODEL_REGISTRY_ROOT
 
+# Same for the decision journal (data/decisions): orchestrator cycles write it.
+import jarvis.observability.decision_journal as _decision_journal  # noqa: E402
+
+_DECISION_JOURNAL_DIR = _tempfile.mkdtemp(prefix="jarvis_test_decisions_")
+_decision_journal._dir = lambda: _DECISION_JOURNAL_DIR
+
 
 @pytest.fixture
 def _hermetic_model_registry():

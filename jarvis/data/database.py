@@ -112,7 +112,7 @@ def _empty_pnl():
 #       a closed row carried no outcome at all: `realized_pnl` defaulted to 0.0
 #       (a scratch trade) whether the trade had closed or not, and the exit price
 #       was never stored.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _migration_1(conn) -> None:
@@ -271,7 +271,29 @@ def _migration_5(conn) -> None:
     )
 
 
-MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5}
+def _migration_6(conn) -> None:
+    """Traceability (2026-11-16): which ACCOUNT a row belongs to (rows from an
+    earlier demo account were indistinguishable), which strategy and style
+    produced it, why it closed, what it cost, how far it went for and against,
+    and every stop/target change it received (`sl_events`)."""
+    add_columns(conn, "executed_trades", {
+        "account_login": "INTEGER", "server": "TEXT", "strategy": "TEXT", "trade_style": "TEXT",
+        "planned_rr": "REAL", "exit_reason": "TEXT", "commission": "REAL", "swap": "REAL",
+        "mfe": "REAL", "mae": "REAL",
+    })
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sl_events (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ticket INTEGER, ts TEXT, old_sl REAL, new_sl REAL, old_tp REAL, new_tp REAL, reason TEXT)"
+    )
+
+
+MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5,
+              6: _migration_6}
+
+# MT5 DEAL_REASON_* of a closing deal -> why the trade ended. The engine's own
+# reason (TIME_STOP, REVERSAL, ...) is written first by set_exit_reason and wins.
+DEAL_EXIT_REASONS = {0: "MANUAL", 1: "MANUAL", 2: "MANUAL", 3: "ENGINE", 4: "STOP_LOSS",
+                     5: "TAKE_PROFIT", 6: "STOP_OUT"}
 
 # Executor tags, matched as TOKENS. The old `"ai" in comment_lower` substring test
 # also matched "trailing", "pair", "main", "wait" and "chair", so a manual trade
@@ -438,7 +460,12 @@ class SQLiteTradeDB:
         features_json: str = "{}",
         position_id: Optional[int] = None,
         origin: Optional[str] = None,
-        execution_mode: Optional[str] = None
+        execution_mode: Optional[str] = None,
+        account_login: Optional[int] = None,
+        server: Optional[str] = None,
+        strategy: Optional[str] = None,
+        trade_style: Optional[str] = None,
+        planned_rr: Optional[float] = None,
     ):
         """Journal an entry.
 
@@ -462,6 +489,14 @@ class SQLiteTradeDB:
         # journal that silently stopped recording trades at all.
         origin = origin if origin in ORIGINS else "unknown"
         execution_mode = execution_mode if execution_mode in EXECUTION_MODES else "unknown"
+        # Context columns are best-effort: anything not of the stored type (an
+        # enum, a mock, None) becomes NULL rather than failing the whole insert.
+        account_login = account_login if isinstance(account_login, int) and not isinstance(account_login, bool) else None
+        server = server if isinstance(server, str) else None
+        strategy = getattr(strategy, "value", strategy)
+        strategy = strategy if isinstance(strategy, str) else None
+        trade_style = trade_style if isinstance(trade_style, str) else None
+        planned_rr = float(planned_rr) if isinstance(planned_rr, (int, float)) and not isinstance(planned_rr, bool) else None
         conn = self._get_conn()
         try:
             conn.execute('''
@@ -469,9 +504,10 @@ class SQLiteTradeDB:
                     ticket, position_id, origin, execution_mode, symbol, action, entry_price, sl, tp, volume, timestamp,
                     ai_score, regime, expected_value, exit_price, realized_pnl, executor, session_name,
                     is_prime_session, adx, plus_di, minus_di, spread_pips,
-                    mtf_alignment, threats_json, features_json
+                    mtf_alignment, threats_json, features_json,
+                    account_login, server, strategy, trade_style, planned_rr
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 ticket, position_id, origin, execution_mode, symbol, action, entry, sl, tp, volume,
                 datetime.now(timezone.utc).isoformat(),
@@ -482,11 +518,53 @@ class SQLiteTradeDB:
                 # break-even close. At open there is no outcome, and NULL says so.
                 None, None,
                 executor, session_name, int(is_prime_session),
-                adx, plus_di, minus_di, spread_pips, mtf_alignment, threats_json, features_json
+                adx, plus_di, minus_di, spread_pips, mtf_alignment, threats_json, features_json,
+                account_login, server, strategy, trade_style, planned_rr,
             ))
             conn.commit()
         except Exception as e:
             logger.error(f"Failed to log trade to DB: {e}")
+
+    def log_sl_event(self, ticket: int, old_sl: float, new_sl: float, old_tp: float, new_tp: float,
+                     reason: str = "") -> None:
+        """Persist one stop/target change (trailing, break-even, partial de-risk...)."""
+        try:
+            conn = self._get_conn()
+            conn.execute(
+                "INSERT INTO sl_events (ticket, ts, old_sl, new_sl, old_tp, new_tp, reason) VALUES (?,?,?,?,?,?,?)",
+                (int(ticket), datetime.now(timezone.utc).isoformat(), old_sl, new_sl, old_tp, new_tp, reason[:300]),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.debug(f"sl_events write failed for #{ticket}: {e}")
+
+    def set_exit_reason(self, position_id: int, reason: str) -> None:
+        """The engine's own reason for closing (TIME_STOP, REVERSAL_EXIT, ...); first writer wins."""
+        try:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE executed_trades SET exit_reason = COALESCE(exit_reason, ?) "
+                "WHERE position_id = ? OR (position_id IS NULL AND ticket = ?)",
+                (reason[:80], int(position_id), int(position_id)),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.debug(f"exit_reason write failed for #{position_id}: {e}")
+
+    def record_excursions(self, position_id: int, mfe: Optional[float], mae: Optional[float]) -> None:
+        """Max favourable / adverse excursion measured by the position monitor (price units)."""
+        if mfe is None and mae is None:
+            return
+        try:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE executed_trades SET mfe = COALESCE(?, mfe), mae = COALESCE(?, mae) "
+                "WHERE position_id = ? OR (position_id IS NULL AND ticket = ?)",
+                (mfe, mae, int(position_id), int(position_id)),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.debug(f"excursion write failed for #{position_id}: {e}")
 
     def record_trade_exit(
         self,
@@ -616,6 +694,12 @@ class SQLiteTradeDB:
             broker_offset = broker_utc_offset(mt5_module=mt5, symbols=deal_symbols)
 
             conn = self._get_conn()
+            try:
+                _acct = mt5.account_info()
+                acct_login = int(getattr(_acct, "login", 0) or 0) or None
+                acct_server = getattr(_acct, "server", None)
+            except Exception:
+                acct_login = acct_server = None
             pos_map = {}
             for d in deals:
                 pid = d.position_id
@@ -669,6 +753,8 @@ class SQLiteTradeDB:
                 # exit deal arrives.
                 if exit_deal:
                     pnl = float(exit_deal.profit) + entry_comm + entry_swap + exit_comm + exit_swap
+                    _deal_reason = getattr(exit_deal, "reason", None)  # 0 = manual close: no `or` here
+                    exit_reason = DEAL_EXIT_REASONS.get(_deal_reason) if isinstance(_deal_reason, int) else None
                     # `TradeDeal.price` on the CLOSING deal is the fill the broker
                     # actually gave. Verified against the MT5 5.0 `TradeDeal`
                     # struct, whose fields include `price`, `profit`, `commission`
@@ -676,6 +762,7 @@ class SQLiteTradeDB:
                     exit_p = float(exit_deal.price)
                 else:
                     pnl = None
+                    exit_reason = None
                     exit_p = None
                 target_time = exit_deal.time if exit_deal else target_deal.time
                 dt_str = datetime.fromtimestamp(
@@ -807,10 +894,12 @@ class SQLiteTradeDB:
                     # trading paper. This is the one place the mode is a fact
                     # rather than something we were told.
                     conn.execute('''
-                        INSERT INTO executed_trades (ticket, position_id, origin, execution_mode, symbol, action, entry_price, sl, tp, volume, timestamp, ai_score, regime, expected_value, exit_price, realized_pnl, executor, closed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO executed_trades (ticket, position_id, origin, execution_mode, symbol, action, entry_price, sl, tp, volume, timestamp, ai_score, regime, expected_value, exit_price, realized_pnl, executor, closed_at,
+                                                     account_login, server, commission, swap, exit_reason)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (pid, pid, "broker", "live", clean_sym, side, entry_p, sl_val, tp_val, vol, entry_dt_str, None, regime_str, None, exit_p, pnl, exec_label,
-                          dt_str if exit_deal else None))
+                          dt_str if exit_deal else None,
+                          acct_login, acct_server, entry_comm + exit_comm, entry_swap + exit_swap, exit_reason))
                 else:
                     # Update realized PnL, executor, and close timestamp for completed positions.
                     # `closed_at` is only ever written when there really is an exit
@@ -854,12 +943,20 @@ class SQLiteTradeDB:
                             -- the journaled initial stop with it shrinks the
                             -- recorded risk and inflates every R-multiple.
                             sl = CASE WHEN (sl IS NULL OR sl = 0) AND ? > 0 THEN ? ELSE sl END,
-                            tp = CASE WHEN (tp IS NULL OR tp = 0) AND ? > 0 THEN ? ELSE tp END
+                            tp = CASE WHEN (tp IS NULL OR tp = 0) AND ? > 0 THEN ? ELSE tp END,
+                            -- The broker's deal history is per account: a row it
+                            -- matches belongs to the connected account.
+                            account_login = COALESCE(account_login, ?),
+                            server = COALESCE(server, ?),
+                            commission = ?, swap = ?,
+                            exit_reason = COALESCE(exit_reason, ?)
                         WHERE id = ?
                     ''', (pnl, exec_label, exit_p,
                           pid, pid,
                           dt_str if exit_deal else None, dt_str if exit_deal else None,
-                          sl_val, sl_val, tp_val, tp_val, row[0]))
+                          sl_val, sl_val, tp_val, tp_val,
+                          acct_login, acct_server, entry_comm + exit_comm, entry_swap + exit_swap, exit_reason,
+                          row[0]))
 
             # ── Pending-order reconciliation ─────────────────────────────
             # A limit/stop entry is journalled the moment the broker accepts
