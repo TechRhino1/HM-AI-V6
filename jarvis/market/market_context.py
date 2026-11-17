@@ -17,6 +17,25 @@ from jarvis.market.sessions import SessionEngine
 from jarvis.intelligence.order_flow import InstitutionalVolumeOrderFlowEngine
 from jarvis.market.candlestick_patterns import CandlestickPriceActionEngine
 
+
+def _decision_time(df: pd.DataFrame, ts_col: Optional[str], bar_open: datetime) -> datetime:
+    """When the decision is actually taken: min(now, last bar open + bar length).
+
+    Session/killzone/weekday gates used the last primary bar's OPEN. Live that bar is still
+    forming, so a D1 primary read its day-open (Sunday 22:00 UTC for an EET broker) and failed
+    "Forex Prime Session" all Monday; in a backtest the bar is complete, so the decision is at
+    its CLOSE, one bar later than the open that was used."""
+    try:
+        if ts_col and len(df) >= 3:
+            t = pd.to_datetime(df[ts_col].iloc[-6:])
+            step = t.diff().dropna().median()
+            if pd.notna(step) and step.total_seconds() > 0:
+                close = bar_open + step.to_pytimedelta()
+                return min(datetime.now(timezone.utc), close)
+    except Exception:
+        pass
+    return bar_open
+
 class MarketContextEngine:
     def __init__(
         self,
@@ -292,6 +311,7 @@ class MarketContextEngine:
             if not bar_timestamp.tzinfo:
                 bar_timestamp = bar_timestamp.replace(tzinfo=timezone.utc)
 
+        bar_timestamp = _decision_time(df_primary, ts_col, bar_timestamp)
         session = SessionEngine.get_current_session(bar_timestamp)
 
         # 6. Multi-Timeframe Alignment Matrix & Dynamic Top-Down Weighted Score

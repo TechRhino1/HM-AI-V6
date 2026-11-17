@@ -42,6 +42,18 @@ def _style_from_comment(comment) -> str:
     return "SWING"
 
 
+def _pending_order_age(setup_time: float, now: float, server_now: float) -> float:
+    """Seconds since a pending order was placed. ``time_setup`` may be on the UTC clock or on
+    the broker wall clock (offset from UTC by hours). The true age is the smaller non-negative
+    reading of the two clocks. The old rule switched to the broker clock once an order was 30 min
+    old, adding the 2-3h broker offset: every order then 'expired' at ~30 min (SWING TTL is 40).
+    shortcut: an order older than the broker offset reads younger by that offset; TTLs are <= 40 min."""
+    if not setup_time or setup_time <= 0:
+        return 0.0
+    ages = [a for a in (now - setup_time, server_now - setup_time) if a >= 0]
+    return min(ages) if ages else 0.0
+
+
 def _can_split(volume: float, pct: float, vol_min: float, vol_step: float) -> bool:
     """True when a pct partial leaves both legs >= the broker min lot."""
     vol_min = vol_min if isinstance(vol_min, (int, float)) and vol_min > 0 else 0.01
@@ -782,13 +794,7 @@ class PositionMonitorEngine:
                         pass
                 setup_time = o.get("time_setup", 0)
                 # Compute age: use local clock if paper mode (abs diff < 1800s), otherwise synchronize to broker server clock
-                if setup_time > 0:
-                    if abs(now - setup_time) < 1800:
-                        age = max(0.0, now - setup_time)
-                    else:
-                        age = max(0.0, server_now - setup_time)
-                else:
-                    age = 0.0
+                age = _pending_order_age(setup_time, now, server_now)
 
                 sym = o.get("symbol", "UNKNOWN")
                 otype = str(o.get("type", "")).upper()
