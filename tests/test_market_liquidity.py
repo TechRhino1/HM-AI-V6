@@ -21,7 +21,7 @@ derived on paper. Several of them are surprising:
   disagree: ``sweep_detected=True`` with both pools ``UNSWEPT``.
 
 Score-affecting findings are PINNED, not fixed — see
-``tests/../.workbuddy-ai/memory/2026-09-18.md``.
+``docs/archive/agent-memory/memory/2026-09-18.md``.
 """
 import math
 

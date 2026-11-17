@@ -61,12 +61,6 @@ DEFAULT_TRAIL_ACTIVATION_R = 1.0  # only start trailing beyond +1R (Phase 2: low
 # a lopsided book. The ceiling is expressed per asset class because index
 # swings are naturally slower than gold's intraday pulse.
 DEFAULT_TIME_STOP_MIN_R = 0.10    # a trade must be at least +0.10R to earn its age
-_TIME_STOP_MINUTES_BY_CLASS = {
-    "COMMODITY": 75.0,   # gold/silver pulse: 75 minutes decides if it lives
-    "CRYPTO": 90.0,
-    "INDEX": 240.0,
-    "FOREX": 120.0,
-}
 DEFAULT_TIME_STOP_MINUTES = 120.0
 
 

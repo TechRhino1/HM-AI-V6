@@ -56,7 +56,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".scratch", ".venv", "venv",
     "dist", "build", ".mypy_cache", ".pytest_cache", ".idea", ".vscode",
-    ".workbuddy-ai", "site-packages", "Python315Libsite-packages",
+    ".workbuddy-ai", "agent-memory", "site-packages", "Python315Libsite-packages",
 }
 
 # File types that are served to a browser or executed.

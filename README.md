@@ -141,10 +141,12 @@ HM-AI/
 │   ├── learning/               # Online ML, strategy bandit, walk-forward CV, sample weights
 │   ├── market/                 # FVG engine, session engine, market context, liquidity sweeps
 │   └── risk/                   # Loss cooldown manager, circuit breakers, HRP allocation, trade guard
-├── tests/                      # Automated pytest unit and integration test suite (259 tests)
-├── tools/                      # CLI utilities: calibration, signal scan, backtest runners
-├── reports/                    # Generated backtest reports and performance analytics
-├── run_multiasset_6m_backtest.py   # Real 6-month MT5 historical backtest benchmark suite
+├── tests/                      # Automated pytest suite (~3,800 tests; hermetic, order-independent)
+├── tools/                      # Research tools (*_research.py), calibration, signal scan
+│   ├── backtests/              # Supported runners: run_mode_backtest, run_3month_backtest, fvg_standalone
+│   └── legacy_audits/          # Archived one-off audits and superseded backtest runners
+├── reports/                    # Research and backtest reports (see reports/INDEX.md)
+├── docs/                       # Architecture, audits, plans; docs/archive for old agent notes
 └── README.md                   # System documentation
 ```
 
@@ -163,7 +165,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Run Test Suite
-Verify that all 259 system tests pass:
+Verify that the suite passes (network tests are deselected by default):
 ```bash
 python -m pytest tests/ -v
 ```
@@ -177,14 +179,14 @@ python tools/calibrate_winrate.py --symbols ALL --target-wr 0.75
 ### 4. Run Real MT5 Backtests
 Ensure your MetaTrader 5 terminal is open and logged into your broker:
 ```bash
-# Run 3-month calibrated benchmark across 16 core assets
-python tools/run_3month_backtest.py
+# Fetch 183 days of real bars for every timeframe the modes use
+python tools/fetch_multiframe_data.py --days 183 --symbols XAUUSD,EURUSD,GBPUSD,BTCUSD
 
-# Or run fast 6-month benchmark
-python run_multiasset_6m_backtest.py
+# Replay the production engine per mode (SWING / DAY_TRADING / SCALP)
+python tools/backtests/run_mode_backtest.py --workers 3 --days 183 --symbols XAUUSD,EURUSD,GBPUSD,BTCUSD
 
-# Or run comprehensive 1-year benchmark
-python run_1year_backtest.py
+# What every gate blocks, and whether the blocked trades would have made money
+python tools/gate_attribution.py --out <dir>
 ```
 
 ---

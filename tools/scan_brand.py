@@ -56,7 +56,7 @@ SKIP_FILES = {
     "tools/scan_brand.py",
 }
 SKIP_PATH_PARTS = (
-    ".workbuddy-ai/memory/",
+    "docs/archive/agent-memory/",
     "AUDIT-2026-09.md",
 )
 TEXT_EXT = {".py", ".js", ".css", ".html", ".md", ".txt", ".json", ".norm",

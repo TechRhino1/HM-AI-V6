@@ -85,8 +85,6 @@ class ScalpExecutionEngine:
 
     MIN_QUALITY_SCORE = 58.0
     MAX_FRICTION_PCT = 0.35  # Max 35% of gross profit eaten by spread + slippage + commission
-    NEWS_LOCKOUT_MINUTES_PRE = 10
-    NEWS_LOCKOUT_MINUTES_POST = 5
 
     def __init__(self, microstructure_engine: Optional[MicrostructureEngine] = None):
         self.microstructure_engine = microstructure_engine or MicrostructureEngine()
@@ -119,25 +117,6 @@ class ScalpExecutionEngine:
             "killzone_name": kz_name,
             "utc_time": now.strftime("%H:%M UTC")
         }
-
-    def check_economic_news_lockout(self, context: MarketContext) -> bool:
-        """
-        Hard kill switch: returns True if current time is within 10m pre or 5m post high-impact news.
-        """
-        macro = getattr(context, "macro", None)
-        if not macro:
-            return False
-        
-        # Check if macro event risk is flagged
-        event_risk = getattr(macro, "event_risk", False) or getattr(macro, "high_impact_news_imminent", False)
-        if event_risk:
-            return True
-            
-        minutes_to_news = getattr(macro, "minutes_to_next_high_impact_news", None)
-        if minutes_to_news is not None:
-            if -self.NEWS_LOCKOUT_MINUTES_POST <= minutes_to_news <= self.NEWS_LOCKOUT_MINUTES_PRE:
-                return True
-        return False
 
     def evaluate_five_step_sequence(
         self,
@@ -393,18 +372,7 @@ class ScalpExecutionEngine:
                 diagnostics=diagnostics
             )
 
-        # 2. Economic News Hard Kill Switch
-        if self.check_economic_news_lockout(context):
-            failing_reasons.append("High-Impact Economic News lockout window active (10m pre / 5m post).")
-            return ScalpDecision(
-                action="NO_TRADE",
-                bias=tentative_bias,
-                symbol=symbol,
-                quality_score=ScalpQualityScore(),
-                microstructure=micro,
-                failing_reasons=failing_reasons,
-                diagnostics=diagnostics
-            )
+        # (News: covered upstream by the orchestrator blackout, -30/+30 min around HIGH-impact releases.)
 
         # 3. Killzone Detection
         kz_info = self.is_in_scalp_killzone(getattr(context, "timestamp", None))

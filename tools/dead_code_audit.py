@@ -24,18 +24,11 @@ ENTRY_POINTS = [
     "main.py",
     "HM_start.py",
     "jarvis.py",
-    "run_1year_backtest.py",
-    "run_2month_mt5_backtest.py",
-    "run_3week_backtest.py",
-    "run_6month_backtest.py",
-    "run_6month_4symbol.py",
-    "run_6month_real_mt5.py",
-    "run_80_dollar_account_backtest.py",
-    "run_all_symbols_6month_backtest.py",
-    "run_comprehensive_1y_mt5_backtest.py",
-    "run_fast_6m.py",
-    "run_live_multi_asset_sweep.py",
-    "run_validation_report.py",
+    # Supported backtest runners (superseded run_* scripts are archived under
+    # tools/legacy_audits/backtests and are not entry points).
+    "tools/backtests/run_mode_backtest.py",
+    "tools/backtests/run_3month_backtest.py",
+    "tools/backtests/fvg_standalone_backtest.py",
     # CLI entry points and maintenance tools count as live entry points too —
     # they are how a human starts a supported workflow.
     "jarvis/historical/cli.py",
