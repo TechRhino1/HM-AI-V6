@@ -124,3 +124,23 @@ The bounce is short and smaller than the spread plus a stop beyond the level. Th
 
 - The entries in the exit study are Donchian and range rules, not the live decision engine's entries. Live-only locks (PROX_LOCK, MFE retrace, the reversal phases, VWAP/momentum/ML) cannot be replayed, so "legacy" here is the shared core only.
 - Forex history before about 2018 uses modelled spreads where the broker recorded zero; crypto before 2018 is the same.
+
+## Follow-up: the engine's own swing trades (fixed stop + target vs today's exits)
+
+- **Method:** `BacktestEngine.run_backtest` with `mtf_frames` (M15/H1/H4/D1) on 9 symbols, from 2024-11-16 to now.
+- **"Fixed"** is what `fixed_target_r` does for gold: no breakeven, partials, milestones, trail or progress locks.
+- **Trade counts differ between modes** because exit timing changes which later entries are free to fire.
+
+| Style | Exits | n | Exp R | WR | Avg win | Avg loss | PF | 1st half | 2nd half |
+|---|---|---|---|---|---|---|---|---|---|
+| SWING | legacy | 260 | −0.051 | 27% | +1.82 | −0.73 | 0.90 | −0.071 | −0.030 |
+| SWING | fixed | 213 | −0.016 | 22% | +2.73 | −0.77 | 0.97 | +0.044 | −0.075 |
+| H4_SWING | legacy | 150 | +0.024 | 25% | +1.76 | −0.56 | 1.06 | −0.110 | +0.158 |
+| H4_SWING | fixed | 94 | +0.033 | 21% | +2.51 | −0.64 | 1.07 | +0.071 | −0.004 |
+| D1_SWING | legacy | 91 | +0.024 | 31% | +2.06 | −0.88 | 1.04 | +0.042 | +0.006 |
+| D1_SWING | fixed | 45 | +0.697 | 33% | +4.09 | −1.00 | 2.05 | +0.241 | +1.134 |
+
+**Verdict: no switch.**
+- Fixed exits score higher on average in every style, but neither SWING nor H4_SWING beats legacy in both halves.
+- D1_SWING's +0.70R comes from 45 trades, 32 of them ETH, so it is below the n ≥ 100 gate.
+- The exits are not the main problem: the engine's swing entries themselves are about breakeven (SWING PF 0.90). About a third of trades end on the stagnation time stop.

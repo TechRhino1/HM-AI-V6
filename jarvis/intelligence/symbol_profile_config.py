@@ -98,12 +98,13 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
         strategy_weights={
             "TREND_PULLBACK": 4.0,             # Deep pullbacks into discount/premium OTE (proven +PnL on XM)
             "CHOCH_STRUCTURAL_REVERSAL": 2.0,  # Confirmed structural shifts only
-            "TREND_FOLLOWING": 1.0,            # Conservative trend continuation (avoid breakout traps)
+            # Banned 2026-11-17: live 53 trades ~13% win -$52; chase entries lose on 6y of bars (tools/mtf_entry_research.py)
+            "TREND_FOLLOWING": 0.0,
             "RANGE_MEAN_REVERSION": 0.0,       # Ban range fades on volatile crypto
             "LIQUIDITY_SWEEP_REVERSAL": 0.0,   # Avoid counter-trend sweep fades in crypto
             "BREAKOUT_EXPANSION": 0.0,         # Ban false breakout traps in crypto
         },
-        banned_strategies=["BREAKOUT_EXPANSION", "RANGE_MEAN_REVERSION", "LIQUIDITY_SWEEP_REVERSAL"],
+        banned_strategies=["BREAKOUT_EXPANSION", "RANGE_MEAN_REVERSION", "LIQUIDITY_SWEEP_REVERSAL", "TREND_FOLLOWING"],
         sl_atr_multiplier=2.20,                # Calibrated for structural execution (absorbs $15 spread safely)
         min_target_rr=2.0,
         asym_rr=3.5,

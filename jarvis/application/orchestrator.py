@@ -54,6 +54,22 @@ logger = logging.getLogger("JARVIS_Orchestrator")
 # broker sync shows the position or proves there is none).
 UNKNOWN_ORDER_HOLD_SEC = 600.0
 
+# Styles fastest -> slowest. A faster style's bias younger than the window vetoes a slower
+# style entering the other way.
+STYLE_SPEED = {"SCALP": 0, "DAY_TRADING": 1, "INTRADAY": 1, "DAY": 1, "SWING": 2, "H4_SWING": 3, "D1_SWING": 4}
+STYLE_CONFLICT_WINDOW_SEC = 600.0
+
+
+def faster_style_conflict(biases: Dict[str, tuple], style: str, bias: Optional[str], now: float) -> str:
+    """'' when no faster style recently resolved the opposite side, else a reason string."""
+    rank = STYLE_SPEED.get((style or "").upper())
+    if rank is None or bias not in ("BUY", "SELL"):
+        return ""
+    for other, (b, ts) in biases.items():
+        if STYLE_SPEED.get(other, 99) < rank and b in ("BUY", "SELL") and b != bias and now - ts <= STYLE_CONFLICT_WINDOW_SEC:
+            return f"{other} engine resolved {b} {int(now - ts)}s ago; {style} {bias} blocked"
+    return ""
+
 # ── Shared scan pool ────────────────────────────────────────────────────────
 # `scan_all_modes` used to build a fresh ThreadPoolExecutor on every call
 # (`max(4, min(32, len(tasks)))` workers), so every radar tick paid pool-creation
@@ -149,6 +165,9 @@ class JarvisOrchestrator:
         # Per-symbol last-execution timestamp for 10-min same-symbol cooldown
         self._last_execution_time: Dict[str, float] = {}
         self._SAME_SYMBOL_COOLDOWN_SEC = 600  # 10 minutes default
+        # Latest resolved bias per symbol per style: {sym: {style: (bias, epoch)}}, for the
+        # timeframe-conflict backstop.
+        self._style_bias: Dict[str, Dict[str, tuple]] = {}
         # Symbols the broker does not offer are refused every cycle; log the
         # reason once per symbol/style rather than on every scan.
         self._unusable_warned: set = set()
@@ -2082,6 +2101,18 @@ class JarvisOrchestrator:
                 decision.execution_authorized = False
                 reason = dd_status.get("breaches", ["Max drawdown reached"])[0] if dd_status.get("breaches") else "Max drawdown reached"
                 auth_res = {'authorized': False, 'reason': f'DRAWDOWN_GUARD: {reason}'}
+
+        # Timeframe-conflict backstop: a slower style must not enter against what a faster
+        # style on the same symbol resolved minutes ago. BTCUSD #995648912 sold on the H1
+        # engine while the SCALP engine had already read the M5 bounce as BUY (MFE 0).
+        _conflict = faster_style_conflict(self._style_bias.get(canonical_sym, {}), active_trade_style,
+                                          getattr(decision, "bias", None), time.time())
+        if _conflict and decision.decision == 'EXECUTE':
+            decision.decision = 'WAIT'
+            decision.execution_authorized = False
+            auth_res = {'authorized': False, 'reason': f'TIMEFRAME_CONFLICT: {_conflict}'}
+        if getattr(decision, "bias", None) in ("BUY", "SELL"):
+            self._style_bias.setdefault(canonical_sym, {})[active_trade_style] = (decision.bias, time.time())
 
         # 7. Execute if authorized (Atomic Reservation -> Execute -> Commit/Release)
         # A dry run stops here. Everything above has already decided what WOULD
