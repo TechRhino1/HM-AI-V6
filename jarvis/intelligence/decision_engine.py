@@ -78,6 +78,33 @@ class LevelsResult(tuple):
         self.as_limit_price = as_limit_price
 
 
+def _rescale_scalp_targets(scalp_res, entry_price: float, risk_dist: float, bias: str):
+    """Keep the scalp's TP R-multiples when the stop is widened to the dynamic-levels floor.
+    TPs used to stay at the scalp's tighter-risk prices (from its own entry), so a doubled
+    stop halved the real reward:risk while the decision still reported 1.8."""
+    s_entry = float(getattr(scalp_res, "entry_price", 0.0) or entry_price)
+    s_risk = abs(s_entry - float(scalp_res.stop_loss))
+    if s_risk <= 0 or risk_dist <= 0:
+        return scalp_res.tp1, scalp_res.tp2, scalp_res.tp3
+    sign = 1.0 if str(bias).upper() == "BUY" else -1.0
+    return tuple(entry_price + sign * (abs(float(tp) - s_entry) / s_risk) * risk_dist
+                 for tp in (scalp_res.tp1, scalp_res.tp2, scalp_res.tp3))
+
+
+def _sweep_age_minutes(context, style) -> Optional[float]:
+    """Minutes since the detected sweep bar, on the style's primary timeframe (None if unknown)."""
+    try:
+        bars = int(getattr(context.liquidity, "bars_since_sweep", -1))
+        if bars < 0:
+            return None
+        from jarvis.market.data_feed import style_timeframes
+        tf = style_timeframes(style)["primary"]
+        mins = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}[tf]
+        return float(bars * mins)
+    except Exception:
+        return None
+
+
 def _bounded_bayesian_probability_update(
     current_p: float,
     boost: float,
@@ -376,7 +403,10 @@ class DecisionEngine:
         # CASE A: Strong Bullish Macro / Structure / Regime / D1 Anchor
         if (
             (htf_bias == "BULLISH" and (d1_anchor_bias != "BEARISH" or is_intraday))
-            or (d1_anchor_bias == "BULLISH" and (htf_bias != "BEARISH" or is_intraday))
+            # Intraday: the HTF bias outranks the D1 anchor in BOTH directions. The old
+            # "or is_intraday" sent every D1-bull/H1-bear conflict into CASE A (BUY), while the
+            # mirror conflict also landed in CASE A via the clause above -> a structural long lean.
+            or (d1_anchor_bias == "BULLISH" and htf_bias != "BEARISH")
             or (is_bull_regime and not (htf_bias == "BEARISH" and (d1_anchor_bias == "BEARISH" and not is_intraday)))
             or mtf_score >= 25.0
         ):
@@ -411,7 +441,7 @@ class DecisionEngine:
         # CASE B: Strong Bearish Macro / Structure / Regime
         elif (
             (htf_bias == "BEARISH" and (d1_anchor_bias != "BULLISH" or is_intraday))
-            or (d1_anchor_bias == "BEARISH" and (htf_bias != "BULLISH" or is_intraday))
+            or (d1_anchor_bias == "BEARISH" and htf_bias != "BULLISH")
             or (is_bear_regime and not (htf_bias == "BULLISH" and (d1_anchor_bias == "BULLISH" and not is_intraday)))
             or mtf_score <= -25.0
         ):
@@ -455,14 +485,6 @@ class DecisionEngine:
                 if dp_zone in ("DISCOUNT", "EQUILIBRIUM") and (has_bull_sweep or st.bias == "BULLISH" or bull_votes > bear_votes or trend_score >= 0.0):
                     return "BUY"
                 return "HOLD"
-            # Truly neutral market: trade boundary extremes only
-            if dp_zone == "DISCOUNT" and (has_bull_sweep or (st.bias == "BULLISH" and bull_votes > bear_votes)):
-                return "BUY"
-            elif dp_zone == "PREMIUM" and (has_bear_sweep or (st.bias == "BEARISH" and bear_votes > bull_votes)):
-                return "SELL"
-            elif st.bos and abs(trend_score) >= 25.0:
-                return "BUY" if trend_score > 0 else "SELL"
-            return "HOLD"
             # Truly neutral market: trade boundary extremes only
             if dp_zone == "DISCOUNT" and (has_bull_sweep or (st.bias == "BULLISH" and bull_votes > bear_votes)):
                 return "BUY"
@@ -1693,7 +1715,8 @@ class DecisionEngine:
             symbol=context.symbol,
             sweep_detected=context.liquidity.sweep_detected,
             sweep_type=context.liquidity.sweep_type,
-            sweep_magnitude_pips=context.liquidity.sweep_magnitude
+            sweep_magnitude_pips=context.liquidity.sweep_magnitude,
+            sweep_age_minutes=_sweep_age_minutes(context, style),
         )
         is_micro_mode = is_micro_account(account_balance)
         if news_reaction.get("news_reversal_setup"):
@@ -2257,11 +2280,12 @@ class DecisionEngine:
                         sl_price = entry_price - risk_dist
                     else:
                         sl_price = entry_price + risk_dist
-                tp1_price = scalp_res.tp1
-                tp2_price = scalp_res.tp2
-                tp3_price = scalp_res.tp3
-                tp_price = scalp_res.tp2
-                rr_ratio = max(1.8, round(abs(tp_price - entry_price) / max(risk_dist, 1e-6), 2))
+                tp1_price, tp2_price, tp3_price = _rescale_scalp_targets(
+                    scalp_res, entry_price, risk_dist, tentative_bias)
+                tp_price = tp2_price
+                # Real ratio: the stop may have been widened to the noise floor above, and the
+                # old max(1.8, ...) floor reported 1.8 for trades whose true R:R was ~0.9.
+                rr_ratio = round(abs(tp_price - entry_price) / max(risk_dist, 1e-6), 2)
 
         # Publish the FINAL gate state (including post-policy vetoes) so
         # downstream consumers never read a stale pre-policy snapshot.

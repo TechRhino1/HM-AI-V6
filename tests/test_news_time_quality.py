@@ -330,7 +330,9 @@ def test_orchestrator_blackout_only_for_exact_live_event(monkeypatch):
     from jarvis.market import news as news_module
     from jarvis.data import symbol_registry
 
-    now = datetime.now(timezone.utc)
+    # Fixed time OUTSIDE the US release slots: a degraded calendar now falls back to those
+    # slots (fail closed), so wall-clock "now" would make this test time-of-day dependent.
+    now = datetime(2026, 11, 17, 3, 0, tzinfo=timezone.utc)
 
     def calendar(quality="exact", impact="HIGH", fallback=False):
         dt = now + timedelta(minutes=5)
@@ -360,3 +362,46 @@ def test_orchestrator_blackout_only_for_exact_live_event(monkeypatch):
                             lambda quality=quality, impact=impact, fallback=fallback, **kw:
                             calendar(quality, impact, fallback))
         assert orch._is_news_blackout("XAUUSD", now) is expected
+
+
+def test_blackout_fails_closed_in_us_release_slot_without_exact_feed(monkeypatch):
+    from jarvis.market import news as news_module
+    from jarvis.data import symbol_registry
+
+    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    nfp = datetime(2026, 12, 4, 13, 32, tzinfo=timezone.utc)      # 08:32 ET (EST)
+    quiet = datetime(2026, 12, 4, 16, 0, tzinfo=timezone.utc)
+    for cal in ([], [{"source": "synthetic_calendar", "is_fallback": True, "impact": "HIGH"}],
+                [{"source": "live_feed", "time_quality": "estimated", "impact": "HIGH"}]):
+        monkeypatch.setattr(news_module.GLOBAL_NEWS_ENGINE, "get_news_calendar", lambda cal=cal, **kw: cal)
+        for sym in ("XAUUSD", "USDCAD", "ETHUSD", "SOLUSD"):
+            monkeypatch.setattr(symbol_registry, "resolve", lambda s, sym=sym: _Canon(sym))
+            assert orch._is_news_blackout(sym, nfp) is True
+            assert orch._is_news_blackout(sym, quiet) is False
+
+
+def test_fallback_uses_published_release_calendar(monkeypatch):
+    from jarvis.market import news
+    assert news.us_release_slot_active(datetime(2026, 12, 9, 19, 10, tzinfo=timezone.utc))      # FOMC +10
+    assert news.us_release_slot_active(datetime(2026, 12, 10, 13, 0, tzinfo=timezone.utc))      # CPI -30
+    assert not news.us_release_slot_active(datetime(2026, 12, 10, 14, 5, tzinfo=timezone.utc))  # CPI +35
+    assert not news.us_release_slot_active(datetime(2026, 12, 11, 13, 30, tzinfo=timezone.utc)) # no release
+
+    # Calendar missing -> fixed US slots (DST-aware), fail closed.
+    def boom():
+        raise OSError("missing")
+    monkeypatch.setattr(news, "_usd_release_times", boom)
+    assert news.us_release_slot_active(datetime(2026, 7, 2, 12, 30, tzinfo=timezone.utc))      # 08:30 EDT
+    assert not news.us_release_slot_active(datetime(2026, 7, 2, 13, 30, tzinfo=timezone.utc))  # 09:30 EDT
+    assert not news.us_release_slot_active(datetime(2026, 12, 5, 13, 30, tzinfo=timezone.utc)) # Saturday
+
+
+def test_live_blackout_window_is_minus30_plus30():
+    from jarvis.market.news import NEWS_BLACKOUT_PRE_MIN, NEWS_BLACKOUT_POST_MIN
+    assert (NEWS_BLACKOUT_PRE_MIN, NEWS_BLACKOUT_POST_MIN) == (30, 30)
+
+
+def test_usd_news_maps_to_all_usd_symbols():
+    from jarvis.market.news import USD_AFFECTED
+    for sym in ("USDCAD", "ETHUSD", "SOLUSD", "XAUUSD", "BTCUSD"):
+        assert sym in USD_AFFECTED

@@ -391,7 +391,9 @@ class MarketContextEngine:
             h1_bias = _refine_bias_with_ema(df_timing, raw_h1)
 
             mtf_alignment["D1"] = d1_bias
-            mtf_alignment["H4"] = h4_pri_bias
+            # HTF bias must come from the CLOSED H4 (context role), not the forming primary bar,
+            # or the swing bias repaints within the bar.
+            mtf_alignment["H4"] = h4_ctx_bias
             mtf_alignment["H1"] = h1_bias
 
             weighted_score = (
@@ -412,7 +414,7 @@ class MarketContextEngine:
             h4_bias = _refine_bias_with_ema(df_timing, raw_h4)
 
             mtf_alignment["W1"] = w1_bias
-            mtf_alignment["D1"] = d1_pri_bias
+            mtf_alignment["D1"] = d1_ctx_bias   # closed D1 (context role), not the forming primary
             mtf_alignment["H4"] = h4_bias
 
             weighted_score = (

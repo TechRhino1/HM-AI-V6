@@ -637,7 +637,10 @@ class DataFeedEngine:
 
         result = {}
         for role, tf in timeframes.items():
-            inc_cur = True if (role in ("primary", "timing") or (is_intraday and role == "setup")) else False
+            # The timing frame (M1 for SCALP) feeds sweep/displacement/bias checks that must read
+            # CLOSED bars: a forming M1 bar that wicked under a low "closed back above" mid-bar and
+            # flagged a sweep that then closed as a breakdown. Price comes from the primary frame.
+            inc_cur = True if (role == "primary" or (is_intraday and role == "setup")) else False
             df = raw_frames.get(tf)
             if df is not None and not df.empty:
                 if inc_cur:

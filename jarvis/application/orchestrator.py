@@ -292,13 +292,25 @@ class JarvisOrchestrator:
             from jarvis.market.news import GLOBAL_NEWS_ENGINE
             from jarvis.data.symbol_registry import resolve as _res
 
+            from jarvis.market.news import (USD_AFFECTED, us_release_slot_active,
+                                            NEWS_BLACKOUT_PRE_MIN, NEWS_BLACKOUT_POST_MIN)
+
             canon = _res(symbol).canonical.upper()
-            calendar = GLOBAL_NEWS_ENGINE.get_news_calendar(max_wait=0.2)
-            if not calendar:
-                return False
+            calendar = GLOBAL_NEWS_ENGINE.get_news_calendar(max_wait=0.2) or []
 
             if now.tzinfo is None:
                 now = now.replace(tzinfo=timezone.utc)
+
+            # Fail CLOSED when the feed gives no exact-time live rows (cold start, outage, or
+            # only estimated rows): an empty/fallback calendar used to authorise entries into NFP.
+            healthy = any(e.get("source") == "live_feed" and not e.get("is_fallback", False)
+                          and str(e.get("time_quality") or "") == "exact" for e in calendar)
+            if not healthy:
+                if canon in USD_AFFECTED and us_release_slot_active(now):
+                    logger.warning("NEWS_FEED_DOWN: no exact-time calendar; blocking %s around a "
+                                   "scheduled US release", symbol)
+                    return True
+                return False
 
             for e in calendar:
                 if str(e.get("impact", "")).upper() != "HIGH":
@@ -319,8 +331,8 @@ class JarvisOrchestrator:
                     continue
                 if event_dt.tzinfo is None:
                     event_dt = event_dt.replace(tzinfo=timezone.utc)
-                start = event_dt - timedelta(minutes=10)
-                end = event_dt + timedelta(minutes=15)
+                start = event_dt - timedelta(minutes=NEWS_BLACKOUT_PRE_MIN)
+                end = event_dt + timedelta(minutes=NEWS_BLACKOUT_POST_MIN)
                 if start <= now <= end:
                     return True
             return False

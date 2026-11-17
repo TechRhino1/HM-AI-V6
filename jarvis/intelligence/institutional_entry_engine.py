@@ -856,9 +856,15 @@ class InstitutionalEntryEngine:
         """Finds nearest unmitigated HTF Order Block."""
         st = context.structure
         ob_type = "BULLISH_ORDER_BLOCK" if bias == "BUY" else "BEARISH_ORDER_BLOCK"
-        for ob in getattr(st, "order_blocks", []):
-            if ob.get("type") == ob_type:
-                return float(ob.get("high" if bias == "BUY" else "low", context.current_price))
+        price = float(context.current_price)
+        # Nearest UNMITIGATED block on the correct side of price: the first block of the type
+        # used to be returned even if consumed, or above market for a BUY (a limit above price).
+        cands = [float(ob.get("high" if bias == "BUY" else "low", 0.0) or 0.0)
+                 for ob in getattr(st, "order_blocks", [])
+                 if ob.get("type") == ob_type and not ob.get("mitigated", False)]
+        cands = [c for c in cands if (0 < c < price if bias == "BUY" else c > price)]
+        if cands:
+            return max(cands) if bias == "BUY" else min(cands)
 
         if bias == "BUY" and st.demand_zone[1] > 0:
             return float(st.demand_zone[1])

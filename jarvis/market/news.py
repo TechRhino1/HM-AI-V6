@@ -62,6 +62,56 @@ logger = logging.getLogger("HM_LiveNewsEngine")
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
+# Every allowed/registry symbol that moves on US data (was missing USDCAD, ETHUSD, SOLUSD).
+USD_AFFECTED = ("XAUUSD", "XAGUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF",
+                "AUDUSD", "NZDUSD", "BTCUSD", "ETHUSD", "SOLUSD")
+
+
+# Entry blackout around HIGH-impact releases. Widened from -10/+15 after
+# reports/NEWS_RESEARCH_2026-11-17.md (N1): on M15 the entries in the extra +/-30 min averaged
+# about -0.35R and -30/+30 passed the adoption gate in both halves.
+NEWS_BLACKOUT_PRE_MIN = 30
+NEWS_BLACKOUT_POST_MIN = 30
+
+_USD_HISTORY_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                 "data", "news_history_usd.json")
+_usd_history_cache: List[datetime] = []
+
+
+def _usd_release_times() -> List[datetime]:
+    """Published USD HIGH releases (FOMC/NFP/CPI) from data/news_history_usd.json, cached."""
+    global _usd_history_cache
+    if not _usd_history_cache:
+        with open(_USD_HISTORY_PATH, encoding="utf-8") as f:
+            _usd_history_cache = sorted(datetime.fromisoformat(e["utc_iso"]) for e in json.load(f)["events"])
+    return _usd_history_cache
+
+
+def us_release_slot_active(now: datetime) -> bool:
+    """Fail-closed fallback when no exact-time calendar is available.
+
+    Uses the published USD release schedule (data/news_history_usd.json) with the live
+    blackout window. If that file is missing or the date is past its last event, it falls
+    back to the fixed US slots: 08:30 ET (NFP/CPI/PPI/retail/claims) every weekday and 14:00 ET
+    Wednesdays (FOMC) - shortcut: blocks every such slot, not only event days."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    try:
+        times = _usd_release_times()
+        if times and now <= times[-1] + timedelta(minutes=NEWS_BLACKOUT_POST_MIN):
+            return any(t - timedelta(minutes=NEWS_BLACKOUT_PRE_MIN) <= now <= t + timedelta(minutes=NEWS_BLACKOUT_POST_MIN)
+                       for t in times)
+    except (OSError, ValueError, KeyError):
+        logger.warning("news_history_usd.json unavailable; using fixed US release slots")
+    from zoneinfo import ZoneInfo
+    et = now.astimezone(ZoneInfo("America/New_York"))
+    if et.weekday() >= 5:
+        return False
+    m = et.hour * 60 + et.minute
+    if 8 * 60 + 30 - NEWS_BLACKOUT_PRE_MIN <= m <= 8 * 60 + 30 + NEWS_BLACKOUT_POST_MIN:
+        return True
+    return et.weekday() == 2 and 14 * 60 - NEWS_BLACKOUT_PRE_MIN <= m <= 14 * 60 + 45
+
 
 
 # Macroeconomic Indicator Knowledge Base for Deep Modal Analytics
@@ -1598,7 +1648,7 @@ class LiveNewsEngine:
 
             if currency == "USD":
 
-                affected = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD"]
+                affected = list(USD_AFFECTED)
 
             elif currency == "EUR":
 
@@ -1622,7 +1672,7 @@ class LiveNewsEngine:
 
             else:
 
-                affected = [f"{currency}USD", "XAUUSD"]
+                affected = [f"{currency}USD", f"USD{currency}", "XAUUSD"]  # CHF -> USDCHF, NZD -> NZDUSD
 
 
 
@@ -2140,7 +2190,7 @@ class LiveNewsEngine:
 
         if currency == "USD":
 
-            affected = ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD"]
+            affected = list(USD_AFFECTED)
 
         elif currency == "EUR":
 
@@ -2156,7 +2206,7 @@ class LiveNewsEngine:
 
         else:
 
-            affected = [f"{currency}USD", "XAUUSD"]
+            affected = [f"{currency}USD", f"USD{currency}", "XAUUSD"]
 
 
 
@@ -2454,7 +2504,9 @@ class LiveNewsEngine:
 
         sweep_magnitude_pips: float,
 
-        lookback_minutes: int = 45
+        lookback_minutes: int = 45,
+
+        sweep_age_minutes: Optional[float] = None
 
     ) -> Dict[str, Any]:
 
@@ -2472,7 +2524,9 @@ class LiveNewsEngine:
 
 
 
-        calendar = self.get_news_calendar()
+        # Bounded wait: this runs inside the decision path (scan limit 45s); an unbounded live
+        # fetch could stall a symbol's decision thread for 20-30s on dead feeds.
+        calendar = self.get_news_calendar(max_wait=0.2) or []
 
         # `is_fallback` items are the hardcoded plan, not releases. This method
 
@@ -2492,11 +2546,16 @@ class LiveNewsEngine:
 
             if ev.get("is_past") and ev.get("diff_seconds", 0) >= (-lookback_minutes * 60)
 
-            and ev.get("impact") in ["HIGH", "MEDIUM"]
+            and ev.get("impact") == "HIGH"
+
+            and str(ev.get("time_quality") or "") == "exact"
 
             and any(p in symbol for p in ev.get("affected_pairs", []))
 
             and not ev.get("is_fallback")
+
+            # the sweep must have printed AFTER the release, not before it
+            and (sweep_age_minutes is None or sweep_age_minutes <= -float(ev.get("diff_seconds", 0)) / 60.0)
 
         ]
 
@@ -2517,6 +2576,12 @@ class LiveNewsEngine:
         sweep_upper = str(sweep_type or "").upper()
 
         is_buy_side_sweep = ("BUY_SIDE" in sweep_upper or "BEARISH_SWEEP" in sweep_upper or "HIGH" in sweep_upper)
+
+        is_sell_side_sweep = ("SELL_SIDE" in sweep_upper or "BULLISH_SWEEP" in sweep_upper or "LOW" in sweep_upper)
+
+        if is_buy_side_sweep == is_sell_side_sweep:  # unknown/ambiguous type no longer defaults to BUY
+
+            return {"news_reversal_setup": False, "conviction_boost": 0.0, "reason": f"Unrecognised sweep type {sweep_type!r}"}
 
         reversal_direction = "SELL" if is_buy_side_sweep else "BUY"
 

@@ -249,6 +249,7 @@ def _past_event(minutes_ago=1, fallback=False):
         "is_past": True, "is_upcoming": False, "is_live": False,
         "diff_seconds": -60.0 * minutes_ago,
         "affected_pairs": ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD"],
+        "time_quality": "exact", "source": "live_feed",
     }
     if fallback:
         ev.update(is_fallback=True, source="synthetic_calendar")
@@ -284,3 +285,20 @@ def test_an_old_real_event_still_falls_outside_the_lookback(monkeypatch):
     """Pins the window itself, so the provenance guard cannot mask a broken one."""
     res = _reaction(monkeypatch, [_past_event(minutes_ago=60, fallback=False)])
     assert res["news_reversal_setup"] is False, res
+
+
+def test_post_news_sweep_rejects_medium_estimated_and_pre_release_sweeps(monkeypatch):
+    engine = GLOBAL_NEWS_ENGINE
+
+    def run(ev, age=None, stype="SELL_SIDE"):
+        monkeypatch.setattr(engine, "get_news_calendar", lambda *a, **k: [ev])
+        return engine.evaluate_post_news_sweep_reaction(
+            symbol="EURUSD", sweep_detected=True, sweep_type=stype,
+            sweep_magnitude_pips=12.0, sweep_age_minutes=age)["news_reversal_setup"]
+
+    ev = _past_event(minutes_ago=20)
+    assert run(ev, age=10) is True                     # swept 10 min ago, release 20 min ago
+    assert run(ev, age=30) is False                    # sweep printed BEFORE the release
+    assert run(dict(ev, impact="MEDIUM")) is False
+    assert run(dict(ev, time_quality="estimated")) is False
+    assert run(ev, stype="NONE") is False              # unknown type no longer defaults to BUY

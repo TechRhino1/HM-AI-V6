@@ -48,6 +48,27 @@ from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config,
 
 
 
+
+def _liquidity_stop_floor(liq, entry_price: float, atr: float, side: str):
+    """Price the stop must sit beyond: past the sweep wick when a sweep printed, else 0.5 ATR
+    past the resting pool (BUY: sell-side below entry; SELL: buy-side above). None if none."""
+    try:
+        if side == "BUY":
+            if getattr(liq, "sweep_detected", False):
+                v = float(liq.sweep_level or 0.0) - max(float(liq.sweep_magnitude or 0.0), 0.5) * atr
+            else:
+                pool = float(getattr(liq, "sell_side_liquidity", 0.0) or 0.0)
+                v = pool - 0.5 * atr if pool > 0 else 0.0
+            return v if 0 < v < entry_price else None
+        if getattr(liq, "sweep_detected", False):
+            v = float(liq.sweep_level or 0.0) + max(float(liq.sweep_magnitude or 0.0), 0.5) * atr
+        else:
+            pool = float(getattr(liq, "buy_side_liquidity", 0.0) or 0.0)
+            v = pool + 0.5 * atr if pool > 0 else 0.0
+        return v if v > entry_price else None
+    except (TypeError, ValueError):
+        return None
+
 class DynamicRiskAndLevelsEngine:
 
     """
@@ -545,6 +566,11 @@ class DynamicRiskAndLevelsEngine:
                 anchors_in_range = [a for a in candidate_anchors if 0 < (entry_price - a) <= max_anchor_dist]
 
                 anchor = max(anchors_in_range) if anchors_in_range else (entry_price - (0.85 * atr))
+                # B2: the nearest anchor (a demand-zone edge / key level just under entry) used to
+                # win, leaving the stop INSIDE the sell-side pool the sweep hunts. Never above it.
+                _lf = _liquidity_stop_floor(context.liquidity, entry_price, atr, "BUY")
+                if _lf is not None and 0 < (entry_price - _lf) <= max_anchor_dist:
+                    anchor = min(anchor, _lf)
 
                 struct_sl_dist = (entry_price - anchor) + effective_buffer + spread_dist
 
@@ -788,7 +814,7 @@ class DynamicRiskAndLevelsEngine:
 
             for ob in st.order_blocks:
 
-                if ob.get("type") == "BEARISH_ORDER_BLOCK" and ob.get("low", 0) > entry_price:
+                if ob.get("type") == "BEARISH_ORDER_BLOCK" and ob.get("low", 0) > entry_price and not ob.get("mitigated", False):
 
                     opposing_targets.append(float(ob.get("low", 0)))
 
@@ -836,7 +862,8 @@ class DynamicRiskAndLevelsEngine:
 
                 front_run_target = max(entry_price + (risk_dist * min_target_rr), target_cand - front_run_buffer)
 
-                max_tp_mult = asym_rr * (1.25 if is_strong_trend else 1.0)
+                # Same ranging cap as the SELL side (BUY/SELL target rules had diverged).
+                max_tp_mult = asym_rr * (1.25 if is_strong_trend else (0.85 if is_ranging else 1.0))
 
                 tp_dist = min(front_run_target - entry_price, risk_dist * max_tp_mult)
 
@@ -901,7 +928,7 @@ class DynamicRiskAndLevelsEngine:
 
             else:
 
-                tp3_mult = max(3.0, asym_rr * (1.5 if is_strong_trend else 1.35))
+                tp3_mult = max(3.0, (2.2 if is_ranging else asym_rr) * (1.5 if is_strong_trend else 1.35))
 
                 tp3_price = round(entry_price + (risk_dist * tp3_mult), digits)
 
@@ -1070,6 +1097,9 @@ class DynamicRiskAndLevelsEngine:
                 anchors_in_range = [a for a in candidate_anchors if 0 < (a - entry_price) <= max_anchor_dist]
 
                 anchor = min(anchors_in_range) if anchors_in_range else (entry_price + (0.85 * atr))
+                _lf = _liquidity_stop_floor(context.liquidity, entry_price, atr, "SELL")
+                if _lf is not None and 0 < (_lf - entry_price) <= max_anchor_dist:
+                    anchor = max(anchor, _lf)
 
                 struct_sl_dist = (anchor - entry_price) + effective_buffer + spread_dist
 
@@ -1303,7 +1333,7 @@ class DynamicRiskAndLevelsEngine:
 
             for ob in st.order_blocks:
 
-                if ob.get("type") == "BULLISH_ORDER_BLOCK" and 0 < ob.get("high", 0) < entry_price:
+                if ob.get("type") == "BULLISH_ORDER_BLOCK" and 0 < ob.get("high", 0) < entry_price and not ob.get("mitigated", False):
 
                     opposing_targets.append(float(ob.get("high", 0)))
 
@@ -1311,7 +1341,7 @@ class DynamicRiskAndLevelsEngine:
 
             for fvg in st.fair_value_gaps:
 
-                if fvg.get("type") == "BULLISH_FVG" and 0 < fvg.get("top", 0) < entry_price:
+                if fvg.get("type") == "BULLISH_FVG" and 0 < fvg.get("top", 0) < entry_price and not fvg.get("mitigated", False):
 
                     opposing_targets.append(float(fvg.get("top", 0)))
 
@@ -1353,9 +1383,11 @@ class DynamicRiskAndLevelsEngine:
 
                 max_tp_mult = asym_rr * (1.25 if is_strong_trend else (0.85 if is_ranging else 1.0))
 
-                tp_dist = min(entry_price - front_run_target, risk_dist * max_tp_mult)
+                # front_run_target already carries the spread; measure tp_dist WITHOUT it, because
+                # the final tp_price below adds spread_dist once (it was subtracted twice before).
+                tp_dist = min(entry_price - front_run_target + spread_dist, risk_dist * max_tp_mult)
 
-                tp_price = round(entry_price - tp_dist, digits)
+                tp_price = round(entry_price - tp_dist + spread_dist, digits)
 
             else:
 

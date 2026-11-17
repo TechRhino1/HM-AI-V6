@@ -390,8 +390,12 @@ def validate_real_market_data(df: pd.DataFrame, symbol: str,
         else:
             hours = bar_minutes // 60
             misaligned = misaligned | (ts.dt.minute != 0)
-            if hours < 24:
-                misaligned = misaligned | (ts.dt.hour % hours != 0)
+            if hours > 1 and hours < 24:
+                # Multi-hour bars open on the BROKER clock grid; after the UTC conversion the
+                # grid is offset (EET H4 opens 21/01/05.. UTC) and shifts by 1h at DST, so accept
+                # the two most common residues instead of assuming a UTC-aligned grid.
+                res = ts.dt.hour % hours
+                misaligned = misaligned | ~res.isin(res.value_counts().index[:2])
     frac = int(misaligned.sum())
     if frac > rows * 0.02:
         issues.append(

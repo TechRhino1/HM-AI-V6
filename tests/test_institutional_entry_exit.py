@@ -217,6 +217,12 @@ class TestDynamicLevelsEngineIntegration(unittest.TestCase):
         self.assertEqual(res_inst["protocol_details"]["protocol"], "DAY_TRADING")
 
 
+def _seed_ctx(monitor, sym, ctx):
+    """The monitor caches context per position style (SCALP/DAY use their own timeframes)."""
+    for key in (sym, f"{sym}|SCALP", f"{sym}|DAY_TRADING"):
+        monitor._ctx_cache[key] = (ctx, time.monotonic())
+
+
 class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
     def setUp(self):
         self.mt5_client = MagicMock()
@@ -254,7 +260,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             momentum=MomentumContext(trend_score=50, adx=25.0),
             session=SessionContext(is_prime_session=True)
         )
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
 
         pos = PositionSnapshot(
             ticket=401, symbol="XAUUSD", type="BUY", volume=1.00,
@@ -276,7 +282,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
         # 2. R = 3.0 (price 2430) — a real profit lock must now be in force.
         ctx.current_price = 2430.0
         pos.current_price = 2430.0
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
         self.monitor._manage_single_position(pos)
         applied = [
             c.kwargs.get("sl") for c in self.mt5_client.modify_position.call_args_list
@@ -292,7 +298,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
         pos.sl = max(applied)
         ctx.current_price = 2415.0
         pos.current_price = 2415.0
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
         self.mt5_client.modify_position.reset_mock()
         self.monitor._manage_single_position(pos)
         for c in self.mt5_client.modify_position.call_args_list:
@@ -315,7 +321,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             momentum=MomentumContext(trend_score=40, adx=25.0),
             session=SessionContext(is_prime_session=True)
         )
-        self.monitor._ctx_cache["EURUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "EURUSD", ctx)
 
         # Entry 1.0800, SL 1.0750 -> 1R = 0.0050.
         pos = PositionSnapshot(
@@ -338,7 +344,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
         # 2. R = 3.0 (price 1.0950) — a real lock must be in force.
         ctx.current_price = 1.0950
         pos.current_price = 1.0950
-        self.monitor._ctx_cache["EURUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "EURUSD", ctx)
         self.monitor._manage_single_position(pos)
         applied = [
             c.kwargs.get("sl") for c in self.mt5_client.modify_position.call_args_list
@@ -354,7 +360,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
         pos.sl = max(applied)
         ctx.current_price = 1.0880
         pos.current_price = 1.0880
-        self.monitor._ctx_cache["EURUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "EURUSD", ctx)
         self.mt5_client.modify_position.reset_mock()
         self.monitor._manage_single_position(pos)
         for c in self.mt5_client.modify_position.call_args_list:
@@ -377,7 +383,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             momentum=MomentumContext(trend_score=10, adx=15.0),
             session=SessionContext(is_prime_session=True)
         )
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
 
         # Opened 50 minutes ago (3000 seconds), stagnant at entry/loss (gain = 0.0 -> R = 0.0 <= 0.0)
         stale_time = (datetime.now(timezone.utc) - timedelta(minutes=50)).isoformat()
@@ -404,7 +410,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             momentum=MomentumContext(trend_score=5, adx=14.0),
             session=SessionContext(is_prime_session=True)
         )
-        self.monitor._ctx_cache["EURUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "EURUSD", ctx)
 
         # Opened 15 hours ago (54000 seconds), favorable gain = 0.0002 -> R = 0.04 < 0.10
         stale_time = (datetime.now(timezone.utc) - timedelta(hours=15)).isoformat()
@@ -432,7 +438,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             session=SessionContext(is_prime_session=True),
             order_flow={"delta_score": -65.0, "delta_ratio": -0.65, "absorption_trap": "SELLER_ABSORPTION_TRAP"}
         )
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
 
         # BUY trade in profit (Entry 2400.0, Current 2415.0, Profit > 0.8*ATR)
         pos = PositionSnapshot(
@@ -463,7 +469,7 @@ class TestHorizonAdaptiveRatchetAndExits(unittest.TestCase):
             session=SessionContext(is_prime_session=True),
             order_flow={"absorption_trap": "SELLER_ABSORPTION_TRAP"}
         )
-        self.monitor._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+        _seed_ctx(self.monitor, "XAUUSD", ctx)
 
         # BUY trade underwater (Entry 2400.0, Current 2398.0, Profit -$20)
         pos = PositionSnapshot(

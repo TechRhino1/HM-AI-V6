@@ -15,6 +15,20 @@ from jarvis.scalping.microstructure_engine import MicrostructureEngine, Microstr
 from jarvis.market.sessions import SessionEngine
 from jarvis.data.symbol_registry import resolve as resolve_symbol
 
+
+def _scalp_sweep_side(micro, liq) -> str:
+    """Side of liquidity swept: the M1 micro sweep if it fired, else the context sweep
+    (LiquidityContext carries ``sweep_type`` BULLISH_SWEEP/BEARISH_SWEEP, not ``sweep_side``)."""
+    if getattr(micro, "sweep_detected", False) and getattr(micro, "sweep_side", "NONE") != "NONE":
+        return micro.sweep_side
+    if getattr(liq, "sweep_detected", False):
+        st = str(getattr(liq, "sweep_type", "") or "").upper()
+        if "BULLISH" in st or "SELL_SIDE" in st:
+            return "SELL_SIDE"   # lows swept -> funds a BUY
+        if "BEARISH" in st or "BUY_SIDE" in st:
+            return "BUY_SIDE"    # highs swept -> funds a SELL
+    return "NONE"
+
 logger = logging.getLogger("JARVIS_ScalpExecutionEngine")
 
 
@@ -146,10 +160,13 @@ class ScalpExecutionEngine:
         
         # Step 1: Liquidity Sweep
         step1_sweep = micro.sweep_detected or getattr(liq, "sweep_detected", False)
-        sweep_side = micro.sweep_side or getattr(liq, "sweep_side", "NONE")
-        if bias == "BUY" and sweep_side not in ("SELL_SIDE", "LIQUIDITY_POOL", "NONE"):
+        sweep_side = _scalp_sweep_side(micro, liq)
+        # The sweep must be on the side that funds THIS trade. "NONE" used to pass both ways
+        # (and the context side was read from a field that does not exist), so a BEARISH
+        # context sweep validated a counter-trend BUY.
+        if bias == "BUY" and sweep_side not in ("SELL_SIDE", "LIQUIDITY_POOL"):
             step1_sweep = False
-        elif bias == "SELL" and sweep_side not in ("BUY_SIDE", "LIQUIDITY_POOL", "NONE"):
+        elif bias == "SELL" and sweep_side not in ("BUY_SIDE", "LIQUIDITY_POOL"):
             step1_sweep = False
 
         # Step 2: Rejection

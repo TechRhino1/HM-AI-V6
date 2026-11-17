@@ -74,6 +74,7 @@ def _live_event_iso(dt):
         "source": "live_feed",
         "is_fallback": False,
         "is_live": True,
+        "time_quality": "exact",
         "affected_pairs": ["XAUUSD"],
         "timestamp_iso": dt.isoformat(),
     }
@@ -137,6 +138,13 @@ class TestEventWindowDeRisk(unittest.TestCase):
         account.margin_level = 400.0
         self.monitor._apply_position_protocols([pos], account, 400.0, 400.0, now=now)
         self.mt5.close_position.assert_called_once_with(pos.ticket)
+
+    def test_estimated_time_never_de_risks(self):
+        # Phase-0 #15: same rule as the entry gate.
+        now = datetime.now(timezone.utc)
+        event = _live_event_iso(now)
+        event["time_quality"] = "estimated"
+        self.assertIsNone(self.monitor._event_window_verdict("XAUUSD", [event], now))
 
     def test_apply_protocols_underwater_keeps_stop(self):
         pos, risk = _gold_pos(profit_r=-0.5, peak_r=0.6)

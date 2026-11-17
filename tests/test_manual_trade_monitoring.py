@@ -47,6 +47,12 @@ class _RouteHarness(JarvisRequestHandler):
         return True
 
 
+
+def _seed_ctx(monitor, sym, ctx):
+    """The monitor caches context per position style (SCALP/DAY use their own timeframes)."""
+    for key in (sym, f"{sym}|SCALP", f"{sym}|DAY_TRADING"):
+        monitor._ctx_cache[key] = (ctx, time.monotonic())
+
 def _post(path, body, state_manager=None, orchestrator=None):
     payload = json.dumps(body).encode("utf-8")
     handler = _RouteHarness(path, payload, state_manager=state_manager, orchestrator=orchestrator)
@@ -211,7 +217,7 @@ def test_naked_manual_trade_auto_protection():
         event_bus=MagicMock(),
         manual_mode="AUTO_PILOT",
     )
-    pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "XAUUSD", ctx)
 
     # Naked manual BUY trade
     naked_pos = _make_snapshot(
@@ -250,7 +256,7 @@ def test_manual_trade_milestone_progression_in_autopilot():
         event_bus=MagicMock(),
         manual_mode="AUTO_PILOT",
     )
-    pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "XAUUSD", ctx)
 
     # Initial state: Manual trade, 1R = 10.0 (entry=2650, sl=2640)
     pos_open = _make_snapshot(
@@ -277,7 +283,7 @@ def test_manual_trade_milestone_progression_in_autopilot():
         magic=0,
     )
     ctx.current_price = 2666.0
-    pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "XAUUSD", ctx)
 
     pm._manage_single_position(pos_rallied, equity=10000.0, balance=10000.0)
 
@@ -391,7 +397,7 @@ def test_manual_mode_remains_autopilot_across_ticks():
         state_manager=state_mgr,
         manual_mode="AUTO_PILOT",
     )
-    pm._ctx_cache["EURUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "EURUSD", ctx)
     # Default manual mode must be AUTO_PILOT
     assert pm.manual_mode == "AUTO_PILOT"
 
@@ -450,7 +456,7 @@ def test_institutional_trailing_parity_automated_vs_manual():
         state_manager=state_mgr,
         manual_mode="AUTO_PILOT",
     )
-    pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "XAUUSD", ctx)
 
     # Create one automated trade and one manual trade with identical geometry
     auto_pos = _make_snapshot(ticket=1001, symbol="XAUUSD", side="BUY", open_price=2650.0, current_price=2650.0, sl=2640.0, tp=2680.0, magic=JARVIS_MAGIC_NUMBER, comment="HMA2_DAY_CHOC")
@@ -468,7 +474,7 @@ def test_institutional_trailing_parity_automated_vs_manual():
     auto_pos.current_price = 2666.0
     man_pos.current_price = 2666.0
     ctx.current_price = 2666.0
-    pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
+    _seed_ctx(pm, "XAUUSD", ctx)
 
     pm._manage_single_position(auto_pos, balance=1000.0, equity=1000.0)
     pm._manage_single_position(man_pos, balance=1000.0, equity=1000.0)

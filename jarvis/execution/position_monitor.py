@@ -29,6 +29,43 @@ from jarvis.application.event_bus import EventBus, GLOBAL_EVENT_BUS
 from jarvis.market.market_context import MarketContextEngine
 from jarvis.market.data_feed import DataFeedEngine
 
+
+def _style_from_comment(comment) -> str:
+    """Trade style from the order comment tag; SWING (the legacy context) when untagged."""
+    c = str(comment or "").upper()
+    if "SWNG" in c or "SWING" in c:
+        return "SWING"
+    if "SCLP" in c or "SCALP" in c:
+        return "SCALP"
+    if "DAY" in c or "INTRADAY" in c:
+        return "DAY_TRADING"
+    return "SWING"
+
+
+def _can_split(volume: float, pct: float, vol_min: float, vol_step: float) -> bool:
+    """True when a pct partial leaves both legs >= the broker min lot."""
+    vol_min = vol_min if isinstance(vol_min, (int, float)) and vol_min > 0 else 0.01
+    vol_step = vol_step if isinstance(vol_step, (int, float)) and vol_step > 0 else 0.01
+    close = round(round((volume * pct) / vol_step) * vol_step, 2)
+    return close >= vol_min and round(volume - close, 2) >= vol_min
+
+
+def _decision_first_target(decision, pos_type: str, pos_style: str, open_price: float) -> Optional[float]:
+    """TP1 from the symbol's latest decision, only if that decision is for THIS position:
+    same side, same style, and on the profit side of entry. latest_decisions holds the last
+    decision of ANY style/side, so a later SELL's TP1 could otherwise close half a losing BUY."""
+    try:
+        tp = float(getattr(decision, "first_target_price", None) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    def _s(v):
+        return str(getattr(v, "value", v) or "").upper()
+    if tp <= 0 or _s(getattr(decision, "bias", "")) != _s(pos_type):
+        return None
+    if _s(getattr(decision, "trade_style", "")) != _s(pos_style):
+        return None
+    return tp if (tp > open_price if str(pos_type).upper() == "BUY" else tp < open_price) else None
+
 logger = logging.getLogger("JARVIS_PositionMonitor")
 
 # ─── Constants ─────────────────────────────────────────────────────────────────
@@ -81,7 +118,7 @@ MANUAL_MANAGEMENT_MODE         = "PROTECT_ONLY"
 #    (controlled de-risking instead of a margin-call cascade).
 NEWS_DE_RISK_PRE_MIN   = 10.0
 NEWS_DE_RISK_POST_MIN  = 15.0
-NEWS_BANK_R            = 0.60   # peak excursion required to bank pre-release
+NEWS_BANK_R            = 0.60   # peak excursion required to bank after the release
 NEWS_BANK_CURRENT_R    = 0.20   # current R required to bank (don't choke runners)
 NEWS_PROTECT_FLOOR_R   = -0.25  # SL level for protected (flat) trades
 NEWS_CALENDAR_TTL_SEC  = 45.0
@@ -444,10 +481,13 @@ class PositionMonitorEngine:
 
                 # 1. Event-window de-risk (highest priority)
                 verdict = self._event_window_verdict(symbol, calendar, now)
+                # Bank only once the release is out. Pre-release closing was tested and rejected
+                # (reports/NEWS_RESEARCH_2026-11-17.md, N2: closing >= +0.5R before the release lost
+                # on both M15 and H1), so open trades hold through the release.
                 if verdict == "BANK" and peak_r >= NEWS_BANK_R and current_r >= NEWS_BANK_CURRENT_R:
                     logger.info(
                         f"📅 NEWS_WINDOW_BANK: #{pos.ticket} ({symbol} {pos.type}) "
-                        f"peak={peak_r:.2f}R now={current_r:.2f}R — banking before a HIGH-impact release."
+                        f"peak={peak_r:.2f}R now={current_r:.2f}R — banking the post-release move."
                     )
                     self._execute_exit(pos, reason="NEWS_EVENT_BANK")
                     continue
@@ -562,6 +602,8 @@ class PositionMonitorEngine:
                     continue
                 if e.get("is_fallback", False) or str(e.get("source", "")) != "live_feed":
                     continue
+                if str(e.get("time_quality") or "") != "exact":
+                    continue  # same rule as the entry gate: never de-risk on a guessed time
                 pairs = {str(p).upper() for p in (e.get("affected_pairs") or [])}
                 if canon not in pairs:
                     continue
@@ -831,6 +873,17 @@ class PositionMonitorEngine:
         except Exception as e:
             logger.debug(f"_manage_pending_orders_tick error: {e}")
 
+    def _partial_executable(self, pos: PositionSnapshot, policy) -> bool:
+        """Partial possible at the broker's real min lot/step (was a hard-coded volume >= 0.02)."""
+        getter = getattr(self.mt5_client, "get_symbol_trading_spec", None)
+        try:
+            spec = getter(pos.symbol) if callable(getter) else {}
+        except Exception:
+            spec = {}
+        spec = spec if isinstance(spec, dict) else {}
+        return _can_split(float(pos.volume), float(getattr(policy, "fast_cash_volume_pct", 0.5) or 0.5),
+                          spec.get("volume_min", 0.01), spec.get("volume_step", 0.01))
+
     def _ensure_valid_initial_sl_dist(
         self,
         pos: PositionSnapshot,
@@ -845,7 +898,10 @@ class PositionMonitorEngine:
         """
         sl_cand = assigned_sl if assigned_sl > 0 else pos.sl
         dist = abs(pos.open_price - sl_cand) if sl_cand > 0 else 0.0
-        min_floor = max(fallback_atr * 0.5, pip_size * 5, 1e-4) if fallback_atr > 0 else max(pip_size * 5, 1e-4)
+        # A real stop defines 1R even when tight (a scalp stop is often < 0.5 ATR); only a missing
+        # or degenerate stop (< 5 pips) falls back to ATR. The old 0.5-ATR floor inflated a tight
+        # scalp's 1R to 1.5 ATR, so every R-based layer fired ~3-4x too late.
+        min_floor = max(pip_size * 5, 1e-4)
         if dist < min_floor:
             dist = max(fallback_atr * 1.5, min_floor)
         self._initial_risk_dist[pos.ticket] = dist
@@ -973,12 +1029,19 @@ class PositionMonitorEngine:
         regime  = self._get_cached_regime(canon_sym) or self._get_cached_regime(symbol)
 
         # ── Fetch (or reuse cached) market context ──────────────────────────
-        ctx = self._get_context(canon_sym) or self._get_context(symbol)
+        ctx_style = _style_from_comment(getattr(pos, "comment", ""))
+        ctx = self._get_context(canon_sym, ctx_style) or self._get_context(symbol, ctx_style)
         if ctx is None:
             logger.debug(f"No market context for {symbol} ({canon_sym}) — skipping #{pos.ticket}")
             return
 
         c_price = ctx.current_price
+        # A SELL closes (and its stop triggers) on the ASK: measuring it from the bid made every
+        # SELL trail/lock one spread tighter than the mirror BUY.
+        _ask, _bid = getattr(ctx, "ask", 0.0), getattr(ctx, "bid", 0.0)
+        if (str(pos.type).upper() == "SELL" and isinstance(_ask, (int, float)) and isinstance(_bid, (int, float))
+                and _ask > _bid > 0):
+            c_price = float(c_price) + (float(_ask) - float(_bid))
         atr     = ctx.volatility.atr if ctx.volatility.atr > 0 else (c_price * 0.005)
         spread  = ctx.volatility.current_spread_pips
 
@@ -1082,9 +1145,7 @@ class PositionMonitorEngine:
                 pos_style = self._extract_position_trade_style(pos, atr=atr)
                 reg_name = (regime.primary_regime.value if hasattr(regime, "primary_regime") else str(regime)) if regime else None
                 _p = self._exit_policy.get(pos.ticket) or ExitPolicy.for_symbol(symbol, spec, trade_style=pos_style, regime=reg_name)
-                first_target = self._coerce_positive_float(
-                    getattr(decision_obj, "first_target_price", None)
-                )
+                first_target = _decision_first_target(decision_obj, pos.type, pos_style, pos.open_price)
                 target_pct = self._coerce_positive_float(
                     getattr(decision_obj, "first_target_volume_pct", None),
                     default=getattr(_p, "fast_cash_volume_pct", PARTIAL_CLOSE_PCT),
@@ -1134,9 +1195,9 @@ class PositionMonitorEngine:
                             elif pos.type == "SELL" and (new_sl == 0 or cushion_sl < new_sl) and cushion_sl > c_price:
                                 new_sl = cushion_sl
                                 actions.append(f"PARTIAL_DERISK_SL@{new_sl:.4f}")
-                    else:
-                        # Cannot split position without violating broker min lot (e.g. 0.04 < min 0.05)
-                        self._partially_closed_tickets.add(pos.ticket)
+                    # else: unsplittable at the broker min lot. Do NOT mark the partial taken:
+                    # evaluate_exit (partial_executable=False) then applies its fallback stop-lock,
+                    # which marking it "taken" used to suppress (neither partial nor lock happened).
 
             # ── 1.5 Adversarial Order Flow Shield (Suppressed in Grace Period) ────
             if not in_grace_period:
@@ -1273,7 +1334,7 @@ class PositionMonitorEngine:
                 be_already_locked=pos.ticket in self._be_locked,
                 struct_level=struct_level,
                 regime=regime_str,
-                partial_executable=pos.volume >= 0.02,
+                partial_executable=self._partial_executable(pos, policy),
                 hold_minutes=(open_dur_sec / 60.0) if open_dur_sec else None,
                 peak_favorable_dist=self._peak_mfe.get(pos.ticket),
             )
@@ -2563,14 +2624,20 @@ class PositionMonitorEngine:
         else:
             return False, None
 
-    def _get_context(self, symbol: str) -> Optional[MarketContext]:
-        """Returns cached context or fetches fresh context if TTL expired."""
+    def _get_context(self, symbol: str, trade_style: str = "SWING") -> Optional[MarketContext]:
+        """Returns cached context or fetches fresh context if TTL expired.
+
+        The context (and so its ATR) is built on the position's OWN style timeframes:
+        scalps were trailed with the SWING/H1 ATR, ~2x their real volatility."""
         now = time.monotonic()
         from jarvis.data.symbol_registry import resolve as _res
         try:
             canon = _res(symbol).canonical
         except Exception:
             canon = symbol
+        style = (trade_style or "SWING").upper()
+        if style != "SWING":  # SWING keeps the legacy bare-symbol keys other readers use
+            canon, symbol = f"{canon}|{style}", f"{symbol}|{style}"
 
         with self._ctx_lock:
             cached = self._ctx_cache.get(canon) or self._ctx_cache.get(symbol)
@@ -2581,13 +2648,14 @@ class PositionMonitorEngine:
 
         # Fetch fresh context
         try:
-            mtf_data = self.data_feed.fetch_multi_timeframe(canon)
+            base = canon.split("|")[0]
+            mtf_data = self.data_feed.fetch_multi_timeframe(base, trade_style=style)
             try:
-                spread_pips = _res(canon).typical_spread_pips
+                spread_pips = _res(base).typical_spread_pips
             except Exception:
                 spread_pips = 3.0
             ctx = self.context_engine.build_context(
-                canon, mtf_data, current_spread_pips=spread_pips
+                base, mtf_data, current_spread_pips=spread_pips, trade_style=style
             )
             with self._ctx_lock:
                 self._ctx_cache[canon] = (ctx, now)

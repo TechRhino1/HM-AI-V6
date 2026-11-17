@@ -254,3 +254,21 @@ def test_non_crypto_weekend_bars_are_still_rejected():
     # The same bars on crypto are fine — crypto genuinely trades at weekends.
     quality_crypto = validate_real_market_data(df, "BTCUSD#", category="CRYPTO")
     assert not any("weekend" in i for i in quality_crypto.issues)
+
+
+def test_h4_grid_accepts_broker_clock_offset_and_dst_shift():
+    """After the broker->UTC conversion EET H4 bars open at 21/01/05.. UTC (22/02/06.. in
+    winter). The grid check must accept that offset, but still reject off-grid bars."""
+    from jarvis.data.mt5_history import validate_real_market_data
+
+    summer = pd.date_range("2026-09-01 01:00", periods=60, freq="4h", tz="UTC")
+    winter = pd.date_range("2026-11-02 02:00", periods=60, freq="4h", tz="UTC")
+    times = summer.append(winter)
+    df = pd.DataFrame({"time": times, "open": 1.1, "high": 1.1002, "low": 1.0998,
+                       "close": 1.1001, "spread": 20, "tick_volume": range(len(times))})
+    q = validate_real_market_data(df, "BTCUSD#", category="CRYPTO", bar_minutes=240)
+    assert not any("grid" in i for i in q.issues), q.issues
+
+    df.loc[::5, "time"] = df.loc[::5, "time"] + pd.Timedelta(minutes=7)
+    q = validate_real_market_data(df, "BTCUSD#", category="CRYPTO", bar_minutes=240)
+    assert any("grid" in i for i in q.issues)
