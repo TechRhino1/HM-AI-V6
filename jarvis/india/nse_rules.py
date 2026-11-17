@@ -3,7 +3,7 @@ HM Algo 2.0 — NSE/SEBI India Rule & Contract Specifications Engine
 Dynamically determines official lot sizes, quantity freeze limits, strike intervals,
 expiry schedules, circuit filters, and exchange turnover/STT charges for Indian derivatives and equities.
 """
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
 
 
@@ -153,32 +153,27 @@ class NSERuleEngine:
             return STRIKE_STEPS["PENNY_VALUE"]
 
     @staticmethod
-    def get_expiry_schedule(symbol: str) -> Dict[str, Any]:
+    def get_expiry_schedule(symbol: str, now: Optional[datetime] = None) -> Dict[str, Any]:
         """
-        Calculates the official weekly, next-week, and monthly expiry dates.
-        - NIFTY, BANKNIFTY & Equities: Thursday
-        - FINNIFTY: Tuesday
-        - MIDCPNIFTY: Monday
-        - SENSEX: Friday
+        Weekly / next-week / monthly expiry dates (SEBI-approved swap effective 1 Sep 2025):
+        - NSE index and stock derivatives (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, equities): Tuesday
+        - BSE derivatives (SENSEX, BANKEX): Thursday
+        The code still used the pre-2025 days (NIFTY Thursday, SENSEX Friday), so on a real expiry
+        Tuesday it priced an expired chain as two days from expiry. ``now`` is injectable for tests.
         """
         sym = (symbol or "NIFTY").upper().strip()
-        now = datetime.now(timezone.utc)
-        
-        # Target weekday: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
-        if sym == "MIDCPNIFTY":
-            target_weekday = 0 # Monday
-        elif sym == "FINNIFTY":
-            target_weekday = 1 # Tuesday
-        elif sym in ["SENSEX", "BANKEX"]:
-            target_weekday = 4 # Friday
-        else:
-            target_weekday = 3 # Thursday (Nifty, BankNifty, and all Equities)
+        now = now or datetime.now(timezone.utc)
+        ist = now.astimezone(timezone(timedelta(hours=5, minutes=30)))   # NSE/BSE close 15:30 IST
 
-        days_ahead = (target_weekday - now.weekday()) % 7
-        if days_ahead == 0 and now.hour >= 15: # If expiry day after market hours (3:30 PM IST), jump to next week
+        target_weekday = 3 if sym in ("SENSEX", "BANKEX") else 1   # Thursday (BSE) / Tuesday (NSE)
+
+        days_ahead = (target_weekday - ist.weekday()) % 7
+        # Expiry day after the 15:30 IST close: the weekly contract has expired, roll to next week.
+        # (Was `now.hour >= 15` on UTC, i.e. 20:30 IST - five hours after the market closed.)
+        if days_ahead == 0 and (ist.hour, ist.minute) >= (15, 30):
             days_ahead = 7
-            
-        current_weekly = now + timedelta(days=days_ahead)
+
+        current_weekly = ist + timedelta(days=days_ahead)
         next_weekly = current_weekly + timedelta(days=7)
         monthly = current_weekly + timedelta(days=21)
 

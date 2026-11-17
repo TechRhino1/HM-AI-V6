@@ -140,6 +140,79 @@ import jarvis.observability.logging_setup as _logging_setup  # noqa: E402
 _logging_setup.add_file_logging = lambda *a, **k: None
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_trade_memory(monkeypatch):
+    """TradeMemory() defaults to data/jarvis_trade_memory.db - the live learning memory. Any test
+    that builds an orchestrator wrote fake trades into it (ticket 999333, pnl 50.0, seen in the
+    production file). Point the default at a per-test temp file."""
+    import os
+    import tempfile
+
+    from jarvis.learning.trade_memory import TradeMemory
+
+    fd, path = tempfile.mkstemp(suffix=".db", prefix="jarvis_test_trade_memory_")
+    os.close(fd)
+    monkeypatch.setattr(TradeMemory.__init__, "__defaults__", (path,))
+    yield path
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(path + suffix)
+        except OSError:
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _no_live_news_outside_news_tests(monkeypatch, request):
+    """Orchestrator paths consult the live economic calendar on the WALL CLOCK; inside +-30 min of
+    a real HIGH-impact release (or a scheduled one, via the fail-closed fallback) entries are
+    correctly blocked, so unrelated tests failed at certain times of day. Outside the news test
+    files: no network fetch and no scheduled-release fallback. News tests exercise both for real."""
+    if "news" in request.node.nodeid.lower():
+        yield
+        return
+    from jarvis.market import news
+
+    monkeypatch.setattr(news.GLOBAL_NEWS_ENGINE, "_fetch_all_live_sources", lambda *a, **k: [])
+    monkeypatch.setattr(news, "us_release_slot_active", lambda *a, **k: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_process_globals(monkeypatch):
+    """Process-wide state that individual tests mutated and never restored:
+    * SETTINGS.trading.symbols (symbol-toggle tests wrote it even with persist=False);
+    * MT5Client's class-level paper book (a leaked EURUSD pending order / 3+ paper positions changed
+      the session-window short-circuit and tripped 'max open positions' in unrelated tests)."""
+    from jarvis.config.settings import SETTINGS
+    from jarvis.execution.mt5_client import MT5Client
+
+    monkeypatch.setattr(SETTINGS.trading, "symbols", list(SETTINGS.trading.symbols))
+    MT5Client._shared_paper_positions.clear()
+    MT5Client._shared_paper_pending_orders.clear()
+    yield
+    MT5Client._shared_paper_positions.clear()
+    MT5Client._shared_paper_pending_orders.clear()
+    # Any test that started the web telemetry syncer leaves a thread sweeping every 3s; stop it so
+    # it cannot interleave log lines or state with later tests.
+    import sys as _sys
+    _srv = _sys.modules.get("jarvis.api.server")
+    if _srv is not None and getattr(_srv.JarvisRequestHandler, "_bg_thread_started", False):
+        _srv.JarvisRequestHandler.stop_background_syncer()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_global_state():
+    """GLOBAL_STATE is a process-wide singleton; positions left by one test changed what later
+    tests saw (e.g. an EURUSD position disabled the session-window short-circuit)."""
+    from jarvis.application.state_manager import GLOBAL_STATE
+    saved = list(GLOBAL_STATE.positions)
+    saved_account = GLOBAL_STATE.account   # tests set it to a MagicMock and never restored it
+    GLOBAL_STATE.positions = []
+    yield
+    GLOBAL_STATE.positions = saved
+    GLOBAL_STATE.account = saved_account
+
+
 @pytest.fixture
 def _hermetic_model_registry():
     """The test-run model registry root (see the import-time redirect above)."""

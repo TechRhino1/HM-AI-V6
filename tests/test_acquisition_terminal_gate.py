@@ -123,7 +123,9 @@ class AcquisitionTerminalGateTest(unittest.TestCase):
                 mock.patch("jarvis.data.broker_symbols.ensure_mt5_terminal",
                            return_value=gate_open) as gate, \
                 mock.patch("jarvis.data.broker_symbols.resolve_broker_symbol",
-                           return_value=broker_symbol) as resolve:
+                           return_value=broker_symbol) as resolve,                 mock.patch("jarvis.data.broker_time.broker_utc_offset", return_value=0):
+            # The broker-offset lookup resolves up to 7 fallback symbols on a cold cache, which made
+            # resolve.call_count depend on whether an earlier test had warmed that cache.
             try:
                 df = engine.download_range_from_mt5(
                     "XAUUSD", "H1", self.START, self.END)

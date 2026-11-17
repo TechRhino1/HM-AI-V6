@@ -577,6 +577,10 @@ class TestRegressionFixes(unittest.TestCase):
             orch, "_first_untrusted_frame", return_value=(None, None, 0.0)
         ), patch.object(
             orch, "_first_unusable_frame", return_value=(None, None)
+        ), patch.object(
+            # The calibrated XAUUSD policy judges the regime the orchestrator classifies from LIVE
+            # bars (RANGE is disabled), so the cycle was refused or not depending on today's market.
+            orch, "_calibrated_entry_decision", return_value=None
         ), patch(
             "jarvis.application.orchestrator.datetime"
         ) as mock_dt:

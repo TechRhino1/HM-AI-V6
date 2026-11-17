@@ -12,8 +12,6 @@ executes event-driven backtests across all 13 symbols in parallel, and generates
 import os
 import sys
 
-os.environ["JARVIS_BACKTEST_MODE"] = "1"
-os.environ["JARVIS_OFFLINE_MODE"] = "1"
 
 import json
 import time
@@ -306,4 +304,6 @@ def run_2month_backtest(initial_balance_per_symbol: float = 10000.0):
 
 
 if __name__ == "__main__":
+    os.environ["JARVIS_BACKTEST_MODE"] = "1"  # set here, not at import: importing must not change process state
+    os.environ["JARVIS_OFFLINE_MODE"] = "1"  # set here, not at import: importing must not change process state
     run_2month_backtest()

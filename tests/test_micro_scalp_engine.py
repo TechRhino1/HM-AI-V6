@@ -22,8 +22,9 @@ from jarvis.execution.position_monitor import (
     PARTIAL_CLOSE_PCT
 )
 
-def test_strategy_bandit_micro_arms():
-    bandit = StrategyBandit(state_file="test_bandit_state.json")
+def test_strategy_bandit_micro_arms(tmp_path):
+    # absolute tmp path: a bare name resolves under DATA_DIR and was left in the live data dir
+    bandit = StrategyBandit(state_file=str(tmp_path / "test_bandit_state.json"))
     assert "MICRO_LIQUIDITY_SWEEP" in bandit.STRATEGIES
     assert "M1_M5_FVG_SCALP" in bandit.STRATEGIES
     assert "MICRO_ACCOUNT_ADAPTIVE" in bandit.STRATEGIES
@@ -34,12 +35,6 @@ def test_strategy_bandit_micro_arms():
     assert "MICRO_LIQUIDITY_SWEEP" in boosts
     assert boosts["MICRO_LIQUIDITY_SWEEP"] > 0
 
-    # Clean up test file
-    if os.path.exists("test_bandit_state.json"):
-        try:
-            os.remove("test_bandit_state.json")
-        except Exception:
-            pass
 
 def test_position_monitor_constants():
     """Stop-ratchet thresholds now live in jarvis.execution.exit_policy.

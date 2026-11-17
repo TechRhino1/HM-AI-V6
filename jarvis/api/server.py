@@ -80,6 +80,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
     orchestrator: Optional[Any] = None
     _bg_thread_started: bool = False
     _bg_lock = threading.Lock()
+    _bg_stop = threading.Event()   # lets an embedding process (and tests) stop the syncer
     # Bounded. The key is `f"{sym}_{tf}"` and `sym` is read straight off the
     # query string, so the old plain dict grew one entry per distinct symbol a
     # caller asked for and never removed one. 256 entries covers every
@@ -343,11 +344,21 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
 
     @classmethod
+    def stop_background_syncer(cls) -> None:
+        """Stop the telemetry syncer. It had no stop: once started (e.g. by a test server) it kept
+        sweeping every 3s for the life of the process."""
+        with cls._bg_lock:
+            cls._bg_stop.set()
+            cls._bg_thread_started = False
+
+    @classmethod
     def start_background_syncer(cls):
         with cls._bg_lock:
             if cls._bg_thread_started:
                 return
             cls._bg_thread_started = True
+            cls._bg_stop = threading.Event()   # a fresh event per thread, so a stopped one stays stopped
+            stop = cls._bg_stop
 
         def _bg_loop():
             from jarvis.market.market_context import MarketContextEngine
@@ -370,11 +381,11 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             ac = ParallelAnalystCluster(parallel=False)
             de = DecisionEngine()
 
-            while True:
+            while not stop.is_set():
                 try:
                     # If the main Orchestrator is actively running, let it drive state synchronization and radar
                     if cls.state_manager.is_orchestrator_active():
-                        time.sleep(2.0)
+                        stop.wait(2.0)
                         continue
 
                     # 1. Standalone Sync Account & Positions when Orchestrator is not running
@@ -528,7 +539,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.error(f"Background telemetry sync error: {e}", exc_info=True)
 
-                time.sleep(3.0)
+                stop.wait(3.0)
 
         t = threading.Thread(target=_bg_loop, daemon=True, name="web_bg_telemetry_syncer")
         t.start()

@@ -59,6 +59,13 @@ class BacktestEngine:
         self.commission_per_lot = commission_per_lot
         self.slippage_pips = slippage_pips
 
+        self._build_components()
+
+    def _build_components(self) -> None:
+        """(Re)build every stateful collaborator. Called at construction AND at the start of every
+        run: a reused engine carried regime hysteresis, analyst/decision caches, circuit-breaker
+        pauses and drawdown days from the previous run, so the same data traded 0, 1, 2 times on
+        successive runs of one engine."""
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster(parallel=False)
@@ -149,7 +156,7 @@ class BacktestEngine:
                 realtime_optimizer=neutral_realtime,
                 recent_win_rate_fn=lambda: None,  # No recent win rate in backtest
             )
-        self.risk_engine = RiskEngine(max_risk_per_trade_pct=risk_per_trade_pct, is_backtest=True)
+        self.risk_engine = RiskEngine(max_risk_per_trade_pct=self.risk_per_trade_pct, is_backtest=True)
 
     def _calc_commission(self, symbol: str, lots: float, price: float = 0.0) -> float:
         cfg = get_symbol_profile_config(symbol)
@@ -274,6 +281,7 @@ class BacktestEngine:
         """Implementation of full backtest on the given H1 DataFrame."""
         from jarvis.backtesting.metrics import PerformanceMetricsCalculator
         from jarvis.historical.historical_engine import HISTORICAL_DATA_ENGINE
+        self._build_components()   # every run starts from the same state as a fresh engine
         ver = HISTORICAL_DATA_ENGINE.get_dataset_version(symbol, timeframe=timeframe) or 1
         if df_h1 is None or len(df_h1) < 20:
             return {
@@ -371,6 +379,10 @@ class BacktestEngine:
             next_bar = df_h1.iloc[i + 1]
 
             bar_time = current_bar.get("time") if "time" in current_bar else None
+            if bar_time is None and isinstance(df_h1.index, pd.DatetimeIndex):
+                # A frame indexed by time (no 'time' column) left the risk clock on wall time,
+                # so circuit-breaker pauses depended on machine speed (the hermetic-test flake).
+                bar_time = df_h1.index[i]
             b_date = None
             if bar_time is not None:
                 b_date = bar_time.date() if hasattr(bar_time, "date") else None

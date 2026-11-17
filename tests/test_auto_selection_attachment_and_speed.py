@@ -51,11 +51,15 @@ class AutoSelectionAttachmentAndSpeedTest(unittest.TestCase):
         with self.opener.open(req, timeout=10):
             pass
 
-        # Measure cached latency
-        t0 = time.time()
-        with self.opener.open(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-            dt_ms = (time.time() - t0) * 1000.0
+        # Measure cached latency: best of 5. A single wall-clock sample measured the OS scheduler
+        # on a machine also running the live bot + MT5 (56-87 ms spikes); an uncached path is
+        # orders of magnitude slower on every sample, so the minimum still catches a broken cache.
+        dt_ms = float("inf")
+        for _ in range(5):
+            t0 = time.perf_counter()
+            with self.opener.open(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            dt_ms = min(dt_ms, (time.perf_counter() - t0) * 1000.0)
 
         self.assertEqual(resp.status, 200)
         self.assertEqual(data.get("status"), "OK")

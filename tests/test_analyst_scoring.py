@@ -803,10 +803,12 @@ class TestMacroAnalyst:
                 {"currency": "USD", "impact": "HIGH", "event": "CPI",
                  "actual": "5", "forecast": "1"}]).bias == "BEARISH"
 
-    def test_with_no_shock_the_bias_falls_back_to_structure(self):
+    def test_with_no_shock_the_bias_stays_neutral(self):
+        # 4950d3d removed the fallback to structure bias: with no macro shock the macro
+        # analyst has no macro view, so it must not echo the structure analyst's vote.
         r = self.run(structure=StructureContext(bias="BULLISH"))
-        assert r.bias == "BULLISH"
-        assert any("aligning with BULLISH structure bias" in e for e in r.evidence)
+        assert r.bias == "NEUTRAL"
+        assert any("remaining NEUTRAL" in e for e in r.evidence)
 
     def test_a_shock_overrides_the_structure_fallback(self):
         r = self.run(structure=StructureContext(bias="BULLISH"), calendar=[

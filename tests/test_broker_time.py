@@ -42,7 +42,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from jarvis.data import broker_time
+from jarvis.data import broker_symbols, broker_time
 from jarvis.data.broker_time import broker_utc_offset
 from jarvis.data.schemas import PositionSnapshot
 
@@ -83,6 +83,7 @@ def _fake_position(symbol, open_epoch):
 class TestBrokerOffsetDerivation(unittest.TestCase):
     def setUp(self):
         broker_time.reset_cache()
+        broker_symbols.reset_cache()   # a live-terminal symbol map left by earlier tests broke the fake
 
     def test_derives_whole_hour_offset(self):
         now = time.time()
@@ -161,6 +162,7 @@ class TestAnInjectedModuleIsHonoured(unittest.TestCase):
 
     def setUp(self):
         broker_time.reset_cache()
+        broker_symbols.reset_cache()   # a live-terminal symbol map left by earlier tests broke the fake
 
     def test_the_global_terminal_is_never_initialized(self):
         import jarvis.data.broker_symbols as bs
@@ -213,6 +215,7 @@ class TestPositionOpenTimeIsTrueUtc(unittest.TestCase):
 
     def setUp(self):
         broker_time.reset_cache()
+        broker_symbols.reset_cache()   # a live-terminal symbol map left by earlier tests broke the fake
 
     def _client(self, fake_mt5):
         import jarvis.execution.mt5_client as m

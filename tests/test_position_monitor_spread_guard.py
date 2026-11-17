@@ -29,7 +29,13 @@ from jarvis.data.schemas import (
     StructureContext,
     VolatilityContext,
 )
+import pytest as _pytest
+
 from jarvis.data.symbol_registry import resolve
+
+# 1ba6ae7 gave gold a fixed 2.5R exit (no trail/BE), so the stop is never modified for gold;
+# these tests use gold as a sample of the MANAGED exit, so opt into it (as other suites do).
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
 from jarvis.execution.position_monitor import (
     JARVIS_MAGIC_NUMBER,
     PositionMonitorEngine,

@@ -6,7 +6,6 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 import sys
 import logging
-logging.disable(logging.CRITICAL)
 
 import pandas as pd
 from jarvis.market.data_feed import DataFeedEngine
@@ -251,5 +250,6 @@ def run_multi_asset_backtest():
 
 
 if __name__ == "__main__":
+    logging.disable(logging.CRITICAL)  # set here, not at import: importing must not change process state
     run_multi_asset_backtest()
 

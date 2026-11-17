@@ -8,7 +8,6 @@ import sys
 import os
 import json
 import logging
-logging.disable(logging.CRITICAL)
 
 import pandas as pd
 import numpy as np
@@ -441,5 +440,6 @@ def run_1y_backtest():
 
 
 if __name__ == "__main__":
+    logging.disable(logging.CRITICAL)  # set here, not at import: importing must not change process state
     run_1y_backtest()
 

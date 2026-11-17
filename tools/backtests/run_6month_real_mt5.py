@@ -22,7 +22,6 @@ BASE_DIR = str(Path(__file__).resolve().parent.parent.parent)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-logging.disable(logging.CRITICAL)
 
 from jarvis.backtesting.engine import BacktestEngine
 from jarvis.backtesting.walk_forward import WalkForwardEngine
@@ -104,6 +103,7 @@ def print_trade_log(result, symbol, max_trades=50):
         print(f"  {i+1:<4} {entry_date:<12} {direction:<5} {entry:<12.2f} {sl:<12.2f} {tp:<12.2f} {exit_price:<12.2f} {pnl_str:<10} {rr:<6.2f} {strategy:<25} {regime:<15} {result_str:<6}")
 
 if __name__ == "__main__":
+    logging.disable(logging.CRITICAL)  # set here, not at import: importing must not change process state
     mt5.initialize()
     info = mt5.account_info()
     print("=" * 100)

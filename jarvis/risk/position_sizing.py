@@ -198,8 +198,11 @@ class PositionSizer:
         if final_lots <= 0.0:
             return 0.0
 
-        # Hard lot cap from account tier system (calibrated by symbol asset class)
-        lot_cap = tier_lot_cap(account_balance, sym_key)
+        # Hard lot cap from account tier system. Its lot counts are calibrated for large contracts
+        # (FX 100k, metals 100-5000); on a 1-unit crypto/index contract 0.05 lots is a ~$1 risk, so
+        # it silently cut a 1% crypto trade ~7x. The dollar-risk cap below still binds there.
+        contract = float((symbol_info or {}).get("trade_contract_size") or 0.0)
+        lot_cap = tier_lot_cap(account_balance, sym_key) if (contract <= 0 or contract >= 100) else max_vol
         final_lots = min(final_lots, lot_cap)
 
         # Enforce that scaled lot size does not exceed dollar risk budget

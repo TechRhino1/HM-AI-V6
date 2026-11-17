@@ -8,7 +8,6 @@ if REPO_ROOT not in sys.path:
 HM Algo 2.0 — Fast 6-Month Backtest Performance Summary Script.
 """
 import sys, logging
-logging.disable(logging.CRITICAL)
 
 from jarvis.market.data_feed import DataFeedEngine
 from jarvis.backtesting.engine import BacktestEngine
@@ -68,4 +67,5 @@ def main():
     print("=" * 95)
 
 if __name__ == "__main__":
+    logging.disable(logging.CRITICAL)  # set here, not at import: importing must not change process state
     main()

@@ -14,7 +14,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
 
-logging.disable(logging.CRITICAL)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -166,4 +165,5 @@ def main():
     print("\n" + "=" * 125 + "\n", flush=True)
 
 if __name__ == "__main__":
+    logging.disable(logging.CRITICAL)  # set here, not at import: importing must not change process state
     main()

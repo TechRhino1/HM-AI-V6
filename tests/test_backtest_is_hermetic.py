@@ -156,3 +156,23 @@ def _digest():
         return "ABSENT"
     with open(WEIGHTS_FILE, "rb") as fh:
         return hashlib.sha256(fh.read()).hexdigest()
+
+
+def test_offline_context_never_reads_live_cross_market_data(monkeypatch):
+    """Cross-market features (SMT, ETH/BTC lead-lag, DXY) read LIVE MT5 bars at position 0; in a
+    backtest that injected today's market into historical decisions."""
+    from jarvis.config.runtime import offline_mode
+    from jarvis.market.market_context import MarketContextEngine
+    calls = []
+    eng = MarketContextEngine()
+    for name in ("_compute_crypto_lead_lag", "_compute_cross_market_smt", "_compute_metals_smt",
+                 "_compute_intermarket_dxy"):
+        monkeypatch.setattr(eng, name, lambda s, _n=name: calls.append(_n) or {"live": True})
+    n = 300
+    rng = np.random.default_rng(1)
+    c = 2000 + np.cumsum(rng.normal(0, 5, n))
+    df = pd.DataFrame({"time": pd.date_range("2024-01-01", periods=n, freq="h"), "open": c, "high": c + 2,
+                       "low": c - 2, "close": c, "tick_volume": np.full(n, 100.0), "spread": np.full(n, 20)})
+    with offline_mode():
+        ctx = eng.build_context("XAUUSD", {"primary": df, "context": df, "macro": df}, trade_style="SWING")
+    assert calls == [] and not ctx.metals_smt and not ctx.intermarket_dxy

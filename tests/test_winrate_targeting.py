@@ -1056,8 +1056,8 @@ def test_calibrator_charges_stop_slippage():
     assertions, weakest to strongest:
 
       1. a higher slippage strictly lowers expectancy (accounting);
-      2. the win rate is untouched -- slippage deepens stop exits, it never
-         reclassifies a win as a loss;
+      2. the win rate can only fall -- slippage deepens stop exits and can turn a
+         near-breakeven exit into a small loss, never the reverse;
       3. an absurd slippage leaves nothing tradeable. This is the real
          regression test: with the parameter dropped, the 1000-pip run would
          return the same healthy profile as zero slippage.
@@ -1075,7 +1075,9 @@ def test_calibrator_charges_stop_slippage():
     absurd = calibrate(1000.0)
 
     assert free.n_trades > 0 and slipped.n_trades > 0
-    assert slipped.win_rate == pytest.approx(free.win_rate, abs=1e-9)
+    # Slippage can turn a near-breakeven BE/trail exit (+0.0x R) into a small loss, so the win
+    # rate may only fall, never rise (measured: 24 BE/TRAIL flips at 0.5 pip on this fixture).
+    assert slipped.win_rate <= free.win_rate + 1e-9
     assert slipped.expectancy_r < free.expectancy_r
     # Measured on this fixture: +0.13600R -> +0.12640R, i.e. 0.0096R per trade.
     # 1 pip is 0.05R here, so half a pip on each stop exit is material against a

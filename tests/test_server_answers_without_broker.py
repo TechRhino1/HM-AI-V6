@@ -25,6 +25,7 @@ prove the wiring.
 
 from __future__ import annotations
 
+import sys
 import threading
 import unittest
 import urllib.error
@@ -92,6 +93,11 @@ class ServerAnswersWithoutBrokerTest(unittest.TestCase):
     def _stop(self):
         self.server.shutdown()
         self.server.server_close()
+        # The background telemetry syncer otherwise keeps sweeping (and logging) for the rest of
+        # the test process, polluting log-counting tests that run later.
+        server_mod = sys.modules.get("jarvis.api.server")
+        if server_mod is not None:
+            server_mod.JarvisRequestHandler.stop_background_syncer()
         self.thread.join(timeout=5)
 
     def _get(self, path, timeout=5.0):

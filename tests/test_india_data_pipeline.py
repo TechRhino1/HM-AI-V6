@@ -12,6 +12,7 @@ from jarvis.india.india_engine import INDIA_ENGINE
 from jarvis.india.nse_bse_adapter import fetch_nse_historical, fetch_live_india_quote
 
 
+@pytest.mark.network   # fetches live NSE bars over the internet
 def test_nse_historical_multi_timeframe():
     """Verify real multi-bar OHLCV fetching for NIFTY and RELIANCE across timeframes."""
     # Daily bars

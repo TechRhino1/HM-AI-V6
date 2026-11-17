@@ -27,6 +27,14 @@ from jarvis.india.nse_bse_adapter import (
 logger = logging.getLogger("jarvis.india_prediction_engine")
 
 
+
+def premium_levels(entry: float):
+    """Option-buy levels: stop at -30% of premium, targets +40% / +80%.
+
+    The stop used to be max(5.0, entry * 0.70): on any premium below ~7.14 (cheap OTM or
+    expiry-day options) that put the stop ABOVE the entry and above both targets."""
+    return round(entry * 0.70, 2), round(entry * 1.40, 2), round(entry * 1.80, 2)
+
 class IndiaPredictionEngine:
     """
     Institutional Predictive Analytics & Options Advisor Engine for Indian Markets.
@@ -451,9 +459,7 @@ class IndiaPredictionEngine:
         call_iv = float(call_row["call"].get("iv", 16.0)) if call_row else 16.0
 
         ce_entry = round(call_ltp, 1)
-        ce_sl = round(max(5.0, ce_entry * 0.70), 1)  # 30% max premium stop
-        ce_tp1 = round(ce_entry * 1.40, 1)            # +40% target
-        ce_tp2 = round(ce_entry * 1.80, 1)            # +80% target
+        ce_sl, ce_tp1, ce_tp2 = premium_levels(ce_entry)
         ce_capital = round(ce_entry * lot_size, 2)
         ce_risk = round((ce_entry - ce_sl) * lot_size, 2)
         ce_reward = round((ce_tp1 - ce_entry) * lot_size, 2)
@@ -467,9 +473,7 @@ class IndiaPredictionEngine:
         put_iv = float(put_row["put"].get("iv", 15.8)) if put_row else 15.8
 
         pe_entry = round(put_ltp, 1)
-        pe_sl = round(max(5.0, pe_entry * 0.70), 1)
-        pe_tp1 = round(pe_entry * 1.40, 1)
-        pe_tp2 = round(pe_entry * 1.80, 1)
+        pe_sl, pe_tp1, pe_tp2 = premium_levels(pe_entry)
         pe_capital = round(pe_entry * lot_size, 2)
         pe_risk = round((pe_entry - pe_sl) * lot_size, 2)
         pe_reward = round((pe_tp1 - pe_entry) * lot_size, 2)

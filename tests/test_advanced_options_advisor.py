@@ -91,3 +91,10 @@ def test_advisor_custom_query_and_strategy_bias():
     adv_put = INDIA_PREDICTIONS.get_options_expert_advisor("BANKNIFTY", strategy_type="best_put")
     assert "put_opportunity" in adv_put
     assert "BANKNIFTY" in adv_put["ai_advisor_analysis"]
+
+
+@pytest.mark.parametrize("entry", [0.1, 2.05, 6.9, 150.0])
+def test_premium_levels_keep_stop_below_entry_below_targets(entry):
+    from jarvis.india.prediction_engine import premium_levels
+    sl, tp1, tp2 = premium_levels(entry)
+    assert 0 < sl < entry < tp1 < tp2

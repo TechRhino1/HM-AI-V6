@@ -70,7 +70,14 @@ def test_sebi_hedge_margin_benefit():
     assert mb["hedge_benefit_inr"] > 0
     assert mb["final_margin_required_inr"] < mb["gross_margin_inr"]
 
-def test_multi_leg_payoff_curve():
+def test_multi_leg_payoff_curve(monkeypatch):
+    # Hermetic chain: live LTPs near expiry (e.g. 0.1 on expiry day) made max_loss round to 0.
+    # With ltp 0 every leg is priced by Black-Scholes at 7 days to expiry.
+    def chain(symbol, expiry=None):
+        rows = [{"strike": 25000.0 + 50 * k, "call": {"ltp": 0.0}, "put": {"ltp": 0.0}} for k in range(-10, 11)]
+        return {"spot_price": 25000.0, "atm_strike": 25000.0, "strike_step": 50.0, "expiry": "TEST",
+                "expiry_schedule": {"days_to_expiry": 7}, "chain": rows}
+    monkeypatch.setattr(INDIA_OPTIONS, "generate_option_chain", chain)
     strategy_res = INDIA_OPTIONS.generate_ai_options_strategy("NIFTY", "BULL_CALL_SPREAD")
     assert strategy_res is not None
     assert "spot_grid" in strategy_res
@@ -97,3 +104,17 @@ if __name__ == "__main__":
     test_multi_leg_payoff_curve()
     test_single_option_buy_signals()
     print("ALL INDIA OPTIONS TESTS PASSED!")
+
+
+
+def test_expiry_schedule_follows_the_2025_swap_and_ist_close():
+    from datetime import datetime, timezone
+    # Tue 2026-11-17 09:00 UTC = 14:30 IST: NIFTY expires TODAY (NSE Tuesday since 1 Sep 2025)
+    tue_open = datetime(2026, 11, 17, 9, 0, tzinfo=timezone.utc)
+    assert NSE_RULES.get_expiry_schedule("NIFTY", now=tue_open)["days_to_expiry"] == 0
+    # 10:30 UTC = 16:00 IST, after the 15:30 IST close: roll to next Tuesday
+    tue_closed = datetime(2026, 11, 17, 10, 30, tzinfo=timezone.utc)
+    assert NSE_RULES.get_expiry_schedule("NIFTY", now=tue_closed)["days_to_expiry"] == 7
+    # SENSEX (BSE) expires Thursday
+    sx = NSE_RULES.get_expiry_schedule("SENSEX", now=tue_open)
+    assert sx["days_to_expiry"] == 2 and sx["expiry_day_name"] == "Thursday"

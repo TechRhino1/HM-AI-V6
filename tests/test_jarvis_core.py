@@ -94,7 +94,10 @@ class TestJarvisCore(unittest.TestCase):
 
     def test_strategy_bandit_negative_rewards(self):
         """§14: Verify bandit allows negative reward accumulation and handles unknown keys."""
-        bandit = StrategyBandit(state_file="scratch_bandit_test.json")
+        import tempfile, os as _os
+        _tmp = tempfile.mkdtemp()
+        # absolute temp path: a bare name resolves under DATA_DIR and left a file in the live data dir
+        bandit = StrategyBandit(state_file=_os.path.join(_tmp, "scratch_bandit_test.json"))
         bandit.record_outcome("TREND_FOLLOWING", is_win=0, r_multiple=0.0, regime="TREND_BULL")
         bandit.record_outcome("UNKNOWN_STRATEGY", is_win=0, r_multiple=0.0, regime="UNKNOWN_REGIME")
         boosts = bandit.get_strategy_boosts("TREND_BULL")

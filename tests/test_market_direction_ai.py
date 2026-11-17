@@ -208,6 +208,9 @@ class TestMarketDirectionAI(unittest.TestCase):
         vol_analyst = VolatilityAnalyst()
         risk_analyst = RiskAnalyst()
         macro_analyst = MacroAnalyst()
+        # "No macro shock" must be stated, not assumed: the shared news engine otherwise serves
+        # today's real calendar (a released USD print with actual vs forecast IS a shock).
+        macro_analyst.news_calendar = []
 
         liq_rep = liq_analyst.analyze(ctx, regime)
         vol_rep = vol_analyst.analyze(ctx, regime)

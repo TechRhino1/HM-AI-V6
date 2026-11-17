@@ -72,8 +72,10 @@ def test_sync_tags_the_account_costs_and_broker_exit_reason(db):
 
 
 def test_decision_journal_writes_changes_only():
-    from tests.conftest import _DECISION_JOURNAL_DIR
     from jarvis.observability import decision_journal
+    # Importing tests.conftest re-executed it as a second module and re-pointed the shared
+    # registry/journal dirs for every later test; ask the journal for its dir instead.
+    _DECISION_JOURNAL_DIR = decision_journal._dir()
     d = SimpleNamespace(decision="WAIT", bias="SELL", strategy="TREND_PULLBACK", ai_score=60.0,
                         model_confidence=0.55, risk_reward_ratio=2.5, expected_value=0.3, entry_price=1.0,
                         stop_loss=1.01, take_profit=0.975, waiting_reasons=["RISK: cap"],

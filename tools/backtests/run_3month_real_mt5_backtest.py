@@ -12,8 +12,6 @@ executes event-driven backtest across all 14 institutional symbols, and verifies
 import os
 import sys
 
-os.environ["JARVIS_BACKTEST_MODE"] = "1"
-os.environ["JARVIS_OFFLINE_MODE"] = "1"
 
 import json
 import time
@@ -252,4 +250,6 @@ def run_3month_backtest(initial_balance_per_symbol: float = 10000.0):
     print("Results saved to 3month_mt5_backtest_summary.json", flush=True)
 
 if __name__ == "__main__":
+    os.environ["JARVIS_BACKTEST_MODE"] = "1"  # set here, not at import: importing must not change process state
+    os.environ["JARVIS_OFFLINE_MODE"] = "1"  # set here, not at import: importing must not change process state
     run_3month_backtest()

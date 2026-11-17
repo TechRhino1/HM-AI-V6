@@ -1487,7 +1487,10 @@ class JarvisOrchestrator:
                         _sym_pend = []
                         try:
                             for _o in (self.mt5_client.get_pending_orders() or []):
-                                if symbol.upper() in str(getattr(_o, "symbol", "")).upper():
+                                # Pending orders are dicts; getattr() never matched, so a resting
+                                # order never kept the symbol in scan out of its session window.
+                                _o_sym = _o.get("symbol", "") if isinstance(_o, dict) else getattr(_o, "symbol", "")
+                                if symbol.upper() in str(_o_sym).upper():
                                     _sym_pend.append(_o)
                         except Exception:
                             _sym_pend = []

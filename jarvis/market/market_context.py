@@ -496,15 +496,19 @@ class MarketContextEngine:
             quality += 20.0
         context_quality = min(100.0, quality)
 
-        # 11. Intermarket Crypto Lead-Lag Analysis (ETH/BTC relative strength)
-        crypto_lead_lag = self._compute_crypto_lead_lag(symbol)
-
-        # 12. Cross-Market SMT Divergence (Metals, Indices, Forex)
-        cross_market_smt = self._compute_cross_market_smt(symbol)
-        metals_smt = self._compute_metals_smt(symbol)
-
-        # 13. Synthetic Dollar Index (DXY) Intermarket Intelligence
-        intermarket_dxy = self._compute_intermarket_dxy(symbol)
+        # 11-13. Cross-market features (ETH/BTC lead-lag, SMT divergence, synthetic DXY) read LIVE
+        # MT5 bars at position 0 - "now". In a backtest (offline mode) that injected today's market
+        # into every historical decision (look-ahead, and non-deterministic: e.g. a -20 "metals SMT
+        # opposes BUY" penalty on a 2024 gold bar). They have no point-in-time source, so they are
+        # neutral offline.
+        from jarvis.config.runtime import is_offline
+        if is_offline():
+            crypto_lead_lag, cross_market_smt, metals_smt, intermarket_dxy = {}, {}, {}, {}
+        else:
+            crypto_lead_lag = self._compute_crypto_lead_lag(symbol)
+            cross_market_smt = self._compute_cross_market_smt(symbol)
+            metals_smt = self._compute_metals_smt(symbol)
+            intermarket_dxy = self._compute_intermarket_dxy(symbol)
 
         return MarketContext(
             symbol=symbol,

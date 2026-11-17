@@ -34,7 +34,9 @@ class TestAuditWiringAndRedundancyFix(unittest.TestCase):
 
     def test_decision_engine_bandit_wiring(self):
         """Verify that DecisionEngine passes strategy_bandit to StrategySelector."""
-        shared_bandit = StrategyBandit()
+        import tempfile, os as _os
+        # never the default live state file (data/jarvis_bandit_state.json)
+        shared_bandit = StrategyBandit(state_file=_os.path.join(tempfile.mkdtemp(), "bandit.json"))
         engine = DecisionEngine(strategy_bandit=shared_bandit)
         self.assertIs(engine.strategy_selector.bandit, shared_bandit)
         

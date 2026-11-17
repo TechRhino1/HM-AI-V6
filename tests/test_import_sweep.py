@@ -9,6 +9,19 @@ import importlib
 import pytest
 
 def test_all_modules_import_cleanly():
+    # Importing a script must not leak process state into later tests (it used to set
+    # JARVIS_BACKTEST_MODE and logging.disable(CRITICAL), failing ~11 unrelated tests).
+    import logging
+    env_before, disable_before = dict(os.environ), logging.root.manager.disable
+    try:
+        _sweep()
+    finally:
+        os.environ.clear()
+        os.environ.update(env_before)
+        logging.disable(disable_before)
+
+
+def _sweep():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)

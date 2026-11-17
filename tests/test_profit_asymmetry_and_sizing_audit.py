@@ -159,53 +159,50 @@ def test_crypto_local_sl_and_normalized_sizing():
     assert lots_eth >= 0.25, f"ETH lot size ({lots_eth}) is too small! Expected >= 0.25 lots."
 
 
-def test_execution_engine_blocks_distorted_broker_stops():
-    """Verify ExecutionEngine blocks orders where broker stop level severely distorts the trade."""
-    exec_engine = ExecutionEngine(mt5_client=None, state_manager=None)
-    
+def _distorted_gold_decision():
     from jarvis.data.schemas import TradeQualityGateResult
-    decision = DecisionObject(
-        symbol="GOLD.i#",
-        timestamp=datetime.now(timezone.utc),
+    return DecisionObject(
+        symbol="GOLD.i#", timestamp=datetime.now(timezone.utc),
         regime=RegimeOutput(primary_regime=MarketRegime.RANGE, probabilities={"RANGE": 0.8}, confidence=0.8),
-        bias="SELL",
-        probabilities={"SELL": 0.8},
-        strategy="SCALP",
-        entry_price=4159.31,
-        stop_loss=4160.62,   # 1.31 pts
-        take_profit=4156.95, # 2.36 pts
-        risk_reward_ratio=1.80,
-        calculated_risk_percent=1.0,
-        expected_value=1.5,
-        model_confidence=0.75,
-        adversarial_penalty=0.0,
-        invalidation_levels=["4161.00"],
-        bull_case=["bounce"],
-        bear_case=["breakdown"],
-        risk_factors=[],
-        quality_gate=TradeQualityGateResult(passed=True, checks={}),
-        decision="EXECUTE",
-        execution_authorized=True,
-        order_type="MARKET",
-        sl_distance=1.31,
-        tp_distance=2.36,
+        bias="SELL", probabilities={"SELL": 0.8}, strategy="SCALP",
+        entry_price=4159.31, stop_loss=4160.62, take_profit=4156.95,   # 1.31 / 2.36 pts
+        risk_reward_ratio=1.80, calculated_risk_percent=1.0, expected_value=1.5, model_confidence=0.75,
+        adversarial_penalty=0.0, invalidation_levels=["4161.00"], bull_case=["bounce"], bear_case=["breakdown"],
+        risk_factors=[], quality_gate=TradeQualityGateResult(passed=True, checks={}), decision="EXECUTE",
+        execution_authorized=True, order_type="MARKET", sl_distance=1.31, tp_distance=2.36,
     )
-    
-    sym_spec = {
-        "name": "GOLD.i#",
-        "point": 0.01,
-        "digits": 2,
-        "trade_stops_level": 2400,  # 24.00 points!
-        "spread": 25,
-        "volume_min": 0.01,
-        "volume_step": 0.01,
-        "trade_tick_size": 0.01,
-        "trade_tick_value": 1.0,
-    }
-    
-    res = exec_engine.execute_decision(decision, lots=0.01, sym_spec=sym_spec)
-    assert res.get("status") == "BLOCKED", f"Expected BLOCKED, got {res}"
-    assert "stops_level" in str(res.get("reason")), f"Expected stops_level in reason: {res}"
+
+
+_DISTORTED_SPEC = {"name": "GOLD.i#", "point": 0.01, "digits": 2, "trade_stops_level": 2400,   # 24.00 points
+                   "spread": 25, "volume_min": 0.01, "volume_step": 0.01,
+                   "trade_tick_size": 0.01, "trade_tick_value": 1.0}
+
+
+def _engine(equity):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.send_market_order.return_value = {"status": "FILLED", "ticket": 1, "price": 4159.31}
+    return ExecutionEngine(mt5_client=client, state_manager=SimpleNamespace(
+        account=SimpleNamespace(equity=equity, balance=equity))), client
+
+
+def test_distorted_broker_stops_block_when_the_min_lot_breaches_the_risk_cap():
+    """0ac7cf2: a broker stops_level wider than the planned stop no longer blocks outright; the stop
+    is widened to the broker minimum. It still blocks when even the minimum lot at that wider stop
+    breaches the min-lot risk ceiling ($24 at 0.01 gold vs 2.5% of $545)."""
+    eng, client = _engine(545.0)
+    res = eng.execute_decision(_distorted_gold_decision(), lots=0.01, sym_spec=dict(_DISTORTED_SPEC))
+    assert res.get("status") == "BLOCKED" and "min-lot ceiling" in str(res.get("reason")), res
+    client.send_market_order.assert_not_called()
+
+
+def test_distorted_broker_stops_are_widened_with_the_target_on_a_large_account():
+    eng, client = _engine(100_000.0)
+    d = _distorted_gold_decision()
+    eng.execute_decision(d, lots=0.01, sym_spec=dict(_DISTORTED_SPEC))
+    assert d.stop_loss - d.entry_price >= 24.0 - 1e-6          # SELL stop moved to the broker minimum
+    assert d.risk_reward_ratio >= 2.0 - 1e-6                    # gold target expanded to >= 2R
 
 
 def test_position_monitor_breathing_room():

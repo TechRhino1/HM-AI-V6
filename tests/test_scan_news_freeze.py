@@ -168,6 +168,10 @@ class TestTheFreezeRemovesTheNetworkFromTheMeasurement:
             calls.append(1), [{"currency": "USD", "impact": "high", "title": "t"}]
         )[1]
         try:
+            # A real background refresh started by an earlier test (orchestrator cycles call the
+            # shared engine with max_wait) would be followed instead of fetching, and would then
+            # stamp _last_fetch_time fresh. Let any in-flight refresh finish first.
+            engine._fetch_done.wait(35)
             engine._last_fetch_time = 0.0
             engine._cached_news = []
             engine.get_news_calendar()

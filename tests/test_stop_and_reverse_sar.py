@@ -65,7 +65,10 @@ class TestStopAndReverseAndSellFromTop(unittest.TestCase):
         # In discount with oversold RSI, order_type must be LIMIT seeking Premium retracement ("Sell from the top")
         self.assertEqual(decision.order_type, "LIMIT", "Selling into discount floor must route to LIMIT order")
         self.assertGreater(decision.entry_price, ctx.current_price, "Limit entry must be higher than market price (seeking premium)")
-        self.assertGreaterEqual(decision.entry_price, 4165.0, "Entry price must target equilibrium or bearish order block")
+        # 485404e caps a DAY limit entry at 0.8 ATR from market (an equilibrium limit 15 points away
+        # rarely fills): the entry seeks premium but no further than 4150.36 + 0.8 * 5.0.
+        self.assertLessEqual(decision.entry_price, ctx.current_price + 0.8 * 5.0 + 1e-6,
+                             "DAY limit entry must stay within 0.8 ATR of market")
 
     def test_sar_position_flip_logic(self):
         """Opposing flat/losing trade is closed to allow reversal trade to execute."""
@@ -261,6 +264,12 @@ class TestStopAndReverseAndSellFromTop(unittest.TestCase):
             )
 
             orch.scan_all_modes = MagicMock(return_value=(cand, [cand], [("XAUUSD", "DAY_TRADING", {"decision": cand_dec})]))
+            # The calibrated XAUUSD policy judges the regime classified from LIVE bars, so whether
+            # pre-authorization passed depended on today's market (and on earlier tests' state).
+            orch._calibrated_entry_decision = MagicMock(return_value=None)
+            # The news gate reads the live calendar on the wall clock: inside +-30 min of a real
+            # HIGH-impact release the pre-authorization is (correctly) refused.
+            orch._is_news_blackout = MagicMock(return_value=False)
 
             orch._orchestration_loop_single_pass(dry_run=False)
 

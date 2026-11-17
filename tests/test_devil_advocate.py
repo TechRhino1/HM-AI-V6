@@ -654,15 +654,19 @@ class TestThreatPriceLevel:
 
     def test_a_buy_falls_back_to_the_nearest_resistance_key_level(self):
         st = StructureContext(bias="NEUTRAL", supply_zone=(0.0, 0.0),
-                              key_levels=[{"price": 130.0}, {"price": 107.0},
-                                          {"price": 80.0}])
+                              key_levels=[{"price": 130.0, "touches": 2}, {"price": 107.0, "touches": 2},
+                                          {"price": 80.0, "touches": 2}])  # d44a3a8: only confirmed levels (>=2 touches)
         assert critique("BUY", session=PRIME, structure=st, price=100.0).threat_price_level == 107.0
 
     def test_a_sell_falls_back_to_the_nearest_support_key_level(self):
         st = StructureContext(bias="NEUTRAL", demand_zone=(0.0, 0.0),
-                              key_levels=[{"price": 130.0}, {"price": 93.0},
-                                          {"price": 80.0}])
+                              key_levels=[{"price": 130.0, "touches": 2}, {"price": 93.0, "touches": 2},
+                                          {"price": 80.0, "touches": 2}])  # d44a3a8: only confirmed levels (>=2 touches)
         assert critique("SELL", session=PRIME, structure=st, price=100.0).threat_price_level == 93.0
+
+    def test_a_single_touch_key_level_is_not_a_threat(self):
+        st = StructureContext(bias="NEUTRAL", supply_zone=(0.0, 0.0), key_levels=[{"price": 107.0}])
+        assert critique("BUY", session=PRIME, structure=st, price=100.0).threat_price_level is None
 
     def test_a_zero_priced_key_level_is_excluded(self):
         st = StructureContext(bias="NEUTRAL", supply_zone=(0.0, 0.0),

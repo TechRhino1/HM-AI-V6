@@ -137,7 +137,15 @@ class ExitPolicy:
         style_str = str(trade_style or "SWING").upper().strip()
         reg_key = str(regime or "NORMAL").upper().strip()
 
-        cache_key = (sym_str, style_str, reg_key, digits)
+        # The profile's fixed target switches the whole exit mode, so it is part of the key: a policy
+        # cached under one fixed_target_r was otherwise served after the profile changed (a stale
+        # entry written by a concurrent monitor thread outlived a test fixture's cache clear).
+        try:
+            from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config as _gspc
+            _fixed_key = getattr(_gspc(symbol), "fixed_target_r", None)
+        except Exception:
+            _fixed_key = None
+        cache_key = (sym_str, style_str, reg_key, digits, _fixed_key)
         if cache_key in _RESOLVED_POLICY_CACHE:
             return _RESOLVED_POLICY_CACHE[cache_key]
 
