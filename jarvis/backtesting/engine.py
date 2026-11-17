@@ -588,7 +588,7 @@ class BacktestEngine:
                     closed = True
 
                 # 5.1b Target hit (conservative: high >= TP for BUY, low <= TP for SELL)
-                elif (high >= open_trade["tp"]) if open_trade["type"] == "BUY" else (low <= open_trade["tp"]):
+                elif open_trade.get("tp") is not None and ((high >= open_trade["tp"]) if open_trade["type"] == "BUY" else (low <= open_trade["tp"])):
                     exit_price = open_trade["tp"]
                     result = "TP"
                     closed = True

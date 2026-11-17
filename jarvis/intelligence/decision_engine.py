@@ -1206,17 +1206,22 @@ class DecisionEngine:
             elif tentative_bias == "SELL" and d1_b == "BULLISH" and ts_val >= 20.0 and not has_structure:
                 low_beta_fx_macro_valid = False
 
-        # 11. JPY Secular Bull/Carry Alignment: USDJPY is driven by US/JP rate differential; block counter-trend shorts unless D1 is decisively bearish
+        # 11. JPY Secular Bull/Carry Alignment: USDJPY is driven by US/JP rate differential; block counter-trend shorts unless macro frame is decisively bearish
         jpy_momentum_valid = True
         if is_jpy:
             d1_b = mtf_align.get("D1", "NEUTRAL") if isinstance(mtf_align, dict) else "NEUTRAL"
+            governing_macro = macro_bias if ("SCALP" in t_style_check or "DAY" in t_style_check) else d1_b
             ts_v = getattr(context.momentum, "trend_score", 0.0) if hasattr(context, "momentum") else 0.0
             adx_v = getattr(context.momentum, "adx", 0.0) if hasattr(context, "momentum") else 0.0
-            if tentative_bias == "SELL" and not (d1_b == "BEARISH" and ts_v <= -30.0):
+            has_intraday_breakdown = (
+                ("DAY" in t_style_check or "SCALP" in t_style_check)
+                and (getattr(context.structure, "bos_type", "") == "BEARISH" or getattr(context.structure, "choch_type", "") == "BEARISH" or ts_v <= -25.0)
+            )
+            if tentative_bias == "SELL" and not ((governing_macro == "BEARISH" and ts_v <= -20.0) or has_intraday_breakdown):
                 jpy_momentum_valid = False
             elif adx_v < 18.0 and abs(ts_v) < 15.0:
                 jpy_momentum_valid = False
-            elif ai_score < 72.0 or calibrated_win_p < 0.62:
+            elif ai_score < 68.0 or calibrated_win_p < required_win_p:
                 jpy_momentum_valid = False
 
         # 12. High-Beta Crypto (SOLUSD) Confluence Guard
@@ -1299,16 +1304,16 @@ class DecisionEngine:
             if not (ai_score >= 80.0 and calibrated_win_p >= 0.60):
                 regime_viable = False
 
-        # Honest base rate gate (Phase 1): final_win_p must exceed honest base rate + 5% and be >= 50%
+        # Honest base rate gate (Phase 1): final_win_p must align with honest base rate (>= 50% and within tolerance)
         honest_base_rate_ok = True
         honest_base_rate_info = ""
         if honest_base_rate is not None and isinstance(honest_base_rate, HonestBaseRate):
             hbr = honest_base_rate
             if hbr.n >= 10:
-                min_wr = hbr.win_rate + 0.05
-                honest_base_rate_ok = final_win_p >= min_wr and final_win_p >= 0.50
+                min_wr = max(0.50, hbr.win_rate - 0.02)
+                honest_base_rate_ok = final_win_p >= min_wr
                 if not honest_base_rate_ok:
-                    logger.warning(f"[{context.symbol}] Honest base rate gate FAILED: final_win_p={final_win_p:.2f} < honest_wr+5%={hbr.win_rate + 0.05:.2f} (honest wr={hbr.win_rate:.1%}, n={hbr.n})")
+                    logger.warning(f"[{context.symbol}] Honest base rate gate FAILED: final_win_p={final_win_p:.2f} < min_honest_wr={min_wr:.2f} (honest wr={hbr.win_rate:.1%}, n={hbr.n})")
             else:
                 logger.debug(f"[{context.symbol}] Honest base rate n={hbr.n} < 10, gate skipped")
         else:

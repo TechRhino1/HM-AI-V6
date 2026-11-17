@@ -183,6 +183,7 @@ def run_one(args: Dict[str, Any]) -> Dict[str, Any]:
             "profile": "deployed" if prof is not None else "none",
             "elapsed_sec": round(elapsed, 1),
             "n_trades": len(trades),
+            "rejection_stats": res.get("rejection_stats", {}),
             "metrics": metrics,
             "trades": trades,
         }

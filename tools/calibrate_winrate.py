@@ -56,31 +56,40 @@ PROFILE_PATH = REPO_ROOT / "config" / "winrate_profiles.json"
 SLIPPAGE_PIPS = 0.5
 
 
-def discover(days: int = 95) -> list[str]:
-    """Symbols that have a candidate table for this window.
-
-    The default 95-day tables carry no window suffix, so a bare
-    ``*_candidates.parquet`` glob also matches other windows' tables
-    (``BTCUSD_183d_candidates.parquet``) and would invent a symbol called
-    ``BTCUSD_183d`` that has no price data. Reject any name that still carries a
-    ``_<n>d`` window marker after the expected suffix has been stripped.
-    """
+def discover(days: int = 95, timeframe: str = "H1") -> list[str]:
+    """Symbols that have a candidate table for this window."""
     if not SIGNAL_DIR.exists():
         return []
-    suffix = "" if days == 95 else f"_{days}d"
-    out: list[str] = []
-    for p in SIGNAL_DIR.glob(f"*{suffix}_candidates.parquet"):
-        name = p.name.replace(f"{suffix}_candidates.parquet", "")
-        if _WINDOW_MARKER.search(name):
-            logger.debug("discover: ignoring %s (belongs to another window)", p.name)
-            continue
-        out.append(name)
+    out = set()
+    patterns = [
+        f"*_{timeframe}_{days}d_candidates.parquet",
+        f"*_{days}d_candidates.parquet",
+    ]
+    if days == 95:
+        patterns.append("*_candidates.parquet")
+    for pat in patterns:
+        for p in SIGNAL_DIR.glob(pat):
+            name = p.name
+            for sfx in (f"_{timeframe}_{days}d_candidates.parquet", f"_{days}d_candidates.parquet", "_candidates.parquet"):
+                if name.endswith(sfx):
+                    sym = name[:-len(sfx)]
+                    if sym and not _WINDOW_MARKER.search(sym):
+                        out.add(sym)
+                    break
     return sorted(out)
 
 
-def candidate_path(symbol: str, days: int = 95) -> Path:
-    suffix = "" if days == 95 else f"_{days}d"
-    return SIGNAL_DIR / f"{symbol}{suffix}_candidates.parquet"
+def candidate_path(symbol: str, days: int = 95, timeframe: str = "H1") -> Path:
+    candidates = [
+        SIGNAL_DIR / f"{symbol}_{timeframe}_{days}d_candidates.parquet",
+        SIGNAL_DIR / f"{symbol}_{days}d_candidates.parquet",
+    ]
+    if days == 95:
+        candidates.append(SIGNAL_DIR / f"{symbol}_candidates.parquet")
+    for cp in candidates:
+        if cp.exists():
+            return cp
+    return candidates[0]
 
 
 def main() -> int:

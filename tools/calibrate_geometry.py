@@ -77,8 +77,12 @@ def main() -> int:
 
     changed = 0
     for sym in syms:
-        dpath = REAL_DIR / sym / f"{sym}_H1_95d.parquet"
-        cpath = SIGNAL_DIR / f"{sym}_candidates.parquet"
+        dpath = REAL_DIR / sym / f"{sym}_H1_183d.parquet"
+        if not dpath.exists():
+            dpath = REAL_DIR / sym / f"{sym}_H1_95d.parquet"
+        cpath = SIGNAL_DIR / f"{sym}_H1_183d_candidates.parquet"
+        if not cpath.exists():
+            cpath = SIGNAL_DIR / f"{sym}_candidates.parquet"
         if sym not in profiles or not dpath.exists() or not cpath.exists():
             continue
         prof = profiles[sym]

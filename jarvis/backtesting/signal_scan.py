@@ -147,6 +147,10 @@ class SignalScanner:
         # production: its entire purpose is "the SAME production path", and a
         # sequential cluster is a path production never takes.
         self.analyst_cluster = ParallelAnalystCluster()
+        # No point-in-time economic calendar exists for historical bars. Disabling
+        # news_calendar prevents the macro analyst from querying TODAY's live calendar.
+        if hasattr(self.analyst_cluster, "macro_analyst"):
+            self.analyst_cluster.macro_analyst.news_calendar = []
         self.decision_engine = DecisionEngine()
 
     # ── helpers ────────────────────────────────────────────────────────────
