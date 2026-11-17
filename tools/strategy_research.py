@@ -22,9 +22,11 @@ Swap conversion (one night, price units per 1 contract unit; x tick_value/tick_s
 Usage:
     python tools/strategy_research.py --fetch <bars.pkl>      # freeze closed bars + symbol_info from MT5
     python tools/strategy_research.py <bars.pkl> <out.json>   # run every candidate, print markdown table
-    python tools/strategy_research.py --selftest
+    python tools/strategy_research.py --fetch-universe <bars.pkl>    # UNIVERSE (crypto, metals, forex, indices) H1/H4/D1
+    python tools/strategy_research.py <bars.pkl> <out.json> --trend  # Donchian + TSMOM ensembles only
+    python tools/strategy_research.py --selftest              # includes a look-ahead perturbation check
 
-Results and conclusions: reports/CRYPTO_GOLD_RESEARCH_2026-11-16.md
+Results and conclusions: reports/CRYPTO_GOLD_RESEARCH_2026-11-16.md; universe: reports/PORTFOLIO_ROUTER_RESEARCH_2026-11-17.md
 """
 import os, sys, json, pickle
 import numpy as np
@@ -45,11 +47,23 @@ FOREX = {  # used by tools/range_research.py; spreads ~constant in price units
     "USDJPY": ("USDJPY#", 70, 400, "usd"),  # 1970s ~300
     "USDCAD": ("USDCAD#", 0.9, 1.8, "usd"),
     "AUDUSD": ("AUDUSD#", 0.4, 1.2, "usd"),
+    "NZDUSD": ("NZDUSD#", 0.3, 1.0, "usd"),
+    "USDCHF": ("USDCHF#", 0.6, 4.5, "usd"),   # 1970s ~4.3
 }
+INDICES = {  # XM cash CFDs (jarvis/data/symbol_registry.py aliases); spread ~constant in points, conservative early
+    "US30": ("US30Cash#", 5_000, 100_000, "usd"),
+    "NAS100": ("US100Cash#", 500, 60_000, "usd"),
+    "US500": ("US500Cash#", 300, 15_000, "usd"),
+    "GER40": ("GER40Cash#", 2_000, 50_000, "usd"),
+    "UK100": ("UK100Cash#", 2_500, 20_000, "usd"),
+}
+METALS = {"XAGUSD": ("SILVER.i#", 3, 300, "usd")}
+UNIVERSE = {**SYMBOLS, **FOREX, **INDICES, **METALS}
 TFS = ("M5", "M15", "H1", "H4", "D1")
 INFO_KEYS = ("point", "digits", "trade_contract_size", "volume_min", "trade_tick_value", "trade_tick_size",
              "swap_long", "swap_short", "swap_mode", "swap_rollover3days", "currency_profit", "spread")
 RISK_FRAC, ACCOUNTS = 0.025, (100.0, 545.0)
+TREND_CAP = 0.05        # risk.min_lot_max_risk_pct_trend (Phase D): min-lot cap for the trend portfolio, $545 only
 STOP_ATR = 3.0          # catastrophic / trailing stop width for the trend and pullback candidates
 AFFORD_MIN = 0.80       # share of trades whose min-lot risk must fit 2.5% of the account
 NS_MIN = 60_000_000_000
@@ -57,7 +71,7 @@ NS_MIN = 60_000_000_000
 
 # ── data ─────────────────────────────────────────────────────────────────────
 
-def fetch(path, symbols=None):
+def fetch(path, symbols=None, tfs=TFS):
     """Freeze closed bars (max terminal history) and symbol_info per symbol; refuse non-real prices."""
     import MetaTrader5 as mt5
     assert mt5.initialize(), mt5.last_error()
@@ -67,7 +81,7 @@ def fetch(path, symbols=None):
         assert mt5.symbol_select(sym, True), sym
         info = mt5.symbol_info(sym)._asdict()
         frames = {}
-        for tf in TFS:
+        for tf in tfs:
             for _ in range(5):  # the terminal's IPC drops large requests while the live engine is busy
                 r = mt5.copy_rates_from_pos(sym, getattr(mt5, "TIMEFRAME_" + tf), 1, count)  # pos 1: closed bars only
                 if r is not None and len(r):
@@ -196,7 +210,7 @@ def run(A, sig, ex):
     """One position at a time. Raw per-trade lists for the strategy, benchmarks and spread x2.
     For long-only candidates 'always_long' at the same entries would be the strategy itself, so it is
     replaced by longs on 5 random bars (seeded) held the same number of bars with the same ATR stop."""
-    raw = {k: [] for k in ("strategy", "always_long", "flipped", "spread_x2", "time", "sd", "swap_r")}
+    raw = {k: [] for k in ("strategy", "always_long", "flipped", "spread_x2", "time", "sd", "swap_r", "side", "i", "j")}
     busy, long_only, rng, n = -1, all(sd_[1] == 1 for sd_ in sig), np.random.default_rng(0), len(A["c"])
     ex0 = ex
     for item in sig:  # (i, side, stop_dist[, target_r]) -- a per-trade target overrides ex["tgt"]
@@ -219,6 +233,7 @@ def run(A, sig, ex):
             b = walk(A, i, s2, sd, ex, side, m)
             raw[k].append(b[0] if b else 0.0)
         raw["time"].append(A["t"].iat[i]); raw["sd"].append(sd); raw["swap_r"].append(sw)
+        raw["side"].append(side); raw["i"].append(i); raw["j"].append(j)
         busy = j
     return raw
 
@@ -243,6 +258,7 @@ def summarise(raw, info, real_start):
     s["min_lot_risk_median"] = round(float(np.median(risk)), 2)
     for acct in ACCOUNTS:
         s[f"afford_{int(acct)}"] = round(float((risk <= RISK_FRAC * acct).mean()), 3)
+    s["afford_545_trend"] = round(float((risk <= TREND_CAP * 545.0).mean()), 3)
     s["account_for_80pct"] = round(float(np.percentile(risk, 80) / RISK_FRAC), 0)   # 80% of trades fit 2.5%
     s["swap_r_mean"] = round(float(np.mean(raw["swap_r"])), 3)
     return s
@@ -264,6 +280,11 @@ def verdict(s, name, tf):
     acct = 545 if name == "XAUUSD" else 100
     if s[f"afford_{acct}"] < AFFORD_MIN: why.append(f"min lot unaffordable at ${acct} ({s[f'afford_{acct}']:.0%} fit)")
     return not why, why, tf == "D1" and st["n"] < 100
+
+
+def edge_passes(s):
+    """verdict() with the min-lot affordability reasons dropped: the portfolio simulation applies the cap itself."""
+    return s["strategy"]["n"] > 0 and all(r.startswith("min lot") for r in s["reasons"])
 
 
 # ── candidates (fixed a-priori parameters) ──────────────────────────────────
@@ -342,41 +363,62 @@ def bars_per_month(d):
     return int(round((d.t_open > last - pd.Timedelta(days=365)).sum() / 12))
 
 
-def research(data):
-    res, rows = {}, []
-    for name, blob in data.items():
-        info, fr = {**blob["info"], "price_now": float(blob["frames"]["H1"].close.iat[-1])}, blob["frames"]
-        weekends = bool((fr["H1"].time.dt.dayofweek >= 5).any())
-        h = fr["H1"][fr["H1"].time > fr["H1"].time.iloc[-1] - pd.Timedelta(days=365)]
-        rs = h.spread * info["point"]
-        ref = {"bps": float(np.median(rs / h.close)), "usd": float(np.median(rs)), "model": SYMBOLS[name][3]}
-        slip = 0.5 * ref["usd"]   # half the recent median spread: gold ~$0.10, as gold_research
-        P = {tf: prep(fr[tf], tf, info, ref) for tf in TFS if tf in fr}
-        yr = P["H1"].groupby(P["H1"].t_open.dt.year).modeled.mean()      # real era: from the first year after
-        bad_years = yr[yr >= 0.05].index                                  # which every year is >= 95% real spreads
-        real_start = pd.Timestamp(f"{bad_years.max() + 1}-01-01") if len(bad_years) else P["H1"].t_open.iat[0]
+def setup(name, blob):
+    """Costs, spread model, real-spread era and per-TF arrays for one symbol (H1 is required)."""
+    info, fr = {**blob["info"], "price_now": float(blob["frames"]["H1"].close.iat[-1])}, blob["frames"]
+    weekends = bool((fr["H1"].time.dt.dayofweek >= 5).any())
+    h = fr["H1"][fr["H1"].time > fr["H1"].time.iloc[-1] - pd.Timedelta(days=365)]
+    rs = h.spread * info["point"]
+    ref = {"bps": float(np.median(rs / h.close)), "usd": float(np.median(rs)), "model": UNIVERSE[name][3]}
+    slip = 0.5 * ref["usd"]   # half the recent median spread: gold ~$0.10, as gold_research
+    P = {tf: prep(fr[tf], tf, info, ref) for tf in TFS if tf in fr}
+    yr = P["H1"].groupby(P["H1"].t_open.dt.year).modeled.mean()      # real era: from the first year after
+    bad_years = yr[yr >= 0.05].index                                  # which every year is >= 95% real spreads
+    real_start = pd.Timestamp(f"{bad_years.max() + 1}-01-01") if len(bad_years) else P["H1"].t_open.iat[0]
+    if "M5" in P:
         m5 = gr.attach(P["M5"], P["H1"], ["ema50", "ema200"], "b_").dropna(subset=["b_ema200"]).reset_index(drop=True)
         day = m5.t_open.dt.floor("D")
         tp, v = (m5.high + m5.low + m5.close) / 3, m5.volume.clip(lower=1)
         m5["vwap"] = (tp * v).groupby(day).cumsum() / v.groupby(day).cumsum()
         P["M5"] = m5
-        A = {tf: arrays(P[tf], info, slip, weekends) for tf in P}
+    A = {tf: arrays(P[tf], info, slip, weekends) for tf in P}
+    return info, slip, weekends, ref, real_start, P, A
+
+
+TREND_CANDS = ("donchian_ens", "tsmom_ens")
+
+
+def trend_raws(A, P, cand, tf):
+    """Per-sub-system raw trade lists of one trend candidate (fixed a-priori parameters)."""
+    if cand == "donchian_ens":
+        return [run(A[tf], *donchian(A[tf], a, b)) for a, b in ((20, 10), (55, 20), (100, 20))]
+    bpm = bars_per_month(P[tf])
+    return [run(A[tf], *tsmom(A[tf], k * bpm)) for k in (1, 3, 6)]
+
+
+def research(data, only=None):
+    """only: candidate names to run (default all; TFs missing from the bars are skipped)."""
+    res, rows = {}, []
+    for name, blob in data.items():
+        info, slip, weekends, ref, real_start, P, A = setup(name, blob)
         res[name] = {"symbol": blob["symbol"], "info": info, "slip": slip, "weekends": weekends, "spread_ref": ref,
                      "real_spread_from": str(real_start),
                      "modeled_share": {tf: round(float(P[tf].modeled.mean()), 3) for tf in P},
                      "bars": {tf: [str(P[tf].t_open.iat[0]), str(P[tf].t_open.iat[-1]), len(P[tf])] for tf in P},
                      "median_spread": {tf: float(np.median(P[tf].spr)) for tf in P}}
-        jobs = []
+        jobs = []   # (candidate, TF, thunk) so `only` skips the work, not just the row
         for tf in ("D1", "H4"):
-            jobs.append(("donchian_ens", tf, [run(A[tf], *donchian(A[tf], a, b)) for a, b in ((20, 10), (55, 20), (100, 20))]))
-            bpm = bars_per_month(P[tf])
-            jobs.append(("tsmom_ens", tf, [run(A[tf], *tsmom(A[tf], k * bpm)) for k in (1, 3, 6)]))
-        jobs.append(("max10_long", "D1", [run(A["D1"], *max10(A["D1"]))]))
+            for cand in TREND_CANDS:
+                jobs.append((cand, tf, lambda c=cand, t=tf: trend_raws(A, P, c, t)))
+        jobs.append(("max10_long", "D1", lambda: [run(A["D1"], *max10(A["D1"]))]))
         for tf in ("H1", "H4"):
-            jobs.append(("rsi2_trend", tf, [run(A[tf], *rsi2(A[tf], P[tf].ema200.to_numpy()))]))
+            jobs.append(("rsi2_trend", tf, lambda t=tf: [run(A[t], *rsi2(A[t], P[t].ema200.to_numpy()))]))
         for tg in (1.0, 1.5):
-            jobs.append((f"m5_scalp_{tg}R", "M5", [run(A["M5"], *scalp(m5, A["M5"], tg))]))
-        for cand, tf, raws in jobs:
+            jobs.append((f"m5_scalp_{tg}R", "M5", lambda g=tg: [run(A["M5"], *scalp(P["M5"], A["M5"], g))]))
+        for cand, tf, thunk in jobs:
+            if tf not in A or (only and cand not in only):
+                continue
+            raws = thunk()
             s = summarise(pool(raws) if len(raws) > 1 else raws[0], info, real_start)
             ok, why, low = verdict(s, name, tf)
             s.update(adopted=ok, reasons=why, low_confidence=low)
@@ -392,12 +434,12 @@ def research(data):
 def table(rows):
     out = ["| Symbol | Candidate | TF | n | WR | Exp R | PF | 1st half | 2nd half | Spread x2 | Always long | Flipped "
            "| Real-spread era n: strat / long / flip | Swap R/trade | $ at min lot | Min-lot risk (median) | Fit $100 | Fit $545 "
-           "| Account for 80% fit | Verdict |",
-           "|" + "---|" * 20]
+           "| Fit $545 @5% | Account for 80% fit | Verdict |",
+           "|" + "---|" * 21]
     for name, cand, tf, s in rows:
         st = s["strategy"]
         if not st["n"]:
-            out.append(f"| {name} | {cand} | {tf} | 0 |" + " |" * 15 + " rejected: no trades |")
+            out.append(f"| {name} | {cand} | {tf} | 0 |" + " |" * 16 + " rejected: no trades |")
             continue
         edge_only = s["reasons"] and all(r.startswith("min lot") for r in s["reasons"])
         v = ("**ADOPT**" + (" (low confidence)" if s["low_confidence"] else "")) if s["adopted"] else             ("**edge passes**, rejected only on min lot: " if edge_only else "rejected: ") + "; ".join(s["reasons"])
@@ -407,7 +449,7 @@ def table(rows):
                    f"{s['real_era']['n']}: {s['real_era']['strategy']} / {s['real_era']['always_long']} / {s['real_era']['flipped']} | "
                    f"{s['swap_r_mean']:+.3f} | "
                    f"{s['usd_min_lot']:+,.0f} | ${s['min_lot_risk_median']:,.2f} | {s['afford_100']:.0%} | "
-                   f"{s['afford_545']:.0%} | ${s['account_for_80pct']:,.0f} | {v} |")
+                   f"{s['afford_545']:.0%} | {s['afford_545_trend']:.0%} | ${s['account_for_80pct']:,.0f} | {v} |")
     return "\n".join(out)
 
 
@@ -434,6 +476,16 @@ def selftest():
     A["d0"], A["W"] = night_weights(A["day"], info, False)
     r, j, sw = walk(A, 0, 1, 2.0, {"max_bars": 2}, 1)      # held bars 1-2, exit open of bar 3
     assert j == 3 and abs(sw - (-2.0 * 1.002 / 2.0)) < 1e-9  # 2 nights x -100 pts x 0.01 x (100.2/100 price scale), / sd 2
+    # look-ahead perturbation: trend signals and exit flags up to bar k must not change when bars after k change
+    rng, n, k = np.random.default_rng(1), 1500, 1000
+    c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    B = {"c": c, "h": c * 1.004, "l": c * 0.996, "atr": np.full(n, 0.5)}
+    c2 = c.copy(); c2[k + 1:] *= np.exp(np.cumsum(rng.normal(0.02, 0.05, n - k - 1)))
+    B2 = {"c": c2, "h": c2 * 1.004, "l": c2 * 0.996, "atr": B["atr"]}
+    for f in (lambda X: donchian(X, 20, 10), lambda X: donchian(X, 100, 20), lambda X: tsmom(X, 63)):
+        (s1, e1), (s2, e2) = f(B), f(B2)
+        assert [x for x in s1 if x[0] <= k] == [x for x in s2 if x[0] <= k]
+        assert all((e1[q][:k + 1] == e2[q][:k + 1]).all() for q in ("exit_long", "exit_short"))
     print("selftest ok")
 
 
@@ -442,7 +494,10 @@ def main():
         return selftest()
     if sys.argv[1] == "--fetch":
         return fetch(sys.argv[2])
-    res, rows = research(pickle.load(open(sys.argv[1], "rb")))
+    if sys.argv[1] == "--fetch-universe":   # trend universe: H1 (spread model) + H4/D1 only
+        return fetch(sys.argv[2], UNIVERSE, ("H1", "H4", "D1"))
+    only = TREND_CANDS if "--trend" in sys.argv else None
+    res, rows = research(pickle.load(open(sys.argv[1], "rb")), only)
     json.dump(res, open(sys.argv[2], "w"), indent=1, default=str)
     print(table(rows))
 
