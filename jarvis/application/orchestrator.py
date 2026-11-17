@@ -202,6 +202,9 @@ class JarvisOrchestrator:
         # Demo-only forward test of the ETHUSD Donchian H4 ensemble (research rank 1).
         from jarvis.forward_tests.donchian_eth_h4 import DonchianForwardTest
         self.forward_test = DonchianForwardTest(self)
+        # Demo-only forward tests of the three 2026-11-17 research leads (jarvis/forward_tests/research_leads.py).
+        from jarvis.forward_tests.research_leads import build_all as _build_research_leads
+        self.research_leads = _build_research_leads(self)
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()
@@ -2657,6 +2660,8 @@ class JarvisOrchestrator:
             forward_test = getattr(self, "forward_test", None)
             if forward_test is not None:
                 forward_test.step()   # acts once per completed H4 bar; never raises
+            for lead in getattr(self, "research_leads", ()):
+                lead.step()           # once per completed bar per symbol; never raises
 
             try:
                 session = SessionEngine.get_current_session()

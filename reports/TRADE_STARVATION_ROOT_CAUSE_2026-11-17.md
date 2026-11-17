@@ -97,3 +97,28 @@ The only change is XAUUSD SWING, at 29 trades instead of 27. Fix 2 is live-only,
    - forex DAY with the session filter only (+0.195R, PF 1.29);
    - crypto SWING with a 3-ATR chandelier (+0.104R, PF 1.22).
    - Judge on expectancy per trade, not win rate.
+
+## Forward tests (set up 2026-11-17)
+The three leads are wired into `jarvis/forward_tests/research_leads.py`. They run demo only and use their research rules unchanged.
+
+| Tag | Lead | Symbols / TF | Exit |
+|---|---|---|---|
+| `FT_SMCD` | SMC base setup + session filter (07–10, 12–15 UTC) | EURUSD, GBPUSD, USDJPY, M15 | fixed 2.5R |
+| `FT_SMCS` | SMC base setup | BTCUSD, ETHUSD, H1 | chandelier 3 ATR from +1R, no target |
+| `FT_ESW` | Engine SWING signals with all gates removed | EURUSD, H1 | engine SL/TP, closed after 48 h |
+
+How they run:
+- Each test holds at most one position per symbol and risks 1/3 of the 1% per-trade budget.
+- The min-lot entry is skipped when it would breach the 2.5% ceiling.
+- Halts and the circuit breaker are honoured, and the position monitor leaves `FT_` positions alone.
+
+How they were checked:
+- `tests/test_forward_test_research_leads.py` shows the live setup detector matches `tools/smc_research.py` bar for bar, on side and stop distance.
+- A smoke run on live MT5 data, with orders blocked, ran every lead end to end.
+
+**Promotion rule (fixed now):** at least 100 closed trades per test and a live mean of at least +0.05R after costs (`GET /api/analytics/performance?by=strategy`). Strategy names:
+- `SMC_BASE_SESSION_M15`
+- `SMC_BASE_CHANDELIER_H1`
+- `ENGINE_SWING_NO_GATES`
+
+A lead that misses the rule is dropped. Nothing is promoted to live on win rate.
