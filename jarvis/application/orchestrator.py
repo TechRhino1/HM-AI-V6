@@ -205,6 +205,9 @@ class JarvisOrchestrator:
         # Demo-only forward tests of the three 2026-11-17 research leads (jarvis/forward_tests/research_leads.py).
         from jarvis.forward_tests.research_leads import build_all as _build_research_leads
         self.research_leads = _build_research_leads(self)
+        # Demo-only trend router: the 11 components that passed the edge tests (forward_tests/trend_router.py).
+        from jarvis.forward_tests.trend_router import build as _build_trend_router
+        self.research_leads += _build_trend_router(self)
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()

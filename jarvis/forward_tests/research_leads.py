@@ -202,7 +202,9 @@ class _LeadBase:
         fallback = float(np.median(s[s > 0])) if (s > 0).any() else 0.0
         return np.where(s > 0, s, fallback)
 
-    def _enter(self, sym: str, side: int, ref: float, sd: float, tp_r: Optional[float]) -> None:
+    def _enter(self, sym: str, side: int, ref: float, sd: float, tp_r: Optional[float],
+               comment: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Send the market order; returns the broker result, or None when the min lot is unaffordable."""
         from jarvis.config.settings import SETTINGS
         from jarvis.risk.position_sizing import PositionSizer
 
@@ -218,10 +220,10 @@ class _LeadBase:
         )
         if lots <= 0:
             logger.info("%s %s entry skipped: minimum lot exceeds the risk policy.", self.TAG, sym)
-            return
+            return None
         order = "BUY" if side == 1 else "SELL"
         res = client.send_market_order(sym, order, lots, sl_price=stop, tp_price=tp,
-                                       comment=f"{self.TAG}_{sym}", reference_price=ref)
+                                       comment=comment or f"{self.TAG}_{sym}", reference_price=ref)
         logger.info("%s %s %s %.2f lots @~%.5f stop %.5f tp %.5f: %s", self.TAG, sym, order, lots, ref, stop, tp, res)
         if res and res.get("status") in ("FILLED", "PARTIAL", "POSITION_CONFIRMED"):
             from jarvis.data import database
@@ -232,6 +234,7 @@ class _LeadBase:
                 account_login=getattr(acct, "login", None), server=getattr(acct, "server", None),
                 strategy=self.STRATEGY, trade_style=self.STYLE, planned_rr=tp_r,
             )
+        return res
 
     def _close(self, pos, reason: str) -> None:
         res = self.orch.mt5_client.close_position(pos.ticket)

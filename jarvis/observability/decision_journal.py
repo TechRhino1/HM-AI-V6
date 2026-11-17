@@ -63,3 +63,25 @@ def record(result: Dict[str, Any]) -> None:
                 f.write(json.dumps(row, default=str) + "\n")
     except Exception:
         pass
+
+
+def record_router(row: Dict[str, Any]) -> None:
+    """Journal one trend-router decision (component, regime, news, action, reason) in the same
+    daily file, tagged kind=router; written only when that component's verdict changes."""
+    try:
+        from jarvis.config.runtime import is_offline
+        if is_offline():
+            return
+        verdict = json.dumps({k: v for k, v in row.items() if k != "ts"}, default=str, sort_keys=True)
+        key = ("ROUTER", row.get("component"))
+        with _LOCK:
+            if _LAST.get(key) == verdict:
+                return
+            _LAST[key] = verdict
+            os.makedirs(_dir(), exist_ok=True)
+            out = {"kind": "router", **row, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            path = os.path.join(_dir(), time.strftime("decisions_%Y%m%d.jsonl", time.gmtime()))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(out, default=str) + "\n")
+    except Exception:
+        pass

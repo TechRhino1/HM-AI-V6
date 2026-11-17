@@ -385,3 +385,27 @@ python tools/portfolio_research.py <dir>/universe.pkl <dir>/universe_sr.json <di
 ```
 
 Outputs: `portfolio_results.json` (every number above), `portfolio_equity.csv` (daily equity per sizing variant), `portfolio_trades.parquet` (each trade with its regime, news and meta features, for the Phase D equivalence tests).
+
+## Demo router (built 2026-11-17)
+
+`jarvis/forward_tests/trend_router.py` runs the 11 components that passed alone. ETHUSD Donchian H4
+is left to the existing `FT_DCH_H4` forward test. It runs on **demo only**, with the research rules
+unchanged: Donchian (20,10)/(55,20)/(100,20) with a 3×ATR trail, and TSMOM over 1/3/6 months with a
+fixed 3×ATR stop. Each sub-system holds one position.
+
+On every completed bar it decides each component and writes the decision to the journal (`kind=router`):
+
+| Input | How the router uses it |
+|---|---|
+| Regime (TREND / RANGE / HIGH_VOL_SHOCK / DEAD) | Logged only; no regime filter passed out of sample |
+| News | No new entry within ±30 min of a HIGH-impact release (the adopted N1 rule) |
+| Capital | Circuit breaker and drawdown halt; at most 3 router positions and 2 per symbol; 1%/3 per sub-system; a min-lot entry is skipped above the 2.5% cap |
+| Meta-label | Not used (out-of-sample AUC 0.546 < 0.55) |
+
+- **Comments and strategy names:** order comments are `FT_TR_<SYMBOL>_<TF>_<D20|D55|D100|T1|T3|T6>`.
+  Each component logs strategy `TREND_<DONCHIAN|TSMOM>_<SYMBOL>_<TF>`, so
+  `/api/analytics/performance?by=strategy` reports it separately.
+- **Promotion rule (unchanged):** ≥ 100 closed trades per component, a live mean ≥ +0.05R after costs,
+  and portfolio drawdown inside the 20% halt.
+- **Tests:** `tests/test_forward_test_trend_router.py` checks the signals against
+  `strategy_research.donchian`/`tsmom` bar for bar, plus every decision path.
