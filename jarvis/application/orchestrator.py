@@ -31,7 +31,6 @@ from jarvis.execution.position_monitor import PositionMonitorEngine
 from jarvis.learning.trade_memory import TradeMemory
 from jarvis.learning.online_ml_predictor import OnlineMLPredictor
 from jarvis.learning.strategy_bandit import StrategyBandit
-from jarvis.learning.strategy_memory import StrategyRegimeMemory
 from jarvis.data.schemas import ExecutionMode, MarketRegime
 from jarvis.data.symbol_registry import is_crypto
 from jarvis.data.symbol_registry import resolve as _resolve_sym
@@ -220,7 +219,6 @@ class JarvisOrchestrator:
         self.order_manager = OrderManager(self.mt5_client)
         self.execution_engine = ExecutionEngine(self.mt5_client, self.state_manager)
         self.trade_memory = TradeMemory()
-        self.strategy_memory = StrategyRegimeMemory(self.trade_memory)
         self.llm_controller = AutonomousLLMSystemController(state_manager=self.state_manager)
 
         self.state_synchronizer = MT5StateSynchronizer(self.mt5_client, self.state_manager, self.event_bus)
@@ -1022,6 +1020,13 @@ class JarvisOrchestrator:
         # throw away a real labelled sample to avoid guessing a step size.
         # An unmeasured outcome is not a label. Training on `is_win=None` would teach
         # the model that a data gap is a loss.
+        # Forward tests run their own pre-registered rules; their closes must not feed the
+        # main engine's shadow learners, circuit breaker or loss cooldown.
+        if regime_name == "FORWARD_TEST" or self._is_forward_test_ticket(ticket):
+            if new_equity > 0:
+                self.drawdown_guard.update_equity_benchmarks(new_equity, float(data.get("balance", new_equity)))
+            logger.info("Forward-test close #%s kept out of main-engine learning and breakers.", ticket)
+            return
         if pending and "features" in pending and is_win is not None:
             # Shadow only: the live model is frozen until a validated promotion.
             if r_multiple is None:
@@ -1125,6 +1130,54 @@ class JarvisOrchestrator:
 
         return first_unusable_frame(mtf_data)
 
+    def _dispatch_vetoes(self, symbol, prof, profile_lookup_failed, is_session_blackout,
+                         premium_offwindow_elite, gov_sym_dir, tf_conflict, is_exec_style_match) -> List[str]:
+        """Reasons an arbiter dispatch must not place this order (empty list = none)."""
+        vetoes: List[str] = []
+        if profile_lookup_failed:
+            vetoes.append("PROFILE_LOOKUP_FAILED")
+        if not is_exec_style_match:
+            vetoes.append("STYLE_FILTER")
+        if is_session_blackout and not premium_offwindow_elite:
+            vetoes.append("SESSION_BLACKOUT")
+        window = getattr(prof, "allowed_utc_hours", None) if prof is not None else None
+        if (window and getattr(prof, "session_restriction", False)
+                and not getattr(prof, "premium_window_exception", False)
+                and not (window[0] <= datetime.now(timezone.utc).hour < window[1])):
+            vetoes.append("PROFILE_SESSION_WINDOW")
+        if gov_sym_dir is not None and getattr(gov_sym_dir, "status", None) == "PAUSED":
+            vetoes.append(f"LLM_GOVERNOR_PAUSED: {getattr(gov_sym_dir, 'reason', '')}")
+        if tf_conflict:
+            vetoes.append(f"TIMEFRAME_CONFLICT: {tf_conflict}")
+        cap = int(getattr(SETTINGS.trading, "max_daily_entries_per_symbol", 4) or 4)
+        if cap > 0 and not premium_offwindow_elite and self._count_entries_today(symbol, mode=self.mode) >= cap:
+            vetoes.append("DAILY_ENTRY_CAP")
+        return vetoes
+
+    @staticmethod
+    def _is_forward_test_ticket(ticket) -> bool:
+        """True when the ledger row for `ticket` was written by a forward test."""
+        if not ticket:
+            return False
+        try:
+            import sqlite3 as _sq
+            from jarvis.data.database import TRADE_DB
+
+            path = getattr(TRADE_DB, "db_path", None)
+            if not path or path == ":memory:":
+                return False
+            conn = _sq.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM executed_trades WHERE (ticket = ? OR position_id = ?) "
+                    "AND regime = 'FORWARD_TEST' LIMIT 1", (ticket, ticket)).fetchone()
+                return row is not None
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"forward-test lookup failed for #{ticket}: {e}")
+            return False
+
     @staticmethod
     def _count_entries_today(symbol: str, mode: Optional[str] = None) -> int:
         """Rows written for this symbol since 00:00 UTC today, mode-scoped ledger basis.
@@ -1151,22 +1204,24 @@ class JarvisOrchestrator:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
-                        "AND timestamp LIKE ? AND lower(execution_mode) = ?",
+                        "AND timestamp LIKE ? AND lower(execution_mode) = ? "
+                        "AND COALESCE(regime, '') != 'FORWARD_TEST'",
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0], str(mode).lower().strip()),
                     ).fetchone()
                 else:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
-                        "AND timestamp LIKE ?",
+                        "AND timestamp LIKE ? AND COALESCE(regime, '') != 'FORWARD_TEST'",
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0]),
                     ).fetchone()
                 return int(row[0]) if row else 0
             finally:
                 conn.close()
         except Exception as e:
-            logger.debug(f"daily entry count unavailable for {symbol}: {e}")
-            return 0
+            # Fail closed: an unknown count must not let the cap be exceeded.
+            logger.warning(f"daily entry count unavailable for {symbol}: {e}; treating cap as reached")
+            return 10**9
 
     # ── Calibrated entry authority ──────────────────────────────────────────
     #
@@ -1461,6 +1516,7 @@ class JarvisOrchestrator:
         # still run.
         _prof = None
         _is_premium_profile = False
+        _profile_lookup_failed = False
         try:
             from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config as _gspc
             _prof = _gspc(symbol)
@@ -1513,8 +1569,10 @@ class JarvisOrchestrator:
                                 "execution": None,
                                 "stale": False,
                             }
-        except Exception:
-            pass
+        except Exception as _prof_exc:
+            # Fail closed: without the profile the session window is unknown.
+            _profile_lookup_failed = True
+            logger.warning("%s: symbol profile lookup failed (%s); entries vetoed this cycle.", symbol, _prof_exc)
 
         # 1b. Daily entry cap (2026-10-20 profitability audit): 83 gold trades
         # in days on a micro account churned commission-free but spread-paying
@@ -1549,8 +1607,9 @@ class JarvisOrchestrator:
                         "execution": None,
                         "stale": False,
                     }
-        except Exception:
-            pass
+        except Exception as _cap_exc:
+            # The dispatch veto list re-checks the cap, so a failure here is logged, not hidden.
+            logger.warning("%s: daily entry cap check failed: %s", symbol, _cap_exc)
 
         # 1. Fetch Multi-Timeframe Data based on trade_style
         mtf_data = self.data_feed.fetch_multi_timeframe(symbol, trade_style=active_trade_style)
@@ -2135,6 +2194,18 @@ class JarvisOrchestrator:
         if getattr(decision, "bias", None) in ("BUY", "SELL"):
             self._style_bias.setdefault(canonical_sym, {})[active_trade_style] = (decision.bias, time.time())
 
+        # Hard vetoes the arbiter dispatch must honour. The scan runs dry, and the
+        # arbiter can promote a WAIT to EXECUTE, so these are computed whatever the
+        # verdict -- the gates above only fire when this cycle itself wants entry.
+        try:  # governor may only reduce risk; RiskEngine applies it on both dispatch paths
+            decision.governor_risk_mult = min(1.0, float(self.llm_controller.get_latest_directives().risk_multiplier))
+        except Exception:
+            decision.governor_risk_mult = 1.0
+        decision.dispatch_vetoes = self._dispatch_vetoes(
+            symbol, _prof, _profile_lookup_failed, is_session_blackout,
+            _premium_offwindow_elite, gov_sym_dir, _conflict, is_exec_style_match,
+        )
+
         # 7. Execute if authorized (Atomic Reservation -> Execute -> Commit/Release)
         # A dry run stops here. Everything above has already decided what WOULD
         # happen and auth_res carries the reason either way, so a preview loses no
@@ -2404,7 +2475,21 @@ class JarvisOrchestrator:
 
                 decision = candidate.decision_obj
                 sym = candidate.symbol
-                canonical_sym = sym.upper().replace("/", "").replace("_", "").replace("-", "")
+                # Same key as run_cycle, so broker aliases (GOLD vs XAUUSD) share one lock.
+                canonical_sym = _resolve_sym(sym).canonical
+
+                _vetoes = getattr(decision, "dispatch_vetoes", None)
+                if _vetoes is None or _vetoes:
+                    # None = the scan never computed the vetoes (early return / error): fail closed.
+                    from jarvis.observability import decision_journal as _dj
+                    _dj.record_dispatch({"symbol": sym, "style": candidate.trade_style,
+                                         "bias": candidate.bias, "status": "VETOED",
+                                         "vetoes": _vetoes if _vetoes is not None else ["UNKNOWN"]})
+                    logger.info(
+                        f"Arbiter selection {sym} ({candidate.trade_style}) vetoed at dispatch: "
+                        f"{_vetoes if _vetoes else 'veto state unknown'}"
+                    )
+                    continue
 
                 # Check if order execution was already fired in run_cycle_for_symbol
                 already_fired = False
@@ -2470,8 +2555,8 @@ class JarvisOrchestrator:
                         # Judge the RR the trade will actually carry: fixed-target
                         # symbols (gold 2.5R) get their TP rewritten at dispatch
                         # (execution_engine), so the decision's planned RR is stale.
-                        from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
-                        _fixed_r = getattr(get_symbol_profile_config(sym), "fixed_target_r", None)
+                        from jarvis.backtesting.exit_geometry import live_target_r
+                        _fixed_r = live_target_r(sym)
                         if (_fixed_r or decision.risk_reward_ratio) < 2.00:
                             logger.info(
                                 f"🚫 UNSPLIT_RR_GATE: {sym} {candidate.trade_style} {candidate.bias} "
@@ -2479,8 +2564,9 @@ class JarvisOrchestrator:
                                 f"sub-2R uncompoundable. Skipping."
                             )
                             continue
-                except Exception:
-                    pass
+                except Exception as _unsplit_exc:
+                    logger.warning(f"UNSPLIT_RR_GATE check failed for {sym}: {_unsplit_exc}; skipping (fail closed).")
+                    continue
 
                 cur_spread = ctx.volatility.current_spread_pips if ctx and hasattr(ctx, "volatility") else _spec.typical_spread_pips
 
@@ -2513,7 +2599,7 @@ class JarvisOrchestrator:
                 with self._execution_lock:
                     already_executing = canonical_sym in self._execution_in_progress
                     last_exec_time = self._last_execution_time.get(canonical_sym, 0.0)
-                    cooldown_active = (time.time() - last_exec_time) < self._SAME_SYMBOL_COOLDOWN_SEC
+                    cooldown_active = (time.time() - last_exec_time) < cand_cd
 
                 active_sym_positions = [
                     p for p in positions if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol)
@@ -2614,6 +2700,14 @@ class JarvisOrchestrator:
                             )
                         logger.info(f"🚀 Autonomous Multi-Style Execution dispatched for {candidate.symbol} ({candidate.trade_style})")
                         exec_res = self.execution_engine.execute_decision(decision, lots)
+                        from jarvis.observability import decision_journal as _dj
+                        _dj.record_dispatch({
+                            "symbol": sym, "style": candidate.trade_style, "bias": candidate.bias,
+                            "status": (exec_res or {}).get("status"), "ticket": (exec_res or {}).get("ticket"),
+                            "lots": lots, "grade": candidate.setup_grade, "ev": candidate.expected_value,
+                            "rr": candidate.risk_reward_ratio, "promoted_from_wait": d_action == "WAIT",
+                            "strategy": getattr(getattr(decision, "strategy", None), "value", getattr(decision, "strategy", None)),
+                        })
                         if exec_res and exec_res.get("status") in ("FILLED", "PARTIAL", "PLACED"):
                             self.risk_engine.commit_risk(canonical_sym)
                             self._record_open_trade_context(

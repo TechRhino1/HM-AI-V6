@@ -2,9 +2,7 @@
   "trading": {
     "magic_number": 888999,
     "default_mode": "demo",
-    "default_trade_style": "DAY_TRADING",
     "primary_timeframe": "H1",
-    "macro_timeframe": "D1",
     "allowed_symbols": [
       "XAUUSD",
       "BTCUSD",
@@ -26,15 +24,9 @@
     "max_weekly_loss_pct": 10.0,
     "max_drawdown_pct": 20.0,
     "max_open_positions": 3,
-    "max_symbol_exposure_count": 1,
-    "min_rr_ratio": 2.0,
-    "min_trade_score": 80.0,
-    "high_risk_trade_score": 88.0,
     "max_sector_exposure_count": 2,
     "correlation_scaling_enabled": true,
     "correlation_scaling_floor": 0.4,
-    "breakeven_clears_correlation": true,
-    "terminal_rsi_sell_floor": 22.0,
-    "terminal_rsi_buy_ceiling": 78.0
+    "breakeven_clears_correlation": true
   }
 }

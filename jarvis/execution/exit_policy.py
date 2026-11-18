@@ -143,6 +143,17 @@ class ExitPolicy:
         if cache_key in _RESOLVED_POLICY_CACHE:
             return _RESOLVED_POLICY_CACHE[cache_key]
 
+        # Calibrated symbols exit on the geometry their out-of-sample expectancy was
+        # measured with (same helper the BacktestEngine uses), not the style profile.
+        from jarvis.backtesting.exit_geometry import live_exit_geometry
+        _geom = live_exit_geometry(symbol)
+        if _geom is not None:
+            pol = _geom.to_policy(symbol, spec)
+            pol.trade_style = style_str
+            pol.time_stop_minutes = float(_geom.max_bars) * 60.0  # max_bars is H1-calibrated
+            _RESOLVED_POLICY_CACHE[cache_key] = pol
+            return pol
+
         try:
             from jarvis.intelligence.symbol_profile_config import get_style_profile, get_symbol_profile_config
 

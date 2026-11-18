@@ -44,9 +44,6 @@ class RiskSettings:
     max_drawdown_pct: float = 20.0
     max_open_positions: int = 3
     max_symbol_positions: int = 2
-    min_rr_ratio: float = 2.0
-    min_confidence_floor: float = 0.50
-    partial_tp_ratio: float = 0.50
     partial_tp_r_multiple: float = 1.5
     # Approved 2026-10-23: a capped recovery channel for perfect A+ setups after
     # the daily halt. Disabled until out-of-sample validation proves the edge;
@@ -61,25 +58,17 @@ class RiskSettings:
     # invites someone to "fix" it and reintroduce the premature-breakeven defect
     # that was responsible for the negative net profit. Breakeven is now owned
     # solely by jarvis.execution.exit_policy.
-    min_trade_score: float = 75.0
-    high_risk_trade_score: float = 85.0
-    max_symbol_exposure_count: int = 1
     max_sector_exposure_count: int = 2
     correlation_scaling_enabled: bool = True
     correlation_scaling_floor: float = 0.40
     breakeven_clears_correlation: bool = True
-    terminal_rsi_sell_floor: float = 22.0
-    terminal_rsi_buy_ceiling: float = 78.0
 
 @dataclass
 class TradingSettings:
     default_mode: str = "demo"
     magic_number: int = 888999
     primary_timeframe: str = "H1"
-    macro_timeframe: str = "D1"
-    default_trade_style: str = "ALL"
     symbols: List[str] = field(default_factory=lambda: ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "BTCUSD"])
-    same_symbol_cooldown_sec: int = 600
     # Entry selection authority. False (the default) keeps the legacy 29-check
     # gate stack, which is what the platform has always traded on. True hands
     # selection to jarvis.execution.entry_policy, using the out-of-sample
@@ -113,17 +102,12 @@ class ServerSettings:
     host: str = "127.0.0.1"
     port: int = 8501
     cors_origin: str = ""
-    rate_limit_lockout_sec: float = 60.0
-    max_login_attempts: int = 5
 
 @dataclass
 class MLSettings:
     sgd_learning_rate: float = 0.05
     sgd_l2_regularization: float = 0.01
     brier_score_drift_threshold: float = 0.28
-    meta_labeler_min_window: int = 30
-    meta_labeler_min_prob: float = 0.55
-    bandit_exploration_c: float = 1.414
 
 @dataclass
 class JarvisConfig:
@@ -154,11 +138,6 @@ class JarvisConfig:
                     ("max_drawdown_pct", "max_drawdown_pct", float),
                     ("max_open_positions", "max_open_positions", int),
                     ("max_symbol_positions", "max_symbol_positions", int),
-                    ("max_symbol_exposure_count", "max_symbol_exposure_count", int),
-                    ("min_rr_ratio", "min_rr_ratio", float),
-                    ("min_confidence_floor", "min_confidence_floor", float),
-                    ("min_trade_score", "min_trade_score", float),
-                    ("high_risk_trade_score", "high_risk_trade_score", float),
                     ("recovery_channel_enabled", "recovery_channel_enabled", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
                     ("recovery_risk_pct", "recovery_risk_pct", float),
                     ("recovery_max_daily_loss_pct", "recovery_max_daily_loss_pct", float),
@@ -167,8 +146,6 @@ class JarvisConfig:
                     ("correlation_scaling_enabled", "correlation_scaling_enabled", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
                     ("correlation_scaling_floor", "correlation_scaling_floor", float),
                     ("breakeven_clears_correlation", "breakeven_clears_correlation", lambda v: str(v).strip().lower() in {"1", "true", "yes", "on"}),
-                    ("terminal_rsi_sell_floor", "terminal_rsi_sell_floor", float),
-                    ("terminal_rsi_buy_ceiling", "terminal_rsi_buy_ceiling", float),
                 )
                 for json_key, attr, caster in risk_keys:
                     if json_key in r_data and r_data[json_key] is not None:
@@ -195,14 +172,8 @@ class JarvisConfig:
                     cfg.trading.symbols = list(t_data["allowed_symbols"])
                 if "magic_number" in t_data:
                     cfg.trading.magic_number = int(t_data["magic_number"])
-                if "same_symbol_cooldown_sec" in t_data:
-                    cfg.trading.same_symbol_cooldown_sec = int(t_data["same_symbol_cooldown_sec"])
                 if "primary_timeframe" in t_data:
                     cfg.trading.primary_timeframe = str(t_data["primary_timeframe"])
-                if "macro_timeframe" in t_data:
-                    cfg.trading.macro_timeframe = str(t_data["macro_timeframe"])
-                if "default_trade_style" in t_data:
-                    cfg.trading.default_trade_style = str(t_data["default_trade_style"]).upper()
                 if "use_calibrated_entry_policy" in t_data:
                     raw = t_data["use_calibrated_entry_policy"]
                     if isinstance(raw, bool):
@@ -231,9 +202,6 @@ class JarvisConfig:
                     ("sgd_learning_rate", "sgd_learning_rate", float),
                     ("sgd_l2_regularization", "sgd_l2_regularization", float),
                     ("brier_score_drift_threshold", "brier_score_drift_threshold", float),
-                    ("meta_labeler_min_window", "meta_labeler_min_window", int),
-                    ("meta_labeler_min_prob", "meta_labeler_min_prob", float),
-                    ("bandit_exploration_c", "bandit_exploration_c", float),
                 )
                 for json_key, attr, caster in ml_keys:
                     if json_key in m_data and m_data[json_key] is not None:

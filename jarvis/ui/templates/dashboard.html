@@ -10,16 +10,16 @@
 <!-- Bootstrap 5: Responsive framework scaffolding and grid -->
 <link rel="stylesheet" href="/static/css/bootstrap.min.css">
 <!-- Base token set. The theme below consumes these and defines no duplicates. -->
-<link rel="stylesheet" href="/static/css/hm_ui.css?v=20261030_v2">
-<link rel="stylesheet" href="/static/css/theme_terminal.css?v=20261030_v2">
-<link rel="stylesheet" href="/static/css/auth.css?v=20261030_v2">
+<link rel="stylesheet" href="/static/css/hm_ui.css?v=20261118">
+<link rel="stylesheet" href="/static/css/theme_terminal.css?v=20261118">
+<link rel="stylesheet" href="/static/css/auth.css?v=20261118">
 <!-- iOS design language for phones (≤599px) and tablets (600-1024px). -->
-<link rel="stylesheet" href="/static/css/ios_mobile.css?v=20261030_v2">
+<link rel="stylesheet" href="/static/css/ios_mobile.css?v=20261118">
 <!-- Bugatti Cockpit & Unified Responsive Theme loaded LAST for authoritative precedence -->
-<link rel="stylesheet" href="/static/css/theme_bugatti.css?v=20261030_v2">
+<link rel="stylesheet" href="/static/css/theme_bugatti.css?v=20261118">
 <!-- Mobile v3 "Aurora" iOS design system (small screens only; loaded last) -->
-<link rel="stylesheet" href="/static/css/hm_ios_v3.css?v=20261030_v2">
-<link rel="stylesheet" href="/static/css/hm_enhance.css?v=20261114">
+<link rel="stylesheet" href="/static/css/hm_ios_v3.css?v=20261118">
+<link rel="stylesheet" href="/static/css/hm_enhance.css?v=20261118">
 
 <!--
   DYNAMIC-DATA CONTRACT
@@ -181,11 +181,11 @@
         </button>
         <div class="bugatti-dropdown__divider"></div>
         <div class="bugatti-dropdown__header">OPERATIONS</div>
-        <a href="/positions" class="bugatti-dropdown__item market-nav-item">
+        <a href="/#positions" class="bugatti-dropdown__item market-nav-item">
           <span>📋 Positions Desk</span>
         </a>
-        <a href="/console" class="bugatti-dropdown__item market-nav-item">
-          <span>📟 Terminal Console</span>
+        <a href="/#controls" class="bugatti-dropdown__item market-nav-item">
+          <span>🎛️ Controls</span>
         </a>
       </nav>
     </div>
@@ -270,6 +270,17 @@
        active view's name lives here as the large title under the nav bar. -->
   <div class="tt-largetitle" id="ios-largetitle">Trade</div>
 </header>
+
+<!-- ═══ Main tabs ═════════════════════════════════════════════════════
+     The four trading desks that used to be separate pages (/console,
+     /classic, /positions) live here as views. setView() keeps aria-selected
+     and the URL hash (#trading, #positions, #performance, #controls). -->
+<nav class="tt-maintabs" role="tablist" aria-label="Trading desks">
+  <button type="button" class="tt-maintab" role="tab" data-view-btn="trade" aria-selected="true">Trading</button>
+  <button type="button" class="tt-maintab" role="tab" data-view-btn="positions" aria-selected="false">Positions &amp; Orders</button>
+  <button type="button" class="tt-maintab" role="tab" data-view-btn="performance" aria-selected="false">Performance</button>
+  <button type="button" class="tt-maintab" role="tab" data-view-btn="controls" aria-selected="false">Controls</button>
+</nav>
 
 <!-- ═══ Pane bar (phone only) ══════════════════════════════════════════ -->
 <nav class="tt-pane-bar" aria-label="Pane selector">
@@ -644,6 +655,7 @@
         </div>
       </div>
 
+      <div class="tt-pos-block" id="pos-block">
       <div class="tt-panel__head tt-panel__head--pos">
         <h2 class="tt-panel__title">Positions</h2>
         <div class="tt-pos-tabs" role="tablist" aria-label="Positions view">
@@ -707,6 +719,7 @@
             <button class="tt-btn tt-btn--sm" id="pos-hist-last" title="Last page" disabled>&raquo;</button>
           </div>
         </div>
+      </div>
       </div>
     </div>
 
@@ -1588,6 +1601,142 @@
 
     </div>
   </section>
+
+  <!-- ── Positions & Orders ─────────────────────────────────────────── -->
+  <!-- The Trading view's positions book (Open / History / Pending) is moved
+       in here while this view is active, so both views share one book and
+       one set of handlers. -->
+  <section class="tt-view" id="view-positions" data-view-panel="positions"
+           data-active="false" role="tabpanel" aria-label="Positions &amp; Orders" hidden>
+    <div class="tt-panel tt-panel--desk" id="pos-desk-host"></div>
+  </section>
+
+  <!-- ── Performance ────────────────────────────────────────────────── -->
+  <!-- Closed broker trades from GET /api/analytics/performance. -->
+  <section class="tt-view" id="view-performance" data-view-panel="performance"
+           data-active="false" role="tabpanel" aria-label="Performance" hidden>
+    <div class="tt-panel tt-panel--desk">
+      <div class="tt-panel__head tt-panel__head--wrap">
+        <h2 class="tt-panel__title">Performance</h2>
+        <span class="tt-panel__spacer"></span>
+        <label class="tt-muted" for="perf-by">By</label>
+        <select class="tt-select tt-select--compact" id="perf-by">
+          <option value="symbol" selected>Symbol</option>
+          <option value="strategy">Strategy</option>
+          <option value="trade_style">Trade style</option>
+          <option value="exit_reason">Exit reason</option>
+          <option value="account_login">Account</option>
+        </select>
+        <label class="tt-muted" for="perf-mode">Mode</label>
+        <select class="tt-select tt-select--compact" id="perf-mode">
+          <option value="" selected>All</option>
+          <option value="LIVE">Live</option>
+          <option value="DEMO">Demo</option>
+          <option value="PAPER">Paper</option>
+        </select>
+        <button type="button" class="tt-btn tt-btn--sm" id="perf-refresh">Refresh</button>
+      </div>
+      <div class="tt-panel__body">
+        <div class="tt-perf-cards" id="perf-cards" data-state="loading"></div>
+        <table class="tt-table" id="perf-table">
+          <thead><tr>
+            <th scope="col" id="perf-group-col">Symbol</th>
+            <th scope="col" class="tt-num">Trades</th>
+            <th scope="col" class="tt-num">Win %</th>
+            <th scope="col" class="tt-num">PF</th>
+            <th scope="col" class="tt-num">Expectancy $</th>
+            <th scope="col" class="tt-num">Net $</th>
+            <th scope="col" class="tt-num">Avg R</th>
+            <th scope="col" class="tt-num">Max DD $</th>
+            <th scope="col" class="tt-num">Max loss run</th>
+          </tr></thead>
+          <tbody id="perf-body" data-state="loading"></tbody>
+        </table>
+      </div>
+    </div>
+    <!-- Calibration: GET /api/calibration/deployment (which symbols the live
+         expectancy gate lets trade, and the out-of-sample evidence behind it). -->
+    <div class="tt-panel tt-panel--desk" id="perf-calibration">
+      <div class="tt-panel__head"><h2 class="tt-panel__title">Calibration &amp; live deployment</h2>
+        <span class="tt-muted" id="calib-bar"></span></div>
+      <div class="tt-panel__body">
+        <div class="tt-table-wrap">
+          <table class="tt-table">
+            <thead><tr><th scope="col">Symbol</th><th scope="col">Status</th><th scope="col">Exit</th>
+              <th scope="col" class="tt-num">OOS trades</th><th scope="col" class="tt-num">OOS win %</th>
+              <th scope="col" class="tt-num">OOS exp. R</th><th scope="col" class="tt-num">OOS PF</th><th scope="col">Reason</th></tr></thead>
+            <tbody id="calib-body" data-state="loading"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Controls ───────────────────────────────────────────────────── -->
+  <!-- The operator controls that only the classic terminal had, plus the
+       circuit-breaker actions. Every button posts to an existing /api/action. -->
+  <section class="tt-view" id="view-controls" data-view-panel="controls"
+           data-active="false" role="tabpanel" aria-label="Controls" hidden>
+    <div class="tt-panel tt-panel--desk">
+      <div class="tt-panel__head"><h2 class="tt-panel__title">Engine controls</h2></div>
+      <div class="tt-panel__body tt-ctl">
+        <div class="tt-ctl__row">
+          <span class="tt-ctl__label">Execution mode <b id="ctl-mode-now">—</b></span>
+          <div class="tt-ctl__btns">
+            <button type="button" class="tt-btn tt-btn--sm" data-ctl-mode="PAPER">Paper</button>
+            <button type="button" class="tt-btn tt-btn--sm" data-ctl-mode="DEMO">Demo</button>
+            <button type="button" class="tt-btn tt-btn--sm tt-btn--danger" data-ctl-mode="LIVE">Live</button>
+          </div>
+        </div>
+        <div class="tt-ctl__row">
+          <span class="tt-ctl__label">Trade style <b id="ctl-style-now">—</b></span>
+          <div class="tt-ctl__btns">
+            <button type="button" class="tt-btn tt-btn--sm" data-ctl-style="SCALP">Scalp</button>
+            <button type="button" class="tt-btn tt-btn--sm" data-ctl-style="DAY_TRADING">Day</button>
+            <button type="button" class="tt-btn tt-btn--sm" data-ctl-style="SWING">Swing</button>
+          </div>
+        </div>
+        <div class="tt-ctl__row">
+          <span class="tt-ctl__label">Safe mode <b id="ctl-safe-now">—</b></span>
+          <div class="tt-ctl__btns">
+            <button type="button" class="tt-btn tt-btn--sm" id="ctl-safe-toggle">Toggle safe mode</button>
+          </div>
+        </div>
+        <div class="tt-ctl__row">
+          <span class="tt-ctl__label">Circuit breaker</span>
+          <div class="tt-ctl__btns">
+            <button type="button" class="tt-btn tt-btn--sm tt-btn--danger" id="ctl-estop">Emergency stop</button>
+            <button type="button" class="tt-btn tt-btn--sm" id="ctl-resume">Resume trading</button>
+            <button type="button" class="tt-btn tt-btn--sm" id="ctl-reset-dd">Reset drawdown</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="tt-panel tt-panel--desk">
+      <div class="tt-panel__head">
+        <h2 class="tt-panel__title">Scanner radar</h2>
+        <span class="tt-panel__spacer"></span>
+        <select class="tt-select tt-select--compact" id="ctl-radar-style" aria-label="Radar trade style">
+          <option value="ALL" selected>All styles</option>
+          <option value="SCALP">Scalp</option>
+          <option value="DAY_TRADING">Day</option>
+          <option value="SWING">Swing</option>
+        </select>
+        <button type="button" class="tt-btn tt-btn--sm" id="ctl-radar-refresh">Refresh</button>
+      </div>
+      <div class="tt-panel__body tt-panel__body--flush">
+        <table class="tt-table" id="ctl-radar-table">
+          <thead><tr>
+            <th scope="col">Symbol</th><th scope="col">Signal</th><th scope="col">Style</th>
+            <th scope="col" class="tt-num">Entry</th><th scope="col" class="tt-num">SL</th>
+            <th scope="col" class="tt-num">TP</th><th scope="col" class="tt-num">R:R</th>
+            <th scope="col" class="tt-num">Win</th>
+          </tr></thead>
+          <tbody id="ctl-radar-body" data-state="loading"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </main>
 
 <!-- ═══ Status bar ═════════════════════════════════════════════════════ -->
@@ -1678,8 +1827,8 @@
     <p class="tt-drawer__section" id="drawer-sec-markets">Desks &amp; Markets</p>
     <div class="tt-drawer__group" role="group" aria-labelledby="drawer-sec-markets">
       <a class="tt-drawer__item" href="/"><span class="tt-drawer__ico" aria-hidden="true">⚡</span>Cockpit (Forex/Crypto)</a>
-      <a class="tt-drawer__item" href="/console"><span class="tt-drawer__ico" aria-hidden="true">📟</span>Console &amp; Operations</a>
-      <a class="tt-drawer__item" href="/positions"><span class="tt-drawer__ico" aria-hidden="true">📋</span>Live Positions Book</a>
+      <a class="tt-drawer__item" href="/#controls"><span class="tt-drawer__ico" aria-hidden="true">📟</span>Controls &amp; Operations</a>
+      <a class="tt-drawer__item" href="/#positions"><span class="tt-drawer__ico" aria-hidden="true">📋</span>Live Positions Book</a>
       <a class="tt-drawer__item" href="/stocks"><span class="tt-drawer__ico" aria-hidden="true">🇺🇸</span>US Stocks Screener</a>
       <a class="tt-drawer__item" href="/india"><span class="tt-drawer__ico" aria-hidden="true">🇮🇳</span>India Stocks (NSE/BSE)</a>
       <a class="tt-drawer__item" href="/options"><span class="tt-drawer__ico" aria-hidden="true">📊</span>India Options (F&amp;O)</a>
@@ -1734,15 +1883,34 @@
   </div>
 </div>
 
+<!-- Modify a working (pending) order: price / SL / TP. Blank leaves a level alone. -->
+<div class="cockpit-modal-backdrop" id="pending-modify-modal" hidden style="display:none;">
+  <form class="cockpit-modal" id="pending-modify-form" role="dialog" aria-modal="true" aria-labelledby="pending-modify-title">
+    <div class="cockpit-modal__head">
+      <h3 style="margin:0; font-size:1.05rem;" id="pending-modify-title">Modify order</h3>
+    </div>
+    <div class="cockpit-modal__body tt-ctl">
+      <input type="hidden" id="pending-modify-ticket">
+      <label class="tt-ctl__row">Price <input class="tt-input" id="pending-modify-price" type="number" step="any" min="0" inputmode="decimal"></label>
+      <label class="tt-ctl__row">Stop loss <input class="tt-input" id="pending-modify-sl" type="number" step="any" min="0" inputmode="decimal" placeholder="blank = unchanged, 0 = clear"></label>
+      <label class="tt-ctl__row">Take profit <input class="tt-input" id="pending-modify-tp" type="number" step="any" min="0" inputmode="decimal" placeholder="blank = unchanged, 0 = clear"></label>
+    </div>
+    <div class="cockpit-modal__actions">
+      <button type="button" class="tt-btn tt-btn--sm" id="pending-modify-cancel">Cancel</button>
+      <button type="submit" class="tt-btn tt-btn--primary tt-btn--sm">Save</button>
+    </div>
+  </form>
+</div>
+
 <div class="tt-drawer-scrim" id="nav-drawer-scrim" aria-hidden="true"></div>
 
 <script src="/static/js/vendor/bootstrap.bundle.min.js"></script>
 <script src="/static/js/vendor/lightweight-charts.standalone.production.js"></script>
-<script src="/static/js/hm_ui.js?v=20261030_v2"></script>
-<script src="/static/js/auth.js?v=20261030_v2"></script>
-<script src="/static/js/dashboard.js?v=20261030_v2"></script>
-<script src="/static/js/hm_mobile_nav.js?v=20261030_v2"></script>
-<script src="/static/js/hm_mobile_ux.js?v=20261030_v2"></script>
-<script src="/static/js/hm_enhance.js?v=20261114"></script>
+<script src="/static/js/hm_ui.js?v=20261118"></script>
+<script src="/static/js/auth.js?v=20261118"></script>
+<script src="/static/js/dashboard.js?v=20261118"></script>
+<script src="/static/js/hm_mobile_nav.js?v=20261118"></script>
+<script src="/static/js/hm_mobile_ux.js?v=20261118"></script>
+<script src="/static/js/hm_enhance.js?v=20261118"></script>
 </body>
 </html>

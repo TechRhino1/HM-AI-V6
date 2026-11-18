@@ -76,3 +76,14 @@ def test_a_07_30_broker_bar_in_winter_is_still_the_asian_session():
     # 07:30 EET in November is 05:30 UTC: before London opens.
     utc = broker_bar_times_to_utc(pd.Series([_epoch("2026-11-10 07:30")]), live_offset_sec=7200).iloc[0]
     assert not SessionEngine.is_forex_killzone_active(utc.to_pydatetime())
+
+
+def test_crypto_repeated_fallback_hour_stays_unique():
+    """24/7 markets print the EU fall-back hour twice; the earlier bar is DST (audit 2026-11-18)."""
+    import pandas as pd
+    from jarvis.data.broker_time import broker_bar_times_to_utc
+
+    wall = pd.Series(pd.to_datetime(["2026-10-25 02:00", "2026-10-25 03:00", "2026-10-25 03:00", "2026-10-25 04:00"]))
+    utc = broker_bar_times_to_utc(wall)
+    assert utc.is_unique and utc.is_monotonic_increasing
+    assert (utc.diff().dropna() == pd.Timedelta(hours=1)).all()

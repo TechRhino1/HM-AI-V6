@@ -36,7 +36,7 @@ _REGISTRY: Dict[str, SymbolSpec] = {
     "EURUSD": SymbolSpec(
         canonical="EURUSD", asset_class="FOREX",
         contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=10.0,
-        typical_spread_pips=0.7, max_spread_pips=2.0,
+        typical_spread_pips=1.0, max_spread_pips=2.0,
         typical_atr_pct=0.4, margin_pct=0.1, digits=5
     ),
     "GBPUSD": SymbolSpec(
@@ -47,20 +47,21 @@ _REGISTRY: Dict[str, SymbolSpec] = {
     ),
     "USDJPY": SymbolSpec(
         canonical="USDJPY", asset_class="FOREX",
-        contract_size=100_000.0, pip_size=0.01, pip_value_per_lot=6.80,
+        # 1000 JPY per pip-lot at ~159 (MT5 audit 2026-11-18); drifts with the rate, live sizing uses tick_value
+        contract_size=100_000.0, pip_size=0.01, pip_value_per_lot=6.28,
         typical_spread_pips=0.8, max_spread_pips=2.5,
         typical_atr_pct=0.4, margin_pct=0.1, digits=3, is_jpy_quote=True
     ),
     "AUDUSD": SymbolSpec(
         canonical="AUDUSD", asset_class="FOREX",
         contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=10.0,
-        typical_spread_pips=0.9, max_spread_pips=2.5,
+        typical_spread_pips=1.3, max_spread_pips=2.5,
         typical_atr_pct=0.5, margin_pct=0.1, digits=5
     ),
     "USDCAD": SymbolSpec(
         canonical="USDCAD", asset_class="FOREX",
-        contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=7.50,
-        typical_spread_pips=2.7, max_spread_pips=8.5,
+        contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=7.00,  # 10 CAD at ~1.43
+        typical_spread_pips=1.9, max_spread_pips=8.5,
         typical_atr_pct=0.4, margin_pct=0.1, digits=5
     ),
     "BTCUSD": SymbolSpec(
@@ -102,19 +103,19 @@ _REGISTRY: Dict[str, SymbolSpec] = {
     "WTI": SymbolSpec(
         canonical="WTI", asset_class="COMMODITY",
         contract_size=100.0, pip_size=0.01, pip_value_per_lot=1.0,
-        typical_spread_pips=13.0, max_spread_pips=25.0,
+        typical_spread_pips=3.0, max_spread_pips=25.0,  # MT5 audit 2026-11-18: M5 median 3, p95 8
         typical_atr_pct=1.5, margin_pct=0.2, digits=2
     ),
     "ETHUSD": SymbolSpec(
         canonical="ETHUSD", asset_class="CRYPTO",
         contract_size=1.0, pip_size=0.01, pip_value_per_lot=0.01,
-        typical_spread_pips=345.0, max_spread_pips=450.0,
+        typical_spread_pips=190.0, max_spread_pips=450.0,  # MT5 audit 2026-11-18 (was 345 in 2026 H1)
         typical_atr_pct=3.0, margin_pct=0.5, digits=2, is_crypto=True
     ),
     "SOLUSD": SymbolSpec(
         canonical="SOLUSD", asset_class="CRYPTO",
         contract_size=10.0, pip_size=0.01, pip_value_per_lot=0.1,
-        typical_spread_pips=35.0, max_spread_pips=105.0,
+        typical_spread_pips=51.0, max_spread_pips=105.0,
         typical_atr_pct=4.0, margin_pct=0.5, digits=2, is_crypto=True
     ),
     "ETHBTC": SymbolSpec(
@@ -131,8 +132,8 @@ _REGISTRY: Dict[str, SymbolSpec] = {
     ),
     "USDCHF": SymbolSpec(
         canonical="USDCHF", asset_class="FOREX",
-        contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=10.0,
-        typical_spread_pips=2.4, max_spread_pips=4.0,
+        contract_size=100_000.0, pip_size=0.0001, pip_value_per_lot=11.90,  # 10 CHF at ~0.84
+        typical_spread_pips=1.3, max_spread_pips=4.0,
         typical_atr_pct=0.4, margin_pct=0.1, digits=5
     ),
     "NZDUSD": SymbolSpec(

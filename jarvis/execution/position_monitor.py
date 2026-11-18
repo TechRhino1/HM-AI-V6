@@ -492,7 +492,9 @@ class PositionMonitorEngine:
                 new_sl = pos.sl
 
                 # 1. Event-window de-risk (highest priority)
-                verdict = self._event_window_verdict(symbol, calendar, now)
+                # Forward tests keep their pre-registered exits: no event/weekend edits (margin ladder still applies).
+                _is_ft = str(getattr(pos, "comment", "") or "").startswith("FT_")
+                verdict = None if _is_ft else self._event_window_verdict(symbol, calendar, now)
                 # Bank only once the release is out. Pre-release closing was tested and rejected
                 # (reports/NEWS_RESEARCH_2026-11-17.md, N2: closing >= +0.5R before the release lost
                 # on both M15 and H1), so open trades hold through the release.
@@ -541,7 +543,7 @@ class PositionMonitorEngine:
                         continue
 
                 # 2. Weekend floor (Friday UTC evening)
-                weekend = self._weekend_verdict(pos, risk_dist, now)
+                weekend = None if _is_ft else self._weekend_verdict(pos, risk_dist, now)
                 if weekend == "BANK" and current_r >= WEEKEND_BANK_R:
                     logger.info(
                         f"🧹 WEEKEND_BANK: #{pos.ticket} ({symbol} {pos.type}) r={current_r:.2f}R "

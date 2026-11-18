@@ -156,14 +156,16 @@ class ParallelAnalystCluster:
             # is worse than trading uncriticised — but it is now loud, and
             # critique_confidence is 0.0 rather than the default 1.0 so a
             # fallback cannot claim confidence it does not have.
+            # Audit 2026-11-18: now fail-CLOSED. An uncriticised trade fails the
+            # adversarial guard (penalty 100 > max_devil_penalty) instead of passing it.
             logger.warning("Devil's Advocate failed or timed out after %.2fs (%s: %s) "
-                           "-- substituting penalty 0.0, which PASSES the "
-                           "adversarial guard. This trade is uncriticised.",
+                           "-- substituting penalty 100.0, which FAILS the "
+                           "adversarial guard.",
                            self.timeout_sec, type(exc).__name__, exc)
             devil_report = DevilAdvocateReport(
                 symbol=context.symbol,
                 counter_bias="NEUTRAL",
-                penalty_score=0.0,
+                penalty_score=100.0,
                 invalidation_risk_coefficient=1.0,
                 threats_detected=[],
                 invalidation_triggers=[],

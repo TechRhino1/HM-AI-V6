@@ -170,7 +170,9 @@ def broker_bar_times_to_utc(times, live_offset_sec: Optional[float] = None):
             return (wall - pd.Timedelta(seconds=off)).dt.tz_localize("UTC")
 
     # Ambiguous hour (EU fall-back Sunday) -> standard time; skipped hour -> next valid one.
-    local = wall.dt.tz_localize(BROKER_TZ, ambiguous=np.zeros(len(wall), dtype=bool),
+    # A 24/7 market (crypto) prints that hour twice: the earlier bar is the DST one, else
+    # both mapped to standard time and the series failed validation on duplicate timestamps.
+    local = wall.dt.tz_localize(BROKER_TZ, ambiguous=wall.duplicated(keep="last").to_numpy(),
                                 nonexistent="shift_forward")
     return local.dt.tz_convert("UTC")
 

@@ -52,7 +52,8 @@
     slow: 60000
   };
 
-  var VIEWS = ['trade', 'symbols', 'news', 'analyst', 'markets', 'analytics', 'backtest'];
+  var VIEWS = ['trade', 'symbols', 'news', 'analyst', 'markets', 'analytics', 'backtest',
+               'positions', 'performance', 'controls'];
   var PANES = ['watchlist', 'chart', 'selection', 'ticket'];
 
   var state = {
@@ -408,7 +409,7 @@
     if (lt) lt.textContent = view.charAt(0).toUpperCase() + view.slice(1);
 
     try {
-      var targetHash = view === 'trade' ? '' : '#' + view;
+      var targetHash = '#' + (view === 'trade' ? 'trading' : view);
       if (window.location.hash !== targetHash) {
         if (window.history && window.history.replaceState) {
           window.history.replaceState(null, '', (window.location.pathname || '/') + targetHash);
@@ -423,6 +424,14 @@
     if (view === 'news') { loadNews(); }
     if (view === 'analyst') { renderDevilAdvocate(); renderQualityGate(); renderObjections(); }
     if (view === 'markets') { loadMarkets(); }
+    // One positions book, two homes: it sits under the chart on Trading and
+    // fills the Positions & Orders view, keeping its listeners either way.
+    var posBlock = $('pos-block');
+    var posHome = view === 'positions' ? $('pos-desk-host') : document.querySelector('#view-trade .tt-panel--chart');
+    if (posBlock && posHome && posBlock.parentNode !== posHome) posHome.appendChild(posBlock);
+    if (view === 'positions') { setPosTab(state.posTab || 'open'); loadPendingForTab(); loadHistory(); }
+    if (view === 'performance') { loadPerformance(); loadCalibration(); }
+    if (view === 'controls') { renderControls(); loadControlsRadar(); }
     if (view === 'trade') {
       loadChart();
       // The chart container was display:none while another view was active, so
@@ -457,11 +466,12 @@
   }
 
   /* Hash deep links: /#symbols, /#analyst, /#news, ... switch the active
-     view; an empty hash (the Cockpit tab) means the trade view. The phone
-     tab bar and More sheet link by hash. */
+     view; an empty hash or #trading (the Cockpit tab) means the trade view.
+     The phone tab bar and More sheet link by hash. */
   function viewFromHash() {
     var loc = window.location || {};
     var h = (loc.hash || '').replace(/^#/, '');
+    if (h === 'trading') return 'trade';
     return VIEWS.indexOf(h) !== -1 ? h : null;
   }
 
@@ -1377,7 +1387,11 @@
       tr.innerHTML =
         '<td><span class="tt-symbol">' + esc(p.symbol) + '</span></td>' +
         '<td><span class="tt-dir ' + dirCls + '">' + esc(side || '—') + '</span></td>' +
-        '<td><span class="badge ' + styleBadgeClass + '">' + esc(styleLabel) + '</span><span class="badge ' + modeBadgeClass + '" style="margin-left:4px; display:inline-block;" title="' + esc(modeTitle) + '">' + esc(modeLabel) + '</span></td>' +
+        '<td><span class="badge ' + styleBadgeClass + '">' + esc(styleLabel) + '</span>' +
+          (isManual && ticket !== undefined && ticket !== null
+            ? '<button type="button" class="badge ' + modeBadgeClass + '" style="margin-left:4px; border:0; cursor:pointer;" data-pos-mode="' + esc(String(ticket)) + '" data-mode="' + esc(modeVal) + '" title="' + esc(modeTitle) + ' — click to cycle AUTO_PILOT → TRAIL → PROTECT_ONLY → OFF">' + esc(modeLabel) + ' ↻</button>'
+            : '<span class="badge ' + modeBadgeClass + '" style="margin-left:4px; display:inline-block;" title="' + esc(modeTitle) + '">' + esc(modeLabel) + '</span>') +
+          '</td>' +
         '<td class="tt-num">' + num(p.volume, 2) + '</td>' +
         '<td class="tt-num">' + formatPrice(p.open_price, p.symbol) + '</td>' +
         '<td class="tt-num">' + formatPrice(p.current_price, p.symbol) + '</td>' +
@@ -1400,6 +1414,11 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-pos-close]'), function (btn) {
       btn.addEventListener('click', function () {
         closePosition(Number(btn.getAttribute('data-pos-close')));
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-pos-mode]'), function (btn) {
+      btn.addEventListener('click', function () {
+        cycleManualMode(Number(btn.getAttribute('data-pos-mode')), btn.getAttribute('data-mode'));
       });
     });
     var tot = $('pos-total');
@@ -1518,7 +1537,8 @@
         '<td class="tt-muted">' + esc(pendingAge(o)) + '</td>' +
         '<td class="tt-pos-actions">' +
           (ticket !== undefined && ticket !== null
-            ? '<button class="tt-btn tt-btn--sm tt-btn--pos-close" data-pos-cancel="' + esc(String(ticket)) + '" type="button">Cancel</button>'
+            ? '<button class="tt-btn tt-btn--sm" data-pos-modify="' + esc(String(ticket)) + '" type="button">Modify</button> ' +
+              '<button class="tt-btn tt-btn--sm tt-btn--pos-close" data-pos-cancel="' + esc(String(ticket)) + '" type="button">Cancel</button>'
             : '<span class="tt-muted">—</span>') +
         '</td>' +
         '</tr>';
@@ -1527,6 +1547,11 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-pos-cancel]'), function (btn) {
       btn.addEventListener('click', function () {
         cancelPendingFromPanel(Number(btn.getAttribute('data-pos-cancel')));
+      });
+    });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-pos-modify]'), function (btn) {
+      btn.addEventListener('click', function () {
+        openPendingModify(Number(btn.getAttribute('data-pos-modify')));
       });
     });
   }
@@ -5216,6 +5241,8 @@
       state.radar = d.radar_opportunities || [];
       state.executionMode = d.execution_mode;
       state.safeMode = d.safe_mode;
+      state.tradeStyle = d.trade_style;
+      if (state.view === 'controls') renderControls();
       state.telemetryAt = Date.now();
       state.serverTimestamp = d.timestamp;
 
@@ -7596,8 +7623,266 @@
     });
   }
 
+  /* ── Positions & Orders: manual-position mode, modify a working order ── */
+  var MANUAL_MODES = ['AUTO_PILOT', 'TRAIL', 'PROTECT_ONLY', 'OFF'];
+
+  function cycleManualMode(ticket, current) {
+    if (!ticket) return;
+    var next = MANUAL_MODES[(MANUAL_MODES.indexOf(String(current || '').toUpperCase()) + 1) % MANUAL_MODES.length];
+    apiPost('/api/action/set_manual_mode', { ticket: ticket, mode: next }, TIMEOUT.normal).then(function (res) {
+      var data = res.data || {};
+      if (res.ok && data.success) {
+        toast('Ticket #' + ticket + ' mode: ' + (data.mode || next));
+        loadTelemetry();
+      } else {
+        toast(actionFailureMessage('Mode change failed: ', res), 'error');
+      }
+    });
+  }
+
+  function showModal(el, open) {
+    if (!el) return;
+    el.hidden = !open;
+    el.style.display = open ? 'flex' : 'none';
+  }
+
+  function openPendingModify(ticket) {
+    var o = (state.posPending || []).filter(function (x) { return x.ticket === ticket; })[0];
+    if (!o) return;
+    $('pending-modify-ticket').value = String(ticket);
+    $('pending-modify-title').textContent = 'Modify #' + ticket + ' · ' + pendingTypeNameLocal(o.type) + ' ' + (o.symbol || '');
+    $('pending-modify-price').value = Number(o.price) > 0 ? o.price : '';
+    $('pending-modify-sl').value = Number(o.sl) > 0 ? o.sl : '';
+    $('pending-modify-tp').value = Number(o.tp) > 0 ? o.tp : '';
+    showModal($('pending-modify-modal'), true);
+  }
+
+  function submitPendingModify(ev) {
+    ev.preventDefault();
+    var ticket = Number($('pending-modify-ticket').value);
+    var body = { ticket: ticket };
+    // Blank means "leave this level alone"; the server takes None the same way.
+    [['price', 'pending-modify-price'], ['sl', 'pending-modify-sl'], ['tp', 'pending-modify-tp']].forEach(function (f) {
+      var v = $(f[1]).value.trim();
+      if (v !== '') body[f[0]] = Number(v);
+    });
+    apiPost('/api/action/modify_pending_order', body, TIMEOUT.normal).then(function (res) {
+      if (res.ok && !actionRefused(res.data)) {
+        toast('Order #' + ticket + ' modified');
+        showModal($('pending-modify-modal'), false);
+        loadPendingForTab();
+      } else {
+        toast(actionFailureMessage('Modify failed: ', res), 'error');
+      }
+    });
+  }
+
+  /* ── Performance view: GET /api/analytics/performance ─────────────────── */
+  function loadPerformance() {
+    var by = $('perf-by'), mode = $('perf-mode'), body = $('perf-body'), cards = $('perf-cards');
+    if (!by || !body) return;
+    setText($('perf-group-col'), by.options[by.selectedIndex].text);
+    setState(body, 'loading');
+    var q = '?by=' + encodeURIComponent(by.value) + (mode && mode.value ? '&mode=' + encodeURIComponent(mode.value) : '');
+    apiGet('/api/analytics/performance' + q, TIMEOUT.normal).then(function (res) {
+      var groups = res.ok && res.data && res.data.groups;
+      if (!groups) {
+        setState(cards, 'error', 'Performance unavailable', actionFailureMessage('', res));
+        body.innerHTML = '';
+        return;
+      }
+      var keys = Object.keys(groups), n = 0, wins = 0, net = 0;
+      keys.forEach(function (k) {
+        n += Number(groups[k].total_trades) || 0;
+        wins += Number(groups[k].wins) || 0;
+        net += Number(groups[k].net_profit) || 0;
+      });
+      cards.removeAttribute('data-state');
+      cards.innerHTML = [
+        ['Closed trades', String(res.data.closed_trades), ''],
+        ['Net P&L', (net > 0 ? '+' : '') + num(net, 2), signClass(net)],
+        ['Win rate', n ? num(wins / n * 100, 1) + '%' : '—', ''],
+        ['Expectancy / trade', n ? num(net / n, 2) : '—', signClass(net)]
+      ].map(function (c) {
+        return '<div class="tt-perf-card"><span class="tt-muted">' + esc(c[0]) + '</span><b class="tt-num ' + c[2] + '">' + esc(c[1]) + '</b></div>';
+      }).join('');
+      if (!keys.length) {
+        setState(body, 'empty', 'No closed trades', 'Nothing closed at the broker matches this filter yet.');
+        return;
+      }
+      body.removeAttribute('data-state');
+      body.innerHTML = keys.map(function (k) {
+        var m = groups[k];
+        return '<tr>' +
+          '<td><span class="tt-symbol">' + esc(k) + '</span></td>' +
+          '<td class="tt-num">' + num(m.total_trades, 0) + '</td>' +
+          '<td class="tt-num">' + num(m.win_rate_pct, 1) + '</td>' +
+          '<td class="tt-num">' + num(m.profit_factor, 2) + '</td>' +
+          '<td class="tt-num ' + signClass(m.expectancy_dollars) + '">' + num(m.expectancy_dollars, 2) + '</td>' +
+          '<td class="tt-num ' + signClass(m.net_profit) + '">' + num(m.net_profit, 2) + '</td>' +
+          '<td class="tt-num">' + (m.avg_r == null ? '—' : num(m.avg_r, 2)) + '</td>' +
+          '<td class="tt-num">' + num(m.max_drawdown_dollars, 2) + '</td>' +
+          '<td class="tt-num">' + num(m.max_consecutive_losses, 0) + '</td>' +
+          '</tr>';
+      }).join('');
+    });
+  }
+
+  /* ── Calibration panel: GET /api/calibration/deployment ─────────────────── */
+  function loadCalibration() {
+    var body = $('calib-body');
+    if (!body) return;
+    setState(body, 'loading');
+    apiGet('/api/calibration/deployment', TIMEOUT.normal).then(function (res) {
+      var rows = res.ok && res.data && res.data.symbols;
+      if (!rows) { setState(body, 'error', 'Calibration unavailable', actionFailureMessage('', res)); return; }
+      setText($('calib-bar'), 'Live bar: ≥ ' + num(res.data.min_oos_expectancy_r, 2) + 'R over ≥ ' + res.data.min_oos_trades + ' out-of-sample trades');
+      if (!rows.length) { setState(body, 'empty', 'No symbols configured', ''); return; }
+      body.removeAttribute('data-state');
+      body.innerHTML = rows.map(function (r) {
+        var ok = !r.refusal;
+        var opt = function (v, d) { return v == null ? '—' : num(v, d); };
+        return '<tr>' +
+          '<td><span class="tt-symbol">' + esc(r.symbol) + '</span></td>' +
+          '<td><span class="' + (ok ? 'tt-up' : 'tt-down') + '">' + (ok ? 'Trading' : 'Blocked') + '</span></td>' +
+          '<td>' + esc(r.geometry_mode || '—') + (r.tp_r == null ? '' : ' @ ' + num(r.tp_r, 2) + 'R') + '</td>' +
+          '<td class="tt-num">' + opt(r.oos_trades, 0) + '</td>' +
+          '<td class="tt-num">' + (r.oos_win_rate == null ? '—' : num(r.oos_win_rate * 100, 1)) + '</td>' +
+          '<td class="tt-num ' + signClass(r.oos_expectancy_r) + '">' + opt(r.oos_expectancy_r, 3) + '</td>' +
+          '<td class="tt-num">' + opt(r.oos_profit_factor, 2) + '</td>' +
+          '<td class="tt-muted">' + esc(r.refusal || '') + '</td>' +
+          '</tr>';
+      }).join('');
+    });
+  }
+
+  /* ── Controls view: features only the classic terminal had ─────────────── */
+  function renderControls() {
+    var mode = String(state.executionMode || '').toUpperCase();
+    var style = String(state.tradeStyle || '').toUpperCase();
+    setText($('ctl-mode-now'), mode);
+    setText($('ctl-style-now'), style);
+    setText($('ctl-safe-now'), state.safeMode == null ? '' : (state.safeMode ? 'ON' : 'OFF'));
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ctl-mode]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-ctl-mode') === mode));
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ctl-style]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-ctl-style') === style));
+    });
+    var safe = $('ctl-safe-toggle');
+    if (safe) safe.setAttribute('aria-pressed', String(!!state.safeMode));
+  }
+
+  function loadControlsRadar() {
+    var body = $('ctl-radar-body'), sel = $('ctl-radar-style');
+    if (!body) return;
+    var style = sel ? sel.value : 'ALL';
+    apiGet('/api/radar?trade_style=' + encodeURIComponent(style), TIMEOUT.normal).then(function (res) {
+      var opps = res.ok && res.data && res.data.opportunities;
+      if (!Array.isArray(opps)) { setState(body, 'error', 'Radar unavailable', actionFailureMessage('', res)); return; }
+      if (!opps.length) { setState(body, 'empty', 'No setups', 'The radar has nothing in this style.'); return; }
+      body.removeAttribute('data-state');
+      body.innerHTML = opps.slice(0, 30).map(function (o) {
+        var sym = o.symbol || '';
+        var win = Number(o.win_prob != null ? o.win_prob : o.score);
+        return '<tr>' +
+          '<td><span class="tt-symbol">' + esc(sym) + '</span></td>' +
+          '<td>' + esc(String(o.status_label || o.action || o.decision || '—').toUpperCase()) + (o.is_actionable === true ? ' <span class="tt-chip tt-chip--accent">live</span>' : '') + '</td>' +
+          '<td>' + esc(o.trade_style || '—') + '</td>' +
+          '<td class="tt-num">' + formatPrice(o.entry_price, sym) + '</td>' +
+          '<td class="tt-num">' + formatPrice(o.stop_loss, sym) + '</td>' +
+          '<td class="tt-num">' + formatPrice(o.take_profit, sym) + '</td>' +
+          '<td class="tt-num">' + num(o.risk_reward_ratio, 2) + '</td>' +
+          '<td class="tt-num">' + (isFinite(win) ? num(win, 0) + '%' : '—') + '</td>' +
+          '</tr>';
+      }).join('');
+    });
+  }
+
+  /* One confirm-then-post path for every Controls button. */
+  function controlAction(title, message, danger, path, body, done) {
+    showCockpitConfirm(title, message, danger, function () {
+      apiPost(path, body || {}, TIMEOUT.normal).then(function (res) {
+        if (res.ok && !actionRefused(res.data)) { if (done) done(res.data || {}); loadTelemetry(); }
+        else toast(actionFailureMessage(title + ' failed: ', res), 'error');
+      });
+    });
+  }
+
+  function wireDesks() {
+    var form = $('pending-modify-form');
+    if (form) form.addEventListener('submit', submitPendingModify);
+    var cancel = $('pending-modify-cancel');
+    if (cancel) cancel.addEventListener('click', function () { showModal($('pending-modify-modal'), false); });
+
+    ['perf-by', 'perf-mode'].forEach(function (id) { var el = $(id); if (el) el.addEventListener('change', loadPerformance); });
+    var pr = $('perf-refresh');
+    if (pr) pr.addEventListener('click', loadPerformance);
+
+    var rs = $('ctl-radar-style');
+    if (rs) rs.addEventListener('change', loadControlsRadar);
+    var rr = $('ctl-radar-refresh');
+    if (rr) rr.addEventListener('click', loadControlsRadar);
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ctl-mode]'), function (b) {
+      b.addEventListener('click', function () {
+        var m = b.getAttribute('data-ctl-mode');
+        // The confirm dialog is the operator's explicit LIVE confirmation.
+        controlAction('Switch to ' + m, m === 'LIVE'
+          ? 'Switch to LIVE? New orders will reach the connected MT5 account with real money.'
+          : 'Switch execution mode to ' + m + '?', m === 'LIVE',
+          '/api/action/set_mode', { mode: m, confirm_live: m === 'LIVE' },
+          function (d) { toast('Execution mode: ' + (d.mode || m)); });
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ctl-style]'), function (b) {
+      b.addEventListener('click', function () {
+        var s = b.getAttribute('data-ctl-style');
+        apiPost('/api/action/set_trade_style', { trade_style: s }, TIMEOUT.normal).then(function (res) {
+          if (res.ok && !actionRefused(res.data)) {
+            state.tradeStyle = s;
+            renderControls();
+            toast('Trade style: ' + s + (res.data && res.data.applied_to_orchestrator === false ? ' (engine not attached)' : ''));
+            loadControlsRadar();
+          } else {
+            toast(actionFailureMessage('Trade style failed: ', res), 'error');
+          }
+        });
+      });
+    });
+    var safe = $('ctl-safe-toggle');
+    if (safe) safe.addEventListener('click', function () {
+      apiPost('/api/action/toggle_safe_mode', {}, TIMEOUT.normal).then(function (res) {
+        if (res.ok && res.data && typeof res.data.safe_mode !== 'undefined') {
+          state.safeMode = res.data.safe_mode;
+          renderControls();
+          toast('Safe mode ' + (state.safeMode ? 'ON' : 'OFF'));
+        } else {
+          toast(actionFailureMessage('Safe mode failed: ', res), 'error');
+        }
+      });
+    });
+    var stop = $('ctl-estop');
+    if (stop) stop.addEventListener('click', function () {
+      controlAction('Emergency stop', 'Trip the circuit breaker and halt all autonomous trading now?', true,
+        '/api/action/emergency_stop', { reason: 'Operator Emergency Stop (Controls)', close_positions: false },
+        function () { toast('Emergency stop active. Circuit breaker TRIPPED.', 'warn'); });
+    });
+    var resume = $('ctl-resume');
+    if (resume) resume.addEventListener('click', function () {
+      controlAction('Resume trading', 'Reset the circuit breaker and resume autonomous trading?', false,
+        '/api/action/resume_trading', {}, function () { toast('Trading resumed.'); });
+    });
+    var dd = $('ctl-reset-dd');
+    if (dd) dd.addEventListener('click', function () {
+      controlAction('Reset drawdown', 'Re-base the daily-loss limit and clear the drawdown halt? (admin only)', true,
+        '/api/action/reset_drawdown', {}, function () { toast('Drawdown reset.'); });
+    });
+  }
+
   function boot() {
     bind();
+    wireDesks();
     wireSymbolsControl();
     loadSymbolsIntelligence();
     try {
@@ -7612,7 +7897,9 @@
     var hashView = viewFromHash();
     if (hashView) setView(hashView);
     window.addEventListener('hashchange', function () {
-      setView(viewFromHash() || 'trade');
+      // setView itself fires hashchange after replaceState; don't load twice.
+      var v = viewFromHash() || 'trade';
+      if (v !== state.view) setView(v);
     });
     // Reparent the tab bar for the current width and keep it correct across
     // breakpoint changes (orientation flip, desktop↔phone resize).

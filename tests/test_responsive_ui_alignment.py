@@ -21,12 +21,9 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
     def setUpClass(cls):
         cls.templates = {
             "dashboard": (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8"),
-            "console": (TEMPLATES_DIR / "console.html").read_text(encoding="utf-8"),
-            "positions": (TEMPLATES_DIR / "positions.html").read_text(encoding="utf-8"),
             "stocks": (TEMPLATES_DIR / "stocks.html").read_text(encoding="utf-8"),
             "india": (TEMPLATES_DIR / "india.html").read_text(encoding="utf-8"),
             "options": (TEMPLATES_DIR / "india_options.html").read_text(encoding="utf-8"),
-            "classic": (TEMPLATES_DIR / "index.html").read_text(encoding="utf-8"),
         }
         cls.theme_bugatti = (CSS_DIR / "theme_bugatti.css").read_text(encoding="utf-8")
         cls.bootstrap_css = (CSS_DIR / "bootstrap.min.css").read_text(encoding="utf-8")
@@ -46,8 +43,8 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
 
     def test_universal_bugatti_navbar_desk_parity(self):
         """Verify all 6 active market desks exist in navigation across primary surfaces."""
-        desks = ['href="/"', 'href="/console"', 'href="/positions"', 'href="/stocks"', 'href="/india"', 'href="/options"']
-        for surface in ["dashboard", "console", "positions", "stocks", "india", "options"]:
+        desks = ['href="/"', 'href="/#controls"', 'href="/#positions"', 'href="/stocks"', 'href="/india"', 'href="/options"']
+        for surface in ["dashboard", "stocks", "india", "options"]:
             html = self.templates[surface]
             self.assertIn("bugatti-navbar", html, f"{surface} missing bugatti-navbar class")
             for d in desks:
@@ -94,7 +91,7 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
 
     def test_unified_navbar_hierarchy_and_more_dropdown(self):
         """Verify navigation bar follows Cockpit + Markets dropdown hierarchy containing all options/desks, and Account dropdown contains admin & logout."""
-        surfaces = ["dashboard", "stocks", "india", "options", "console", "positions"]
+        surfaces = ["dashboard", "stocks", "india", "options"]
         for s in surfaces:
             html = self.templates[s]
             self.assertIn("Markets", html, f"{s} missing Markets dropdown")

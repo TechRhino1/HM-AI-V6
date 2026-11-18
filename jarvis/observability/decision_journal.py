@@ -8,11 +8,13 @@ journal failure never reaches the trading path.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 from typing import Any, Dict
 
+logger = logging.getLogger(__name__)
 _LOCK = threading.Lock()
 _LAST: Dict[tuple, str] = {}
 
@@ -47,9 +49,11 @@ def record(result: Dict[str, Any]) -> None:
             "authorized": bool(result.get("authorized")),
             "auth_reason": result.get("auth_reason") or "",
             "executed": (result.get("execution") or {}).get("status"),
+            "vetoes": list(getattr(d, "dispatch_vetoes", None) or []),
         }
         verdict = json.dumps({k: row[k] for k in ("decision", "bias", "strategy", "failing",
-                                                    "waiting", "authorized", "auth_reason", "executed")},
+                                                    "waiting", "authorized", "auth_reason", "executed",
+                                                    "vetoes")},
                              default=str, sort_keys=True)
         key = (row["symbol"], row["style"])
         with _LOCK:
@@ -61,8 +65,25 @@ def record(result: Dict[str, Any]) -> None:
             path = os.path.join(_dir(), time.strftime("decisions_%Y%m%d.jsonl", time.gmtime()))
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row, default=str) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("decision journal write failed: %s", e)
+
+
+def record_dispatch(row: Dict[str, Any]) -> None:
+    """Journal one arbiter dispatch (the path that actually places orders), tagged
+    kind=dispatch. Never de-duplicated: every attempt is a real event."""
+    try:
+        from jarvis.config.runtime import is_offline
+        if is_offline():
+            return
+        row = dict(row, kind="dispatch", ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        with _LOCK:
+            os.makedirs(_dir(), exist_ok=True)
+            path = os.path.join(_dir(), time.strftime("decisions_%Y%m%d.jsonl", time.gmtime()))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, default=str) + "\n")
+    except Exception as e:
+        logger.warning("decision journal dispatch write failed: %s", e)
 
 
 def record_router(row: Dict[str, Any]) -> None:

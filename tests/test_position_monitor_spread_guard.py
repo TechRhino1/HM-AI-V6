@@ -267,9 +267,9 @@ class TestThresholdsAreSymbolSpecific(unittest.TestCase):
     """Thresholds must differ per symbol, and the EURJPY boundary must hold."""
 
     def test_same_spread_fires_for_tight_symbol_not_for_wide_symbol(self):
-        """A spread of 1.5 pips exceeds EURUSD's 2x0.7=1.4 threshold but is far
+        """A spread of 2.5 pips exceeds EURUSD's 2x1.0=2.0 threshold but is far
         below XAUUSD's 2x2.0=4.0 — so the guard must be symbol-specific."""
-        spread = 1.5
+        spread = 2.5
         self.assertGreater(spread, resolve("EURUSD").typical_spread_pips * SPREAD_BLOWOUT_MULT)
         self.assertLess(spread, resolve("XAUUSD").typical_spread_pips * SPREAD_BLOWOUT_MULT)
 

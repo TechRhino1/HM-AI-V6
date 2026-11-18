@@ -428,3 +428,89 @@ def _pack(fill, exit_price, sl_initial, sl_final, risk_dist, booked_r,
         "mode": geom.mode,
         "geometry_key": geom.key(),
     }
+
+
+def geometry_from_profile(wr_profile: Any) -> "ExitGeometry":
+    """The validated base geometry a calibrated profile was scored on.
+
+    Shared by BacktestEngine and the live exit path so both execute the SAME
+    schedule the out-of-sample expectancy was measured on. ``trail_atr=None``
+    is passed through (no runner trail), never defaulted.
+    """
+    geom = wr_profile.geometry
+    trail = getattr(geom, "trail_atr", None)
+    return build_exit_geometry(
+        getattr(wr_profile, "geometry_mode", "A_fixed_tp"),
+        tp_r=float(geom.tp_r) if (geom and geom.tp_r is not None) else 1.0,
+        trail_atr=None if trail is None else float(trail),
+        be_trigger_r=getattr(geom, "be_trigger_r", None),
+        trail_activation_r=float(getattr(geom, "trail_activation_r", 2.0) or 2.0),
+        max_bars=int(geom.max_bars) if geom else 48,
+    )
+
+
+_LIVE_PROFILES: Optional[Dict[str, Any]] = None
+
+# Deployment bar: a symbol trades live only with this much out-of-sample evidence.
+MIN_OOS_EXPECTANCY_R = 0.05
+MIN_OOS_TRADES = 100
+
+
+def live_profile(symbol: str) -> Optional[Any]:
+    """The calibrated profile the LIVE engine trades `symbol` on, or None when the
+    calibrated policy is off, we are in a backtest, or no profile exists."""
+    global _LIVE_PROFILES
+    try:
+        from jarvis.config.runtime import is_offline
+        from jarvis.config.settings import SETTINGS
+        if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
+            return None
+        if _LIVE_PROFILES is None:
+            from jarvis.intelligence.winrate_targeting import load_profiles
+            _LIVE_PROFILES = load_profiles()
+        from jarvis.data.symbol_registry import resolve
+        return _LIVE_PROFILES.get(str(resolve(symbol).canonical).upper()) or _LIVE_PROFILES.get(str(symbol).upper())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def live_exit_geometry(symbol: str) -> Optional["ExitGeometry"]:
+    """Calibrated geometry for live trading, or None (then the legacy style-profile exits apply)."""
+    prof = live_profile(symbol)
+    try:
+        return geometry_from_profile(prof) if prof is not None else None
+    except Exception:  # noqa: BLE001 - exits must keep working on the legacy policy
+        return None
+
+
+def deployment_refusal(symbol: str) -> Optional[str]:
+    """Why `symbol` may not trade live under the calibrated policy, or None if it may.
+    A symbol with no profile has no validated evidence, so it is refused too."""
+    try:
+        from jarvis.config.runtime import is_offline
+        from jarvis.config.settings import SETTINGS
+        if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    prof = live_profile(symbol)
+    if prof is None:
+        return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"
+    n, e = int(getattr(prof, "oos_trades", 0) or 0), float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
+    if n < MIN_OOS_TRADES or e < MIN_OOS_EXPECTANCY_R:
+        return (f"EXPECTANCY_GATE: {symbol} out-of-sample {e:+.3f}R over {n} trades "
+                f"(needs >= {MIN_OOS_EXPECTANCY_R:+.2f}R over >= {MIN_OOS_TRADES})")
+    return None
+
+
+def live_target_r(symbol: str) -> Optional[float]:
+    """Take-profit distance in R for a live order: the calibrated geometry's target
+    (a trail-only runner gets a 10R safety cap), else the profile's fixed_target_r, else None."""
+    geom = live_exit_geometry(symbol)
+    if geom is not None:
+        return float(geom.tp_r) if geom.tp_r is not None else 10.0
+    try:
+        from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
+        return getattr(get_symbol_profile_config(symbol), "fixed_target_r", None)
+    except Exception:  # noqa: BLE001
+        return None

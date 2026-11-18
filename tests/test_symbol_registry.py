@@ -182,6 +182,28 @@ def test_broker_aliases_resolve_to_the_canonical_spec():
         assert resolve(alias).canonical == canonical, f"{alias} -> {resolve(alias).canonical}"
 
 
+#: canonical -> broker name that resolve_broker_symbol returned on XMGlobal-MT5 5
+#: (tools/mt5_data_audit.py, reports/MT5_DATA_AUDIT_2026-11-18.md).
+XM_RESOLVED = {
+    "EURUSD": "EURUSD#", "GBPUSD": "GBPUSD#", "USDJPY": "USDJPY#", "XAUUSD": "GOLD.i#",
+    "BTCUSD": "BTCUSD#", "ETHUSD": "ETHUSD#", "SOLUSD": "SOLUSD#", "AUDUSD": "AUDUSD#",
+    "USDCAD": "USDCAD#", "USDCHF": "USDCHF#", "ETHBTC": "ETHBTC#", "US30": "US30Cash#",
+    "NAS100": "US100Cash#", "US500": "US500Cash#", "WTI": "OILCash#",
+}
+
+
+def test_xm_broker_names_round_trip_to_their_canonical_spec():
+    """The broker name is tried first, and maps back to the same registry spec and profile."""
+    from jarvis.data.broker_symbols import BROKER_ALIASES
+    from jarvis.data.symbol_registry import is_registered
+    from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
+
+    for canon, broker in XM_RESOLVED.items():
+        assert BROKER_ALIASES[canon][0] == broker, canon
+        assert is_registered(broker) and resolve(broker).canonical == canon, broker
+        assert get_symbol_profile_config(broker).canonical == canon, broker
+
+
 def test_unknown_symbol_logs_an_error_and_still_returns_a_spec(caplog):
     """The fallback must be loud, not silent."""
     import logging

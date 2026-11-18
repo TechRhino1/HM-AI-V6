@@ -238,26 +238,15 @@ def main():
             f"status={status}",
         )
 
-        status, body = request("/console")
-        record(
-            "GET /console serves the previous console",
-            status == 200 and "cx-topbar" in body,
-            f"status={status} bytes={len(body)}",
-        )
-
-        status, body = request("/classic")
-        record(
-            "GET /classic still serves the legacy terminal (rollback path)",
-            status == 200 and "terminal.js" in body,
-            f"status={status} bytes={len(body)}",
-        )
-
-        status, body = request("/classic.html")
-        record(
-            "GET /classic.html serves the same legacy terminal",
-            status == 200 and "terminal.js" in body,
-            f"status={status} bytes={len(body)}",
-        )
+        # /console, /classic and /positions were merged into the dashboard as
+        # tabs; urllib follows their 302 to /#<tab>, which serves dashboard.html.
+        for old in ("/console", "/classic", "/classic.html", "/positions"):
+            status, body = request(old)
+            record(
+                f"GET {old} redirects to the merged dashboard",
+                status == 200 and "dashboard.js" in body,
+                f"status={status} bytes={len(body)}",
+            )
 
         # The retired UI must be genuinely gone, not merely unrouted.
         status, _ = request("/static/js/app_shell.js")
@@ -270,11 +259,7 @@ def main():
         # ── 2. Assets ──────────────────────────────────────────────────────
         for asset, needle in (
             ("/static/css/theme_terminal.css", "tt-panel"),
-            ("/static/css/console.css", "cx-topbar"),
             ("/static/js/dashboard.js", "HM Algo 2.0"),
-            # console.js is an IIFE and deliberately exports no global, so match
-            # a distinctive string from the file body instead.
-            ("/static/js/console.js", "HM Algo 2.0 Console"),
         ):
             status, body = request(asset)
             record(

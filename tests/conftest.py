@@ -162,6 +162,20 @@ def _hermetic_trade_memory(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _legacy_exits_unless_marked(monkeypatch, request):
+    """Live exits follow the calibrated profile geometry when config/settings.json enables the
+    calibrated policy. Most exit tests pin the style-profile machinery that non-calibrated symbols
+    still use, so they run on it unless marked `calibrated_exits`."""
+    if request.node.get_closest_marker("calibrated_exits"):
+        return
+    from jarvis.backtesting import exit_geometry
+
+    monkeypatch.setattr(exit_geometry, "live_exit_geometry", lambda symbol: None)
+    # Same for the live deployment bar (expectancy gate): unit tests use synthetic symbols/setups.
+    monkeypatch.setattr(exit_geometry, "deployment_refusal", lambda symbol: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_live_news_outside_news_tests(monkeypatch, request):
     """Orchestrator paths consult the live economic calendar on the WALL CLOCK; inside +-30 min of
     a real HIGH-impact release (or a scheduled one, via the fail-closed fallback) entries are

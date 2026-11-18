@@ -12,7 +12,7 @@ substitutes a neutral report. Two properties made that dangerous:
 * **The Devil's Advocate is a gate, and its fallback always passes it.**
   `decision_engine:644` gates on
   `"Devil Adversarial Guard": penalty_score <= max_devil_penalty` (default 43.0),
-  and the fallback sets `penalty_score = 0.0`. So when the critic dies the
+  and the fallback now sets `penalty_score = 100.0` (fail-closed, audit 2026-11-18). Before that it was 0.0, so when the critic died the
   adversarial check is not weakened — it is removed, and the trade proceeds
   uncriticised with a full set of green quality gates.
 * **`penalty_score` is also a recorded feature.** It goes into the ML feature
@@ -275,7 +275,7 @@ class TestDevilFallback:
         cl = Cluster()
         cl.devil_behaviour = ("raise", "boom")
         _, dv = cl.run()
-        assert dv.penalty_score == 0.0
+        assert dv.penalty_score == 100.0
         assert dv.counter_bias == "NEUTRAL"
         assert dv.threats_detected == []
         assert dv.liquidity_traps == []
@@ -284,7 +284,7 @@ class TestDevilFallback:
         cl = Cluster(timeout_sec=0.05)
         cl.devil_behaviour = ("sleep", 0.5)
         _, dv = cl.run()
-        assert dv.penalty_score == 0.0
+        assert dv.penalty_score == 100.0
 
     def test_the_fallback_carries_the_context_symbol(self):
         cl = Cluster()
@@ -292,18 +292,14 @@ class TestDevilFallback:
         _, dv = cl.run(symbol="EURUSD")
         assert dv.symbol == "EURUSD"
 
-    def test_the_fallback_penalty_passes_the_adversarial_gate(self):
-        """THE FAIL-OPEN, STATED PLAINLY.
-
-        decision_engine:644 gates on `penalty_score <= max_devil_penalty` with a
-        default of 43.0. A fallback penalty of 0.0 therefore passes, so a dead
-        critic removes the adversarial check rather than tripping it.
-        """
+    def test_the_fallback_penalty_fails_the_adversarial_gate(self):
+        """Fail-closed since the 2026-11-18 audit: the gate is
+        `penalty_score <= max_devil_penalty` (43.0, +10 for elite scores), so a
+        dead critic must trip it rather than remove it."""
         cl = Cluster()
         cl.devil_behaviour = ("raise", "boom")
         _, dv = cl.run()
-        assert dv.penalty_score <= 43.0
-        assert dv.penalty_score == 0.0          # not merely small, but absent
+        assert dv.penalty_score > 53.0
 
     def test_the_fallback_claims_no_confidence(self):
         """The schema default is 1.0, i.e. full confidence in a critique that
@@ -328,7 +324,7 @@ class TestDevilFallback:
         cl.devil_behaviour = ("raise", "boom")
         with caplog.at_level("WARNING", logger="JARVIS_AnalystCluster"):
             cl.run()
-        assert any("Devil" in r.message and "uncriticised" in r.message
+        assert any("Devil" in r.message and "FAILS the" in r.message
                    for r in caplog.records)
 
 
@@ -405,4 +401,4 @@ class TestTimeoutBudget:
         cl.devil_behaviour = ("sleep", 0.3)
         reports, dv = cl.run()
         assert all(r.score == 50.0 for r in reports.values())
-        assert dv.penalty_score == 0.0
+        assert dv.penalty_score == 100.0

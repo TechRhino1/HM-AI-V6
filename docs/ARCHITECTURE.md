@@ -740,8 +740,10 @@ the guard working.
 The dashboard (`jarvis/ui/templates/dashboard.html` + `static/js/dashboard.js`,
 served at `/`, `/dashboard`) is a six-view terminal — Trade, News, Analyst,
 Markets, Analytics, Backtest — sitting on the `hm_ui.css` token set with
-`theme_terminal.css` as its component layer. `/console` and `/classic` still
-serve the older surfaces.
+`theme_terminal.css` as its component layer. Four desk tabs sit under the
+rail (Trading, Positions & Orders, Performance, Controls); the old `/console`,
+`/classic` and `/positions` pages were merged into them and now 302 to
+`/#trading`, `/#controls` and `/#positions`.
 
 A view is reachable only if three things agree: the rail has a
 `data-view-btn="x"`, the template has a `data-view-panel="x"` and an

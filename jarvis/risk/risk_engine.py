@@ -351,6 +351,12 @@ class RiskEngine:
                     f"and {pending_count} pending order(s) (limit {HARD_MAX_TRADES_PER_SYMBOL})."
                 )
 
+            # 0. Deployment bar: only symbols with validated out-of-sample expectancy trade live.
+            from jarvis.backtesting.exit_geometry import deployment_refusal
+            _deploy = deployment_refusal(symbol)
+            if _deploy:
+                rejection_reasons.append(_deploy)
+
             # 1. Circuit Breaker & Consecutive Loss Cooldown status (Global + Per-Symbol / Per-Regime)
             cb = self.circuit_breaker.check_status()
             if cb.get("active"):
@@ -629,6 +635,11 @@ class RiskEngine:
             except Exception as _learned_exc:
                 logger.debug("Learned sizing unavailable: %s", _learned_exc)
 
+            # LLM governor may only reduce risk (orchestrator sets this; it used to be written
+            # to calculated_risk_percent, which nothing reads).
+            _gov_mult = min(1.0, max(0.0, float(getattr(decision, "governor_risk_mult", 1.0) or 1.0)))
+            base_risk *= _gov_mult
+
             sym_info_enriched = dict(symbol_info) if symbol_info else {}
             if "name" not in sym_info_enriched and "symbol" not in sym_info_enriched:
                 sym_info_enriched["name"] = decision.symbol
@@ -639,7 +650,7 @@ class RiskEngine:
                 sl_price=decision.stop_loss,
                 risk_pct=base_risk,
                 symbol_info=sym_info_enriched,
-                invalidation_risk_coefficient=1.0 - (decision.adversarial_penalty / 60.0),
+                invalidation_risk_coefficient=max(0.20, 1.0 - (float(decision.adversarial_penalty or 0.0) / 60.0)),
                 model_confidence=decision.model_confidence,
                 pattern_sample_size=sample_size,
                 portfolio_heat_multiplier=combined_multiplier,

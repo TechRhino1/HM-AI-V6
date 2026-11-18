@@ -35,7 +35,8 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const BASE = process.env.DASH_URL || 'http://127.0.0.1:8501/dashboard';
-const VIEWS = ['trade', 'news', 'analyst', 'markets', 'analytics', 'backtest'];
+// The four desk tabs are always on screen; the rest sit in the Desks menu.
+const VIEWS = ['trade', 'positions', 'performance', 'controls'];
 
 let failures = 0;
 let checks = 0;
@@ -175,7 +176,7 @@ async function serverIsUp() {
   console.log('\nview navigation');
   for (const view of VIEWS) {
     const before = await probe(page, 3000);
-    const click = await deadline(page.click(`[data-view-btn="${view}"]`), 12000, 'click');
+    const click = await deadline(page.click(`.tt-maintab[data-view-btn="${view}"]`), 12000, 'click');
     await sleep(1200);
     const after = await probe(page, 3000);
 

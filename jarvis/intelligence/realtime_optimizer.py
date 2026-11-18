@@ -111,6 +111,7 @@ class RealtimeOptimizer:
                 cur.execute(
                     "SELECT realized_pnl FROM executed_trades "
                     "WHERE realized_pnl IS NOT NULL AND realized_pnl != 0 "
+                    "AND COALESCE(regime, '') != 'FORWARD_TEST' "  # forward tests have their own pre-registered rules
                     f"ORDER BY id DESC LIMIT {int(limit)}"
                 )
                 rows = cur.fetchall()

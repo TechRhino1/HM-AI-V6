@@ -58,7 +58,7 @@ def test_governor_uses_registry_spread_baseline_not_two_pips():
         active_symbols = ["BTCUSD", "ETHUSD"]
         market_contexts = {
             "BTCUSD": SimpleNamespace(live_spread_pips=1500.0),
-            "ETHUSD": SimpleNamespace(live_spread_pips=345.0),
+            "ETHUSD": SimpleNamespace(live_spread_pips=190.0),  # registry typical (MT5 audit 2026-11-18)
         }
         latest_decisions = {}
 

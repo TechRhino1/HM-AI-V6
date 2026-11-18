@@ -215,6 +215,7 @@ class TestStopAndReverseAndSellFromTop(unittest.TestCase):
             cand_dec = MagicMock()
             cand_dec.symbol = "XAUUSD"
             cand_dec.bias = "BUY"
+            cand_dec.dispatch_vetoes = []  # a clean dry-run scan computed no hard vetoes
             cand_dec.decision = "EXECUTE"
             cand_dec.order_type = "MARKET"
             cand_dec.price = 2400.0

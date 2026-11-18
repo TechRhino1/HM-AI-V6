@@ -37,7 +37,7 @@
       svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2"/></svg>' },
     { id: 'markets', label: 'Markets', href: '/stocks',
       svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c2.4 2.4 3.6 5 3.6 8S14.4 17.6 12 20c-2.4-2.4-3.6-5-3.6-8S9.6 6.4 12 4Z"/></svg>' },
-    { id: 'positions', label: 'Positions', href: '/positions',
+    { id: 'positions', label: 'Positions', href: '/#positions',
       svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 20V11"/><path d="M12 20V4.5"/><path d="M18.5 20v-6.5"/></svg>' },
     { id: 'more', label: 'More', more: true,
       svg: '<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><circle cx="5.2" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.8" cy="12" r="1.5"/></svg>' }
@@ -67,8 +67,8 @@
       title: 'Tools',
       items: [
         { ico: '⚡', label: 'Cockpit (Forex/Crypto)', href: '/' },
-        { ico: '📟', label: 'Console & Operations', href: '/console' },
-        { ico: '📋', label: 'Live Positions Book', href: '/positions' }
+        { ico: '🎛️', label: 'Controls', href: '/#controls' },
+        { ico: '📈', label: 'Performance', href: '/#performance' }
       ]
     }
   ];
@@ -82,9 +82,9 @@
     var p = location.pathname;
     var h = (location.hash || '').slice(1);
     if (p === '/stocks' || p === '/india' || p === '/options') return 'markets';
-    if (p === '/positions') return 'positions';
+
     if (p === '/' || p === '/dashboard' || p === '/forex') {
-      return h === 'symbols' ? 'symbols' : 'cockpit';
+      return h === 'symbols' || h === 'positions' ? h : 'cockpit';
     }
     return '';
   }

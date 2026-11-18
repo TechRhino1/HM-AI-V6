@@ -319,8 +319,9 @@ class ExecutionEngine:
         executable_sl_dist = max(planned_sl_dist, min_broker_stop_dist)
 
         # Fixed-target symbols (gold): the take profit is exactly N x the stop distance.
-        from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
-        _fixed_r = getattr(get_symbol_profile_config(decision.symbol), "fixed_target_r", None)
+        # Calibrated symbols target what the calibration measured; others keep fixed_target_r.
+        from jarvis.backtesting.exit_geometry import live_target_r
+        _fixed_r = live_target_r(decision.symbol)
         if _fixed_r and planned_sl_dist > 0 and decision.bias in ("BUY", "SELL"):
             decision.take_profit = decision.entry_price + (1 if decision.bias == "BUY" else -1) * _fixed_r * planned_sl_dist
             decision.risk_reward_ratio = _fixed_r

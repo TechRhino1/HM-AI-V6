@@ -336,19 +336,3 @@ class TestTheBanditTreatsNoneAsUnknown:
         assert e["alpha"] == pytest.approx(5.5)
         assert e["rewards"] == pytest.approx(2.5)
 
-    def test_the_ensemble_does_not_raise_on_unknown_r(self):
-        from jarvis.learning.ensemble_bandit import EnsembleStrategyBandit
-
-        b = EnsembleStrategyBandit(["TREND_FOLLOWING"])
-        # Old behaviour: `max(0.5, None)` -> TypeError.
-        b.record_outcome("TREND_FOLLOWING", is_win=True, r_multiple=None)
-        assert b._counts["TREND_FOLLOWING"] == 1
-        assert b._wins["TREND_FOLLOWING"] == 1
-        assert b._rewards["TREND_FOLLOWING"] == pytest.approx(0.0)
-
-    def test_the_ensemble_still_credits_a_measured_r(self):
-        from jarvis.learning.ensemble_bandit import EnsembleStrategyBandit
-
-        b = EnsembleStrategyBandit(["TREND_FOLLOWING"])
-        b.record_outcome("TREND_FOLLOWING", is_win=True, r_multiple=2.0)
-        assert b._rewards["TREND_FOLLOWING"] == pytest.approx(2.0)

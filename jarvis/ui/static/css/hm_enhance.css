@@ -100,3 +100,97 @@ th.tt-num .hm-sort-btn { flex-direction: row-reverse; }
   }
   #watch-table[data-hm-cards] tbody td:not([data-primary])::before { font-size: 0.5625rem; margin: 0 !important; }
 }
+
+/* ── Main desk tabs (Trading / Positions & Orders / Performance / Controls) ── */
+.tt-maintabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--hm-border-subtle, rgba(255,255,255,0.08));
+  scrollbar-width: none;
+}
+.tt-maintab {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--hm-text-secondary, #94a3b8);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 32px;
+}
+.tt-maintab:hover { color: var(--hm-text-primary, #e6edf7); }
+.tt-maintab[aria-selected="true"] {
+  color: var(--hm-text-primary, #e6edf7);
+  border-color: var(--hm-accent, #38bdf8);
+  background: rgba(56, 189, 248, 0.12);
+}
+.tt-maintab:focus-visible { outline: 2px solid var(--hm-accent, #38bdf8); outline-offset: 2px; }
+
+/* The tab strip gets its own row in the body grid at every breakpoint. */
+.tt-maintabs { grid-area: maintabs; }
+body.tt-app {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "rail" "maintabs" "main" "status";
+}
+@media (min-width: 600px) and (max-width: 1024px) {
+  body.tt-app {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "rail maintabs" "rail main" "rail status";
+  }
+}
+@media (max-width: 599px) {
+  body.tt-app {
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "rail" "maintabs" "panebar" "main" "status";
+  }
+  .tt-maintabs { padding: 4px 8px; }
+  .tt-maintab { padding: 6px 10px; font-size: 0.75rem; }
+  /* The pane bar only steers the Trading view's panes. */
+  body.tt-app:not([data-view="trade"]) .tt-pane-bar { display: none; }
+}
+
+/* Desk views stack full-width panels. */
+#view-positions, #view-performance, #view-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow: auto;
+}
+#view-positions[hidden], #view-performance[hidden], #view-controls[hidden] { display: none; }
+.tt-panel__head--wrap { flex-wrap: wrap; gap: 6px; }
+.tt-panel--desk { flex: none; min-height: auto; max-height: none; overflow: visible; }
+.tt-panel--desk .tt-panel__body { overflow-x: auto; max-height: none; }
+.tt-panel--desk .tt-table { width: 100%; }
+
+.tt-perf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tt-perf-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--hm-border-subtle, rgba(255,255,255,0.08));
+  border-radius: 8px;
+}
+.tt-perf-card b { font-size: 1.15rem; }
+
+.tt-ctl { display: flex; flex-direction: column; gap: 10px; }
+.tt-ctl__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tt-ctl__btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.tt-ctl [aria-pressed="true"] { outline: 2px solid var(--hm-accent, #38bdf8); outline-offset: 1px; }

@@ -860,9 +860,12 @@ class DecisionEngine:
         try:
             regime_str = regime.primary_regime.value if regime and hasattr(regime, "primary_regime") else "GLOBAL"
             adj = self.realtime_optimizer.get_adjustments(context.symbol, regime_str)
-            required_win_p = max(floor_win_p_opt, min(0.65, required_win_p + float(adj.get("win_p_delta", 0))))
-            min_score = max(floor_score_opt, min(80.0, min_score + float(adj.get("score_delta", 0))))
-            min_rr = max(1.3, min(2.0, min_rr + float(adj.get("rr_delta", 0))))
+            # Shadow only (audit 2026-11-18): backtests run these deltas at zero, so applying
+            # them live trades thresholds the calibration never measured. Logged, not applied.
+            if any(float(v or 0) for v in adj.values()):
+                logger.debug(f"[RealtimeOptimizer shadow] {context.symbol}/{regime_str} would adjust {adj}")
+            required_win_p = max(floor_win_p_opt, min(0.65, required_win_p))
+            min_score = max(floor_score_opt, min(80.0, min_score))
         except Exception:
             required_win_p = max(floor_win_p_opt, min(0.65, required_win_p))
             min_score = max(floor_score_opt, min(80.0, min_score))

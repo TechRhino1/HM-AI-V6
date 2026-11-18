@@ -144,8 +144,8 @@ def test_scanner_actually_reaches_the_ui_sources():
     files = _walk()
     assert len(files) > 200, f"only {len(files)} files scanned - the walk is wrong"
     rels = {os.path.relpath(f, ROOT).replace(os.sep, "/") for f in files}
-    assert "jarvis/ui/static/js/terminal.js" in rels
-    assert "jarvis/ui/templates/index.html" in rels
+    assert "jarvis/ui/static/js/dashboard.js" in rels
+    assert "jarvis/ui/templates/dashboard.html" in rels
 
 
 def test_no_double_encoded_text_in_the_shipped_tree():

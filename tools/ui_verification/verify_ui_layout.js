@@ -87,13 +87,11 @@ const VIEWPORTS = [
    `.bugatti-navbar` chrome, so the old selectors matched nothing and those
    checks could only ever fail. */
 const PAGES = [
-  { name: 'dashboard', url: '/dashboard', views: ['trade', 'news', 'analyst', 'markets', 'analytics', 'backtest'] },
+  { name: 'dashboard', url: '/dashboard', views: ['trade', 'positions', 'performance', 'controls', 'news', 'analyst', 'markets', 'analytics', 'backtest'] },
   { name: 'forex', url: '/' },
   { name: 'stocks', url: '/stocks', hud: '.bugatti-navbar' },
   { name: 'india', url: '/india', hud: '.bugatti-navbar' },
   { name: 'options', url: '/options', hud: '.bugatti-navbar' },
-  { name: 'console', url: '/console', hud: '.bugatti-navbar' },
-  { name: 'positions', url: '/positions', hud: '.bugatti-navbar' },
 ];
 
 /* Controls WCAG 2.5.5 applies to: the primary way in and out of every view.

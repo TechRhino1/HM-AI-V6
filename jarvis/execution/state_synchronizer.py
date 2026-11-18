@@ -13,6 +13,11 @@ from jarvis.application.event_bus import EventBus, GLOBAL_EVENT_BUS
 
 logger = logging.getLogger("JARVIS_StateSynchronizer")
 
+# MetaTrader5 DEAL_REASON_* codes of an exit deal.
+_DEAL_REASONS = {0: "MANUAL_CLIENT", 1: "MANUAL_MOBILE", 2: "MANUAL_WEB", 3: "EXPERT",
+                 4: "STOP_LOSS", 5: "TAKE_PROFIT", 6: "STOP_OUT"}
+
+
 class MT5StateSynchronizer:
     """Active background synchronizer and reconciler for MT5 broker states."""
     
@@ -31,8 +36,47 @@ class MT5StateSynchronizer:
         self._thread: Optional[threading.Thread] = None
         self._last_position_tickets: Set[int] = set()
         self._last_position_volumes: Dict[int, float] = {}
+        # Closed tickets whose exit deal MT5 has not published yet -> first-seen time.
+        self._pending_closes: Dict[int, float] = {}
         self._backoff_delay = 1.0
         self._max_backoff = 30.0
+
+    CLOSE_RETRY_SEC = 300.0
+
+    def _emit_trade_closed(self, t: int, account) -> bool:
+        """Publish trade_closed for ticket t; False = exit deal not visible yet, retry later."""
+        deals = None
+        if self.mt5_client.mode != "paper":
+            import MetaTrader5 as mt5
+            with self.mt5_client._shared_lock:
+                deals = mt5.history_deals_get(position=t)
+        exit_deals = [d for d in (deals or []) if getattr(d, "entry", 0) in (1, 3)]
+        expired = (time.time() - self._pending_closes.get(t, time.time())) >= self.CLOSE_RETRY_SEC
+        if not exit_deals and self.mt5_client.mode != "paper" and not expired:
+            return False
+        payload = {"ticket": t, "equity": getattr(account, "equity", 0.0)}
+        if exit_deals:
+            payload.update({
+                "symbol": deals[0].symbol,
+                "pnl": sum(d.profit + d.swap + d.commission for d in deals),
+                "exit_price": float(exit_deals[-1].price),
+            })
+            payload["is_win"] = 1 if payload["pnl"] > 0 else 0
+            # Broker-side exits (SL/TP/stop-out) never set exit_reason; the engine's own
+            # reason, written before it closes, wins via COALESCE in set_exit_reason.
+            reason = _DEAL_REASONS.get(int(getattr(exit_deals[-1], "reason", -1)), "BROKER_OTHER")
+            payload["exit_reason"] = reason
+            try:
+                from jarvis.data.database import TRADE_DB
+                TRADE_DB.set_exit_reason(t, reason)
+            except Exception as e:
+                logger.warning(f"Could not record exit reason for #{t}: {e}")
+        else:
+            # Paper mode, or MT5 never published the exit deal: close it with an UNMEASURED
+            # outcome (pnl=None) so the journal closes and nothing learns a fake value.
+            logger.warning(f"Position #{t}: no exit deal available; closing with unmeasured P&L.")
+        self.event_bus.publish_sync("trade_closed", payload)
+        return True
 
     def start(self):
         if not self._running:
@@ -102,33 +146,20 @@ class MT5StateSynchronizer:
                     logger.info(f"State Reconciliation: Position #{t} closed on broker terminal.")
                     self.event_bus.publish_sync("POSITION_CLOSED", {"ticket": t})
                     self._last_position_volumes.pop(t, None)
-                    
-                    # Fetch deal history for ML feedback loop (§17)
-                    try:
-                        deals = None
-                        if self.mt5_client.mode != "paper":
-                            import MetaTrader5 as mt5
-                            with self.mt5_client._shared_lock:
-                                deals = mt5.history_deals_get(position=t)
-                        if deals:
-                            total_pnl = sum(d.profit + d.swap + d.commission for d in deals)
-                            is_win = 1 if total_pnl > 0 else 0
-                            symbol = deals[0].symbol if deals else "UNKNOWN"
-                            exit_price = float(deals[-1].price) if len(deals) > 1 else float(deals[0].price)
-                            self.event_bus.publish_sync('trade_closed', {
-                                'ticket': t,
-                                'symbol': symbol,
-                                'pnl': total_pnl,
-                                'is_win': is_win,
-                                'exit_price': exit_price,
-                                'equity': account.equity
-                            })
-                    except Exception as e:
-                        logger.error(f"Failed to fetch deal history for closed position #{t}: {e}")
+                    self._pending_closes.setdefault(t, time.time())
                 except Exception as ex:
                     logger.error(f"Error handling closed ticket #{t}: {ex}")
                 finally:
                     self._last_position_tickets.discard(t)
+            # Emit trade_closed once the exit deal is visible. MT5 publishes deal history
+            # with a lag; the old code dropped the ticket on an empty/entry-only history,
+            # so the close never reached the journal, learners or circuit breaker.
+            for t in list(self._pending_closes):
+                try:
+                    if self._emit_trade_closed(t, account):
+                        self._pending_closes.pop(t, None)
+                except Exception as e:
+                    logger.error(f"Failed to resolve close for position #{t}: {e}")
 
             # Detect newly opened positions
             opened_tickets = current_tickets - self._last_position_tickets

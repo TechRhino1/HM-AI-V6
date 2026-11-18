@@ -12,19 +12,19 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Chart.js for Payoff Diagram & OI Bar Charts -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
     <link rel="stylesheet" href="/static/css/bootstrap.min.css">
     <!-- India Options Stylesheet -->
-    <link rel="stylesheet" href="/static/css/india_options.css?v=20261106_v5">
-    <link rel="stylesheet" href="/static/css/auth.css?v=20261106_v5">
+    <link rel="stylesheet" href="/static/css/india_options.css?v=20261118">
+    <link rel="stylesheet" href="/static/css/auth.css?v=20261118">
     <!-- Unified Design System (loaded LAST - see hm_ui.css) -->
-    <link rel="stylesheet" href="/static/css/hm_ui.css?v=20261106_v5">
+    <link rel="stylesheet" href="/static/css/hm_ui.css?v=20261118">
     <!-- iOS liquid-glass responsive layer (small screens only; desktop untouched) -->
-    <link rel="stylesheet" href="/static/css/ios_pages.css?v=20261106_v5">
+    <link rel="stylesheet" href="/static/css/ios_pages.css?v=20261118">
     <!-- Bugatti Cockpit & Unified Responsive Theme loaded LAST for authoritative precedence -->
     <link rel="stylesheet" href="/static/css/theme_bugatti.css">
 <!-- Mobile v3 "Aurora" iOS design system (small screens only; loaded last) -->
-<link rel="stylesheet" href="/static/css/hm_ios_v3.css?v=20261106_v5">
+<link rel="stylesheet" href="/static/css/hm_ios_v3.css?v=20261118">
 </head>
 <body>
 
@@ -78,8 +78,8 @@
               <a href="/?view=backtest" class="bugatti-dropdown__item"><span>⏱️ Strategy Backtest</span></a>
               <div class="bugatti-dropdown__divider"></div>
               <div class="bugatti-dropdown__header">OPERATIONS</div>
-              <a href="/positions" class="bugatti-dropdown__item"><span>📋 Positions Desk</span></a>
-              <a href="/console" class="bugatti-dropdown__item"><span>📟 Terminal Console</span></a>
+              <a href="/#positions" class="bugatti-dropdown__item"><span>📋 Positions Desk</span></a>
+              <a href="/#controls" class="bugatti-dropdown__item"><span>🎛️ Controls</span></a>
             </div>
           </div>
         </nav>
@@ -119,7 +119,7 @@
          has defined the handler, so an early tap threw
          "switchMobileOptionsView is not defined" and did nothing. Must load
          before the dock, not deferred. -->
-    <script src="/static/js/mobile_dock.js?v=20261106_v5"></script>
+    <script src="/static/js/mobile_dock.js?v=20261118"></script>
         <nav class="mobile-nav-bar" id="mobile-nav-bar" role="tablist" aria-label="Options view selector">
         <button id="mob-btn-advisor" class="mob-tab-btn active" role="tab" aria-selected="true" onclick="window.switchOptionsView('advisor')">👑 Master Advisor</button>
         <button id="mob-btn-singles" class="mob-tab-btn" role="tab" aria-selected="false" onclick="window.switchOptionsView('singles')">⚡ Single Buys</button>
@@ -284,7 +284,7 @@
                             <span>🇮🇳 Indian Equity Desk</span>
                             <span class="ext-arrow">&rarr;</span>
                         </a>
-                        <a href="/positions" class="sidebar-ext-link">
+                        <a href="/#positions" class="sidebar-ext-link">
                             <span>📋 Open Positions Desk</span>
                             <span class="ext-arrow">&rarr;</span>
                         </a>
@@ -859,11 +859,11 @@
     <!-- Bootstrap 5 JS Bundle -->
     <script src="/static/js/vendor/bootstrap.bundle.min.js"></script>
     <!-- Universal Authentication & Options Terminal Controller Script -->
-    <script src="/static/js/auth.js?v=20261106_v5"></script>
-    <script src="/static/js/india_options.js?v=20261106_v5"></script>
+    <script src="/static/js/auth.js?v=20261118"></script>
+    <script src="/static/js/india_options.js?v=20261118"></script>
     <!-- Unified UX / accessibility layer (loaded LAST). -->
-    <script src="/static/js/hm_ui.js?v=20261106_v5" defer></script>
-<script src="/static/js/hm_mobile_nav.js?v=20261106_v5"></script>
-<script src="/static/js/hm_mobile_ux.js?v=20261106_v5"></script>
+    <script src="/static/js/hm_ui.js?v=20261118" defer></script>
+<script src="/static/js/hm_mobile_nav.js?v=20261118"></script>
+<script src="/static/js/hm_mobile_ux.js?v=20261118"></script>
 </body>
 </html>

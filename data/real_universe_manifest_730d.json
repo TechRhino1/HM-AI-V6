@@ -1,0 +1,115 @@
+{
+  "days": 730,
+  "count": 3,
+  "datasets": [
+    {
+      "symbol": "BTCUSD",
+      "requested_symbol": "BTCUSD",
+      "broker_symbol": "BTCUSD#",
+      "timeframe": "H1",
+      "days": 730,
+      "rows": 17516,
+      "start": "2024-11-17 22:00:00+00:00",
+      "end": "2026-11-17 19:00:00+00:00",
+      "span_days": 729.88,
+      "full_window": true,
+      "provenance": "MT5_TERMINAL_REAL",
+      "synthetic": false,
+      "quality": {
+        "ok": true,
+        "rows": 17516,
+        "weekend_bars": 4992,
+        "nonuniform_gaps": 2,
+        "zero_spread_rows": 0,
+        "issues": []
+      },
+      "meta": {
+        "name": "BTCUSD",
+        "broker_symbol": "BTCUSD#",
+        "digits": 2,
+        "point": 0.01,
+        "pip_size": 0.01,
+        "tick_value": 0.01,
+        "contract_size": 1.0,
+        "category": "CRYPTO",
+        "typical_spread_pips": 1500.0,
+        "min_lot": 0.01,
+        "lot_step": 0.01
+      },
+      "fetched_at": "2026-11-17T21:42:13.053651+00:00"
+    },
+    {
+      "symbol": "ETHUSD",
+      "requested_symbol": "ETHUSD",
+      "broker_symbol": "ETHUSD#",
+      "timeframe": "H1",
+      "days": 730,
+      "rows": 17516,
+      "start": "2024-11-17 22:00:00+00:00",
+      "end": "2026-11-17 19:00:00+00:00",
+      "span_days": 729.88,
+      "full_window": true,
+      "provenance": "MT5_TERMINAL_REAL",
+      "synthetic": false,
+      "quality": {
+        "ok": true,
+        "rows": 17516,
+        "weekend_bars": 4992,
+        "nonuniform_gaps": 2,
+        "zero_spread_rows": 0,
+        "issues": []
+      },
+      "meta": {
+        "name": "ETHUSD",
+        "broker_symbol": "ETHUSD#",
+        "digits": 2,
+        "point": 0.01,
+        "pip_size": 0.01,
+        "tick_value": 0.01,
+        "contract_size": 1.0,
+        "category": "CRYPTO",
+        "typical_spread_pips": 190.0,
+        "min_lot": 0.02,
+        "lot_step": 0.01
+      },
+      "fetched_at": "2026-11-17T21:42:13.090099+00:00"
+    },
+    {
+      "symbol": "SOLUSD",
+      "requested_symbol": "SOLUSD",
+      "broker_symbol": "SOLUSD#",
+      "timeframe": "H1",
+      "days": 730,
+      "rows": 17516,
+      "start": "2024-11-17 22:00:00+00:00",
+      "end": "2026-11-17 19:00:00+00:00",
+      "span_days": 729.88,
+      "full_window": true,
+      "provenance": "MT5_TERMINAL_REAL",
+      "synthetic": false,
+      "quality": {
+        "ok": true,
+        "rows": 17516,
+        "weekend_bars": 4992,
+        "nonuniform_gaps": 2,
+        "zero_spread_rows": 0,
+        "issues": []
+      },
+      "meta": {
+        "name": "SOLUSD",
+        "broker_symbol": "SOLUSD#",
+        "digits": 2,
+        "point": 0.01,
+        "pip_size": 0.01,
+        "tick_value": 0.1,
+        "contract_size": 10.0,
+        "category": "CRYPTO",
+        "typical_spread_pips": 51.0,
+        "min_lot": 0.05,
+        "lot_step": 0.01
+      },
+      "fetched_at": "2026-11-17T21:42:13.128120+00:00"
+    }
+  ],
+  "failures": []
+}

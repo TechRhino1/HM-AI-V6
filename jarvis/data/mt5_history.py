@@ -570,6 +570,9 @@ class MT5HistoryFetcher:
         # backtest session gates on the wrong hours and the `<= now` filter dropped the newest bars.
         from jarvis.data.broker_time import broker_bar_times_to_utc, broker_utc_offset
         df["time"] = broker_bar_times_to_utc(df["time"], broker_utc_offset(mt5_module=mt5, symbols=[broker]))
+        # XM's 24/7 feeds print a bar at the non-existent spring-forward hour (broker 03:00);
+        # shifted forward it collides with the real 04:00 bar. Keep the real one (1 bar/year).
+        df = df[~df["time"].duplicated(keep="last")]
         lo =pd.Timestamp(start_dt).tz_convert("UTC") if pd.Timestamp(start_dt).tzinfo else pd.Timestamp(start_dt, tz="UTC")
         hi = pd.Timestamp(end_dt).tz_convert("UTC") if pd.Timestamp(end_dt).tzinfo else pd.Timestamp(end_dt, tz="UTC")
         df = df[(df["time"] >= lo) & (df["time"] <= hi)].copy()

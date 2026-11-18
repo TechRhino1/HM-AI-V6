@@ -39,6 +39,14 @@ logger = logging.getLogger("JARVIS_WebServer")
 
 # The only /api/ routes reachable without a session: the auth flow itself.
 PUBLIC_API_GETS = frozenset({"/api/auth/me", "/api/auth/verify"})
+
+# The console, classic terminal and positions pages were merged into the
+# dashboard as tabs; old bookmarks land on the matching tab.
+LEGACY_PAGE_REDIRECTS = {
+    "/console": "/#trading", "/console.html": "/#trading",
+    "/classic": "/#controls", "/classic.html": "/#controls",
+    "/positions": "/#positions", "/positions.html": "/#positions",
+}
 PUBLIC_API_POSTS = frozenset({"/api/auth/login", "/api/auth/logout", "/api/auth/verify", "/api/auth/register"})
 
 
@@ -605,18 +613,14 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 self._send_health()
             elif path in ("/", "/index.html", "/dashboard", "/dashboard.html"):
                 self._serve_dashboard_ui()
-            elif path in ("/console", "/console.html"):
-                self._serve_console_ui()
-            elif path in ("/classic", "/classic.html"):
-                self._serve_terminal_ui()
+            elif path in LEGACY_PAGE_REDIRECTS:
+                self._redirect(LEGACY_PAGE_REDIRECTS[path])
             elif path in ["/stocks", "/stocks.html", "/screener"]:
                 self._serve_stocks_ui()
             elif path in ["/india", "/india.html", "/india/stocks", "/nse", "/bse"]:
                 self._serve_india_ui()
             elif path in ["/options", "/options.html", "/india/options", "/india-options", "/fno"]:
                 self._serve_options_ui()
-            elif path in ["/positions", "/positions.html"]:
-                self._serve_positions_ui()
             elif path.startswith("/static/"):
                 self._serve_static_file(path)
             elif path.startswith("/api/stocks/"):
@@ -809,6 +813,27 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     acct_raw = (query.get("account", [""])[0] or "").strip()
                     acct = int(acct_raw) if acct_raw.isdigit() else None
                     self._send_json(performance_report(TRADE_DB, group_by=by, execution_mode=mode, account_login=acct))
+            elif path == "/api/calibration/deployment":
+                # Read-only: each traded symbol's calibrated out-of-sample evidence and
+                # whether the live deployment gate lets it trade.
+                from jarvis.backtesting import exit_geometry as _eg
+                from jarvis.config.settings import SETTINGS as _S
+                rows = []
+                for sym in list(getattr(_S.trading, "symbols", []) or []):
+                    prof = _eg.live_profile(sym)
+                    geom = getattr(prof, "geometry", None)
+                    rows.append({
+                        "symbol": sym,
+                        "geometry_mode": getattr(prof, "geometry_mode", None),
+                        "tp_r": getattr(geom, "tp_r", None),
+                        "oos_trades": getattr(prof, "oos_trades", None),
+                        "oos_win_rate": getattr(prof, "oos_win_rate", None),
+                        "oos_expectancy_r": getattr(prof, "oos_expectancy_r", None),
+                        "oos_profit_factor": getattr(prof, "oos_profit_factor", None),
+                        "refusal": _eg.deployment_refusal(sym),
+                    })
+                self._send_json({"min_oos_expectancy_r": _eg.MIN_OOS_EXPECTANCY_R,
+                                 "min_oos_trades": _eg.MIN_OOS_TRADES, "symbols": rows})
             elif path == "/api/history":
                 try:
                     from jarvis.data.database import TRADE_DB
@@ -2071,13 +2096,15 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
         """
         self._serve_template("dashboard.html")
 
-    def _serve_console_ui(self):
-        """Previous desk console, retained at /console."""
-        self._serve_template("console.html")
-
-    def _serve_terminal_ui(self):
-        """Legacy terminal UI, retained at /classic as a rollback path."""
-        self._serve_template("index.html")
+    def _redirect(self, location: str):
+        try:
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self._send_security_headers()
+            self.end_headers()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
 
     def _serve_stocks_ui(self):
         self._serve_template("stocks.html")
@@ -2087,12 +2114,6 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
     def _serve_options_ui(self):
         self._serve_template("india_options.html")
-
-    def _serve_positions_ui(self):
-        """iOS-style positions surface — Bootstrap-based responsive layout with
-        a full iOS design language for mobile and a consistent look at desktop.
-        Served at /positions for both /positions and /positions.html."""
-        self._serve_template("positions.html")
 
 class _NoReverseDNSHTTPServer(ThreadingHTTPServer):
     """`ThreadingHTTPServer` without the blocking reverse-DNS lookup on bind.
