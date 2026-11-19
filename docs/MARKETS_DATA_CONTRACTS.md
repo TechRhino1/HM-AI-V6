@@ -1,5 +1,12 @@
 # Markets data contracts — stocks and India endpoints
 
+> **Superseded.** The `/api/india/*` and `/api/stocks/*` routes, `jarvis/india/`, `jarvis/stocks/`,
+> `jarvis/data/dynamic_hydrator.py` and the page scripts cited below (`dashboard.js`, `india.js`,
+> `stocks.js`, `india_options.js`) were deleted. Market data is now served by `jarvis/markets/`
+> (routes in `jarvis/markets/api.py`, institutional data in `jarvis/markets/inst.py`, alerts in
+> `jarvis/markets/alerts.py`; every payload carries a `prov` record) and consumed by the SPA in
+> `frontend/src/features/markets/` (shapes in `types.ts` and each panel). This file is kept as history.
+
 Reference for anyone binding a panel to the stocks / India REST surface. Every
 shape below was read from the service code **and** observed on the wire; nothing
 here is inferred from the front-end alone.

@@ -65,59 +65,6 @@ class TestGatePolicy(unittest.TestCase):
         self.assertAlmostEqual(gp.confidence_penalty(["a", "b", "c", "d", "e"]), 0.12)
 
 
-class TestGammaExposure(unittest.TestCase):
-    def _fake_chain(self):
-        rows = []
-        for k in range(95, 106):
-            rows.append({
-                "strike": float(k),
-                "call": {"oi": 1000 + k, "gamma": 0.05 / k, "delta": 0.5, "vega": 0.1, "theta": -0.05, "iv": 15.0, "ltp": 2.0},
-                "put": {"oi": 1200 + k, "gamma": 0.05 / k, "delta": -0.5, "vega": 0.1, "theta": -0.05, "iv": 15.0, "ltp": 2.0},
-            })
-        return {"chain": rows, "data_source": "synthetic"}
-
-    def test_compute_gex(self):
-        from jarvis.india.gamma_exposure import compute_gex, interpret_for_signal
-        chain = self._fake_chain()
-        gex = compute_gex(chain, spot=100.0, multiplier=50, time_years=0.05, volatility=0.16)
-        self.assertIn("net_gex", gex)
-        self.assertIn("regime", gex)
-        self.assertIn(gex["regime"], ("POSITIVE", "NEGATIVE", "NEUTRAL", "UNKNOWN"))
-        interp = interpret_for_signal(gex)
-        self.assertIn("gex_applicable", interp)
-
-
-class TestNSEBSEAdapter(unittest.TestCase):
-    def test_normalize_chain(self):
-        from jarvis.india.nse_bse_adapter import _normalize_nse_chain
-        fake = {
-            "records": {
-                "underlyingValue": 19500.0,
-                "expiryDates": ["25APR2024", "27JUN2024"],
-                "data": [
-                    {"strikePrice": 19500, "expiryDate": "25APR2024",
-                     "CE": {"openInterest": 100, "totalTradedVolume": 50, "impliedVolatility": 14.0,
-                            "lastPrice": 120.0, "delta": 0.52, "gamma": 0.001, "theta": -2.0, "vega": 3.0,
-                            "pchangeinOpenInterest": 5.0, "pChange": 1.0},
-                     "PE": {"openInterest": 120, "totalTradedVolume": 60, "impliedVolatility": 15.0,
-                            "lastPrice": 80.0, "delta": -0.48, "gamma": 0.001, "theta": -2.0, "vega": 3.0,
-                            "pchangeinOpenInterest": -3.0, "pChange": -0.5}}
-                ],
-            }
-        }
-        norm = _normalize_nse_chain(fake, "NIFTY")
-        self.assertEqual(norm["data_source"], "live")
-        self.assertEqual(norm["spot_price"], 19500.0)
-        self.assertEqual(len(norm["chain"]), 1)
-        self.assertEqual(norm["chain"][0]["call"]["oi"], 100)
-
-    def test_offline_call_does_not_raise(self):
-        from jarvis.india import nse_bse_adapter as ad
-        # Must not raise; returns None when offline / symbol unknown.
-        res = ad.fetch_nse_quote("RELIANCE_NOT_REAL_XYZ")
-        self.assertTrue(res is None or isinstance(res, dict))
-
-
 class TestWalkForward(unittest.TestCase):
     def test_purged_kfold_splits(self):
         from jarvis.learning.walk_forward import PurgedKFold

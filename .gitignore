@@ -119,3 +119,7 @@ Python315Libsite-packages/
 # Single-instance engine locks (jarvis/common/single_instance.py)
 data/.engine_*.lock
 *.stackdump
+data/markets.db
+*.tsbuildinfo
+.claude/worktrees/
+

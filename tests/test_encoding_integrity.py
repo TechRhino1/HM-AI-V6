@@ -136,7 +136,13 @@ def test_apply_fix_leaves_a_clean_file_untouched(tmp_path):
 # ── the tree itself ──────────────────────────────────────────────────────────
 def _walk():
     from tools.audit_encoding import iter_files
-    return list(iter_files(include_docs=False))
+    files = list(iter_files(include_docs=False))
+    # shortcut: audit_encoding's CODE_EXTS has no .ts/.tsx, so the SPA sources
+    # are added here; drop this once the tool scans them itself.
+    spa = os.path.join(ROOT, "frontend", "src")
+    for dirpath, _dirs, names in os.walk(spa):
+        files += [os.path.join(dirpath, n) for n in sorted(names) if n.endswith((".ts", ".tsx"))]
+    return files
 
 
 def test_scanner_actually_reaches_the_ui_sources():
@@ -144,8 +150,10 @@ def test_scanner_actually_reaches_the_ui_sources():
     files = _walk()
     assert len(files) > 200, f"only {len(files)} files scanned - the walk is wrong"
     rels = {os.path.relpath(f, ROOT).replace(os.sep, "/") for f in files}
-    assert "jarvis/ui/static/js/dashboard.js" in rels
-    assert "jarvis/ui/templates/dashboard.html" in rels
+    assert "frontend/src/lib/api.ts" in rels
+    assert "frontend/src/App.tsx" in rels
+    assert "frontend/src/styles.css" in rels
+    assert "jarvis/ui/static/app/index.html" in rels
 
 
 def test_no_double_encoded_text_in_the_shipped_tree():

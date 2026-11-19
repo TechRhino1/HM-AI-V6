@@ -769,66 +769,28 @@ class IntelligenceService:
                 elif "REGIME" in reason:
                     gate = "REGIME_FILTER"
 
+                direction = str(item.get("direction") or item.get("bias") or "FLAT").upper()
+                entry = float(item.get("entry_price") or item.get("current_price") or 0.0)
+                now = float(item.get("current_price") or 0.0)
+                # Did refusing it help? Price moving against the side means the gate saved money.
+                if entry > 0 and now > 0 and direction in ("BUY", "SELL"):
+                    protected = now < entry if direction == "BUY" else now > entry
+                else:
+                    protected = None
                 missed.append({
                     "symbol": item.get("symbol", "UNKNOWN"),
-                    "direction": item.get("direction") or item.get("bias", "FLAT"),
-                    "style": item.get("style", "SWING"),
+                    "direction": direction,
+                    "style": item.get("trade_style") or item.get("style") or "UNKNOWN",
                     "confidence": item.get("confidence") or item.get("model_confidence", 0.0),
-                    "entry_price": item.get("entry_price") or item.get("current_price", 0.0),
-                    "current_price": item.get("current_price", 0.0),
+                    "entry_price": entry,
+                    "current_price": now,
                     "sl": item.get("stop_loss", 0.0),
                     "tp": item.get("take_profit", 0.0),
                     "gate": gate,
                     "reason": reason,
-                    "protected_capital": True,
+                    "protected_capital": protected,
                     "timestamp": snap.get("timestamp", "")
                 })
-
-        if not missed:
-            missed = [
-                {
-                    "symbol": "BTCUSD",
-                    "direction": "BUY",
-                    "style": "SCALP",
-                    "confidence": 0.44,
-                    "entry_price": 63450.0,
-                    "current_price": 63210.0,
-                    "sl": 62900.0,
-                    "tp": 64200.0,
-                    "gate": "CONFIDENCE_GATE",
-                    "reason": "CONFIDENCE_GATE: 0.44 < 0.50 minimum for SCALP",
-                    "protected_capital": True,
-                    "timestamp": snap.get("timestamp", "")
-                },
-                {
-                    "symbol": "EURUSD",
-                    "direction": "SELL",
-                    "style": "DAY_TRADING",
-                    "confidence": 0.51,
-                    "entry_price": 1.0845,
-                    "current_price": 1.0862,
-                    "sl": 1.0880,
-                    "tp": 1.0790,
-                    "gate": "ASIAN_SESSION_BLACKOUT",
-                    "reason": "ASIAN_SESSION_BLACKOUT: Low liquidity chop protection active.",
-                    "protected_capital": True,
-                    "timestamp": snap.get("timestamp", "")
-                },
-                {
-                    "symbol": "XAUUSD",
-                    "direction": "BUY",
-                    "style": "SWING",
-                    "confidence": 0.58,
-                    "entry_price": 2652.40,
-                    "current_price": 2658.10,
-                    "sl": 2638.00,
-                    "tp": 2680.00,
-                    "gate": "CALIBRATED_ENTRY",
-                    "reason": "CALIBRATED_ENTRY: Spread 3.4 pips exceeds calibrated max 3.0 pips",
-                    "protected_capital": True,
-                    "timestamp": snap.get("timestamp", "")
-                }
-            ]
 
         _json(handler, {
             "status": "OK",

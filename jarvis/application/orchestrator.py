@@ -59,14 +59,32 @@ STYLE_SPEED = {"SCALP": 0, "DAY_TRADING": 1, "INTRADAY": 1, "DAY": 1, "SWING": 2
 STYLE_CONFLICT_WINDOW_SEC = 600.0
 
 
+HTF_CONSENSUS_MIN = 2  # slower styles that must agree before they outrank a faster one
+
+
 def faster_style_conflict(biases: Dict[str, tuple], style: str, bias: Optional[str], now: float) -> str:
-    """'' when no faster style recently resolved the opposite side, else a reason string."""
+    """'' when the entry fits the timeframe hierarchy, else a reason string.
+
+    Top-down: higher timeframes set direction, lower ones time the entry.
+    - >= HTF_CONSENSUS_MIN slower styles against the entry (and outnumbering those
+      with it) block it: no counter-trend entries against the master direction.
+    - A faster style's fresh opposite read blocks (BTCUSD #995648912) unless
+      >= HTF_CONSENSUS_MIN other styles slower than it agree with the entry; then its
+      read is the pullback being entered, not a reversal."""
     rank = STYLE_SPEED.get((style or "").upper())
     if rank is None or bias not in ("BUY", "SELL"):
         return ""
-    for other, (b, ts) in biases.items():
-        if STYLE_SPEED.get(other, 99) < rank and b in ("BUY", "SELL") and b != bias and now - ts <= STYLE_CONFLICT_WINDOW_SEC:
-            return f"{other} engine resolved {b} {int(now - ts)}s ago; {style} {bias} blocked"
+    fresh = {o: b for o, (b, ts) in biases.items()
+             if o in STYLE_SPEED and o != style and b in ("BUY", "SELL") and now - ts <= STYLE_CONFLICT_WINDOW_SEC}
+    slower_with = [o for o, b in fresh.items() if STYLE_SPEED[o] > rank and b == bias]
+    slower_against = [o for o, b in fresh.items() if STYLE_SPEED[o] > rank and b != bias]
+    if len(slower_against) >= HTF_CONSENSUS_MIN and len(slower_against) > len(slower_with):
+        return f"higher timeframes {','.join(sorted(slower_against))} resolved against {bias}; {style} {bias} blocked"
+    for other, b in fresh.items():
+        if STYLE_SPEED[other] < rank and b != bias:
+            backing = [o for o, ob in fresh.items() if STYLE_SPEED[o] > STYLE_SPEED[other] and ob == bias]
+            if len(backing) < HTF_CONSENSUS_MIN:
+                return f"{other} engine resolved {b} {int(now - biases[other][1])}s ago; {style} {bias} blocked"
     return ""
 
 # ── Shared scan pool ────────────────────────────────────────────────────────
@@ -2191,8 +2209,12 @@ class JarvisOrchestrator:
             decision.decision = 'WAIT'
             decision.execution_authorized = False
             auth_res = {'authorized': False, 'reason': f'TIMEFRAME_CONFLICT: {_conflict}'}
-        if getattr(decision, "bias", None) in ("BUY", "SELL"):
-            self._style_bias.setdefault(canonical_sym, {})[active_trade_style] = (decision.bias, time.time())
+        # Only a read that passed the quality bar votes; a NO_TRADE read clears this style's vote.
+        _votes = self._style_bias.setdefault(canonical_sym, {})
+        if getattr(decision, "bias", None) in ("BUY", "SELL") and decision.decision in ("EXECUTE", "WAIT"):
+            _votes[active_trade_style] = (decision.bias, time.time())
+        else:
+            _votes.pop(active_trade_style, None)
 
         # Hard vetoes the arbiter dispatch must honour. The scan runs dry, and the
         # arbiter can promote a WAIT to EXECUTE, so these are computed whatever the

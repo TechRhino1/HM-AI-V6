@@ -474,7 +474,9 @@ class InstitutionalEntryEngine:
 
         # Asset-Class Structural Bounds
         if is_gold:
-            max_risk_cap = min(max(9.0, 1.20 * h1_atr), 18.0)
+            # $18 small-account ceiling, lifted to half the style's own ATR so D1/H4 stops clear
+            # the decision engine's 0.45x-ATR minimum (D1 ATR ~$86 needs ~$39).
+            max_risk_cap = min(max(9.0, 1.20 * h1_atr), max(18.0, 0.5 * h1_atr))
         elif is_silver:
             max_risk_cap = min(max(0.35, 1.20 * h1_atr), 0.75)
         elif is_oil:

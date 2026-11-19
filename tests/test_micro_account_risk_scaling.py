@@ -64,3 +64,20 @@ class TestMicroAccountRiskScaling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_forward_test_positions_do_not_fill_main_slots():
+    # 2026-11-18: four FT_ trend-router trades held all 4 main-engine slots.
+    exp = ExposureManager(max_open_positions=3, max_portfolio_risk_pct=2.5)
+    acct = AccountSnapshot(login=1, server="demo", balance=520.0, equity=520.0, margin=5.0,
+                           free_margin=515.0, margin_level=10000.0, leverage=500)
+
+    def pos(t, comment):
+        return PositionSnapshot(ticket=t, symbol="EURUSD", type="SELL", volume=0.01, open_price=1.0970,
+                                current_price=1.0970, sl=1.1040, tp=1.0900, profit=0.0, swap=0.0,
+                                commission=0.0, open_time=datetime.now(), magic=888999, comment=comment)
+
+    ft = [pos(i, "FT_DCH_H4") for i in range(4)]
+    assert not any("Max Concurrent" in b for b in exp.check_exposure("XAUUSD", ft, acct)["breaches"])
+    main = [pos(i, "") for i in range(4)]
+    assert any("Max Concurrent" in b for b in exp.check_exposure("XAUUSD", main, acct)["breaches"])

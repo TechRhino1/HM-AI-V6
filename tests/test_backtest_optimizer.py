@@ -434,10 +434,15 @@ HAS_DATA = os.path.isdir(os.path.join("data", "market", "real")) and os.path.isd
     os.path.join("data", "signals")
 )
 needs_data = pytest.mark.skipif(not HAS_DATA, reason="real MT5 market cache not present")
+# data/signals/ is a gitignored derived cache; the H1 scan existing says nothing about M5.
+HAS_M5_SCAN = os.path.exists(os.path.join("data", "signals", "scan_manifest_M5.json"))
+needs_m5_scan = pytest.mark.skipif(
+    not HAS_M5_SCAN, reason="M5 scan cache missing: python tools/scan_signals.py --timeframe M5 --days 183")
 
 
 @needs_data
 class TestAgainstRealData:
+    @needs_m5_scan
     def test_m5_scan_manifest_declares_its_window(self):
         """The manifest must state which window was scanned, because the
         optimiser replays `since` as an alignment-critical trim.
@@ -473,6 +478,7 @@ class TestAgainstRealData:
                 os.path.join("data", "signals", f"{symbol}_M5_183d_candidates.parquet")
             )
 
+    @needs_m5_scan
     def test_scalp_trim_replay_keeps_bar_idx_in_range(self):
         """The alignment trap.
 
@@ -490,6 +496,7 @@ class TestAgainstRealData:
         max_idx = int(bundle.candidates["bar_idx"].max())
         assert 0 <= max_idx < bundle.n_bars
 
+    @needs_m5_scan
     def test_frame_length_matches_the_declared_trim(self):
         """A mis-replayed trim shows up as a frame length that contradicts the
         manifest: untrimmed must keep every bar, trimmed must be strictly

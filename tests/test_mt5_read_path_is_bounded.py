@@ -1,6 +1,6 @@
-"""The stocks/india candle path must never call `mt5.initialize()` on a request thread.
+"""The market-data candle path must never call `mt5.initialize()` on a request thread.
 
-`/api/stocks/candles` -> `STOCK_ENGINE.generate_candles` -> `_try_mt5` ->
+`fetch_real_candles` -> `_try_mt5` ->
 `_resolve_mt5_symbol` -> `_ensure_mt5_connected`, which ended in a bare
 ``return bool(mt5.initialize())``.
 

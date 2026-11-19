@@ -1,15 +1,13 @@
 """
-Unit and Integration Tests for TradingView Live Data Provider & 2026 Universe Baselines.
+Integration tests for the TradingView live data provider.
 """
 import unittest
 import pytest
-from typing import Dict, Any
 
 pytestmark = pytest.mark.network
 
 from jarvis.data.tradingview_provider import TradingViewDataProvider, TRADINGVIEW_PROVIDER
-from jarvis.data.market_data_provider import fetch_real_candles, get_calibrated_baseline_candles
-from jarvis.stocks.universe import STOCK_UNIVERSE, get_stock_profile
+from jarvis.data.market_data_provider import fetch_real_candles
 
 
 class TestTradingViewDataProvider(unittest.TestCase):
@@ -69,45 +67,6 @@ class TestTradingViewDataProvider(unittest.TestCase):
         candles = fetch_real_candles("AAPL", timeframe="1D", num_bars=5)
         self.assertIsNotNone(candles)
         self.assertGreaterEqual(len(candles), 5)
-
-        # Test fallback baseline generator
-        fb_candles = get_calibrated_baseline_candles("NVDA", timeframe="1D", num_bars=5)
-        self.assertEqual(len(fb_candles), 5)
-        self.assertGreater(fb_candles[-1]["close"], 100.0)
-
-    def test_stock_universe_2026_valuations(self):
-        expected_baselines: Dict[str, float] = {
-            "AAPL": 319.75,
-            "NVDA": 217.50,
-            "MSFT": 513.50,
-            "TSLA": 348.75,
-            "AMZN": 266.40,
-            "META": 578.00,
-            "GOOGL": 346.50,
-            "GOOG": 346.50,
-            "AMD": 464.20,
-            "NFLX": 81.35,
-            "PLTR": 185.65,
-            "COIN": 177.05,
-            "UBER": 78.65,
-            "DIS": 107.80,
-            "BA": 209.30,
-            "INTC": 89.30,
-        }
-
-        for sym, expected_price in expected_baselines.items():
-            profile = get_stock_profile(sym)
-            actual_price = profile.get("base_price")
-            self.assertEqual(
-                actual_price,
-                expected_price,
-                f"Valuation mismatch for {sym}: expected {expected_price}, got {actual_price}",
-            )
-            self.assertGreater(
-                profile.get("week52_high", 0.0),
-                profile.get("week52_low", 0.0),
-                f"Invalid 52-week range for {sym}",
-            )
 
 
 if __name__ == "__main__":

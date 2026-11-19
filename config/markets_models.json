@@ -1,0 +1,2154 @@
+{
+ "generated": "2026-11-18",
+ "direction": {
+  "IN:NIFTY": {
+   "published": false,
+   "n_test": 2151,
+   "brier_model": 0.25802,
+   "brier_base": 0.24854,
+   "brier_gain": -0.00948,
+   "hit_rate": 0.5579,
+   "base_up_rate": 0.5621,
+   "calibration": [
+    {
+     "range": "0.45-0.50",
+     "n": 19,
+     "predicted": 0.477,
+     "actual": 0.579
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 80,
+     "predicted": 0.53,
+     "actual": 0.675
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 961,
+     "predicted": 0.583,
+     "actual": 0.57
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1079,
+     "predicted": 0.663,
+     "actual": 0.544
+    }
+   ],
+   "reason": "OOS Brier 0.2580 does not beat base rate 0.2485 by 0.002"
+  },
+  "IN:BANKNIFTY": {
+   "published": false,
+   "n_test": 2152,
+   "brier_model": 0.25727,
+   "brier_base": 0.24961,
+   "brier_gain": -0.00766,
+   "hit_rate": 0.5432,
+   "base_up_rate": 0.5483,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 21,
+     "predicted": 0.206,
+     "actual": 0.524
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 29,
+     "predicted": 0.485,
+     "actual": 0.655
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 421,
+     "predicted": 0.535,
+     "actual": 0.591
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 1191,
+     "predicted": 0.572,
+     "actual": 0.546
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 481,
+     "predicted": 0.667,
+     "actual": 0.511
+    }
+   ],
+   "reason": "OOS Brier 0.2573 does not beat base rate 0.2496 by 0.002"
+  },
+  "IN:FINNIFTY": {
+   "published": false,
+   "n_test": 2137,
+   "brier_model": 0.26101,
+   "brier_base": 0.25064,
+   "brier_gain": -0.01037,
+   "hit_rate": 0.5419,
+   "base_up_rate": 0.5461,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 17,
+     "predicted": 0.23,
+     "actual": 0.588
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 11,
+     "predicted": 0.425,
+     "actual": 0.636
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 49,
+     "predicted": 0.481,
+     "actual": 0.531
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 255,
+     "predicted": 0.536,
+     "actual": 0.608
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 1300,
+     "predicted": 0.574,
+     "actual": 0.546
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 505,
+     "predicted": 0.699,
+     "actual": 0.513
+    }
+   ],
+   "reason": "OOS Brier 0.2610 does not beat base rate 0.2506 by 0.002"
+  },
+  "IN:SENSEX": {
+   "published": false,
+   "n_test": 2148,
+   "brier_model": 0.25707,
+   "brier_base": 0.2479,
+   "brier_gain": -0.00918,
+   "hit_rate": 0.5577,
+   "base_up_rate": 0.5628,
+   "calibration": [
+    {
+     "range": "0.45-0.50",
+     "n": 18,
+     "predicted": 0.485,
+     "actual": 0.611
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 91,
+     "predicted": 0.53,
+     "actual": 0.637
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 957,
+     "predicted": 0.584,
+     "actual": 0.583
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1065,
+     "predicted": 0.659,
+     "actual": 0.535
+    }
+   ],
+   "reason": "OOS Brier 0.2571 does not beat base rate 0.2479 by 0.002"
+  },
+  "IN:RELIANCE": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25749,
+   "brier_base": 0.24956,
+   "brier_gain": -0.00792,
+   "hit_rate": 0.5223,
+   "base_up_rate": 0.5404,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 37,
+     "predicted": 0.313,
+     "actual": 0.703
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 24,
+     "predicted": 0.424,
+     "actual": 0.417
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 94,
+     "predicted": 0.482,
+     "actual": 0.649
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 572,
+     "predicted": 0.531,
+     "actual": 0.559
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 823,
+     "predicted": 0.573,
+     "actual": 0.521
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 606,
+     "predicted": 0.668,
+     "actual": 0.526
+    }
+   ],
+   "reason": "OOS Brier 0.2575 does not beat base rate 0.2496 by 0.002"
+  },
+  "IN:HDFCBANK": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.2622,
+   "brier_base": 0.25268,
+   "brier_gain": -0.00952,
+   "hit_rate": 0.4954,
+   "base_up_rate": 0.5218,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 51,
+     "predicted": 0.302,
+     "actual": 0.549
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 41,
+     "predicted": 0.429,
+     "actual": 0.61
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 157,
+     "predicted": 0.483,
+     "actual": 0.637
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 756,
+     "predicted": 0.529,
+     "actual": 0.536
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 719,
+     "predicted": 0.572,
+     "actual": 0.499
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 432,
+     "predicted": 0.666,
+     "actual": 0.481
+    }
+   ],
+   "reason": "OOS Brier 0.2622 does not beat base rate 0.2527 by 0.002"
+  },
+  "IN:ICICIBANK": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25351,
+   "brier_base": 0.24981,
+   "brier_gain": -0.0037,
+   "hit_rate": 0.5046,
+   "base_up_rate": 0.5343,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 114,
+     "predicted": 0.351,
+     "actual": 0.509
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 109,
+     "predicted": 0.428,
+     "actual": 0.624
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 311,
+     "predicted": 0.481,
+     "actual": 0.556
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 850,
+     "predicted": 0.527,
+     "actual": 0.491
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 597,
+     "predicted": 0.571,
+     "actual": 0.566
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 175,
+     "predicted": 0.653,
+     "actual": 0.56
+    }
+   ],
+   "reason": "OOS Brier 0.2535 does not beat base rate 0.2498 by 0.002"
+  },
+  "IN:INFY": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25174,
+   "brier_base": 0.24826,
+   "brier_gain": -0.00348,
+   "hit_rate": 0.5353,
+   "base_up_rate": 0.5501,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 56,
+     "predicted": 0.356,
+     "actual": 0.536
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 88,
+     "predicted": 0.43,
+     "actual": 0.489
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 216,
+     "predicted": 0.481,
+     "actual": 0.569
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 451,
+     "predicted": 0.527,
+     "actual": 0.499
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 556,
+     "predicted": 0.574,
+     "actual": 0.529
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 789,
+     "predicted": 0.661,
+     "actual": 0.597
+    }
+   ],
+   "reason": "OOS Brier 0.2517 does not beat base rate 0.2483 by 0.002"
+  },
+  "IN:TCS": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25687,
+   "brier_base": 0.25084,
+   "brier_gain": -0.00603,
+   "hit_rate": 0.5422,
+   "base_up_rate": 0.5153,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 145,
+     "predicted": 0.293,
+     "actual": 0.483
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 152,
+     "predicted": 0.428,
+     "actual": 0.454
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 273,
+     "predicted": 0.477,
+     "actual": 0.429
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 391,
+     "predicted": 0.526,
+     "actual": 0.504
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 411,
+     "predicted": 0.575,
+     "actual": 0.479
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 784,
+     "predicted": 0.673,
+     "actual": 0.588
+    }
+   ],
+   "reason": "OOS Brier 0.2569 does not beat base rate 0.2508 by 0.002"
+  },
+  "IN:SBIN": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25255,
+   "brier_base": 0.24908,
+   "brier_gain": -0.00347,
+   "hit_rate": 0.5227,
+   "base_up_rate": 0.5533,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 87,
+     "predicted": 0.355,
+     "actual": 0.563
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 131,
+     "predicted": 0.427,
+     "actual": 0.603
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 478,
+     "predicted": 0.48,
+     "actual": 0.529
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 964,
+     "predicted": 0.524,
+     "actual": 0.56
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 429,
+     "predicted": 0.568,
+     "actual": 0.557
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 67,
+     "predicted": 0.63,
+     "actual": 0.493
+    }
+   ],
+   "reason": "OOS Brier 0.2526 does not beat base rate 0.2491 by 0.002"
+  },
+  "IN:AXISBANK": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25806,
+   "brier_base": 0.24943,
+   "brier_gain": -0.00863,
+   "hit_rate": 0.5315,
+   "base_up_rate": 0.5385,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 110,
+     "predicted": 0.309,
+     "actual": 0.564
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 135,
+     "predicted": 0.43,
+     "actual": 0.519
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 392,
+     "predicted": 0.479,
+     "actual": 0.495
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 574,
+     "predicted": 0.525,
+     "actual": 0.514
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 548,
+     "predicted": 0.572,
+     "actual": 0.578
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 397,
+     "predicted": 0.667,
+     "actual": 0.562
+    }
+   ],
+   "reason": "OOS Brier 0.2581 does not beat base rate 0.2494 by 0.002"
+  },
+  "IN:KOTAKBANK": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25775,
+   "brier_base": 0.25212,
+   "brier_gain": -0.00562,
+   "hit_rate": 0.5005,
+   "base_up_rate": 0.5162,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 96,
+     "predicted": 0.295,
+     "actual": 0.479
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 105,
+     "predicted": 0.427,
+     "actual": 0.581
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 315,
+     "predicted": 0.479,
+     "actual": 0.533
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 618,
+     "predicted": 0.526,
+     "actual": 0.506
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 484,
+     "predicted": 0.571,
+     "actual": 0.459
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 538,
+     "predicted": 0.677,
+     "actual": 0.563
+    }
+   ],
+   "reason": "OOS Brier 0.2577 does not beat base rate 0.2521 by 0.002"
+  },
+  "IN:LT": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25458,
+   "brier_base": 0.24972,
+   "brier_gain": -0.00486,
+   "hit_rate": 0.5167,
+   "base_up_rate": 0.538,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 41,
+     "predicted": 0.358,
+     "actual": 0.732
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 134,
+     "predicted": 0.428,
+     "actual": 0.604
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 499,
+     "predicted": 0.481,
+     "actual": 0.499
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 833,
+     "predicted": 0.525,
+     "actual": 0.531
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 437,
+     "predicted": 0.57,
+     "actual": 0.572
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 212,
+     "predicted": 0.649,
+     "actual": 0.509
+    }
+   ],
+   "reason": "OOS Brier 0.2546 does not beat base rate 0.2497 by 0.002"
+  },
+  "IN:ITC": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.2577,
+   "brier_base": 0.251,
+   "brier_gain": -0.0067,
+   "hit_rate": 0.4861,
+   "base_up_rate": 0.487,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 222,
+     "predicted": 0.359,
+     "actual": 0.55
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 487,
+     "predicted": 0.429,
+     "actual": 0.45
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 815,
+     "predicted": 0.475,
+     "actual": 0.518
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 471,
+     "predicted": 0.52,
+     "actual": 0.488
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 115,
+     "predicted": 0.567,
+     "actual": 0.322
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 46,
+     "predicted": 0.652,
+     "actual": 0.435
+    }
+   ],
+   "reason": "OOS Brier 0.2577 does not beat base rate 0.2510 by 0.002"
+  },
+  "IN:BHARTIARTL": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25452,
+   "brier_base": 0.24968,
+   "brier_gain": -0.00484,
+   "hit_rate": 0.4912,
+   "base_up_rate": 0.5441,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 86,
+     "predicted": 0.357,
+     "actual": 0.628
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 203,
+     "predicted": 0.428,
+     "actual": 0.532
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 631,
+     "predicted": 0.48,
+     "actual": 0.563
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 916,
+     "predicted": 0.523,
+     "actual": 0.532
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 254,
+     "predicted": 0.567,
+     "actual": 0.551
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 66,
+     "predicted": 0.628,
+     "actual": 0.439
+    }
+   ],
+   "reason": "OOS Brier 0.2545 does not beat base rate 0.2497 by 0.002"
+  },
+  "IN:HINDUNILVR": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.26058,
+   "brier_base": 0.25326,
+   "brier_gain": -0.00733,
+   "hit_rate": 0.4972,
+   "base_up_rate": 0.4842,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 18,
+     "predicted": 0.343,
+     "actual": 0.556
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 61,
+     "predicted": 0.431,
+     "actual": 0.525
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 335,
+     "predicted": 0.481,
+     "actual": 0.451
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 665,
+     "predicted": 0.525,
+     "actual": 0.469
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 489,
+     "predicted": 0.571,
+     "actual": 0.474
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 588,
+     "predicted": 0.673,
+     "actual": 0.522
+    }
+   ],
+   "reason": "OOS Brier 0.2606 does not beat base rate 0.2533 by 0.002"
+  },
+  "IN:BAJFINANCE": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25655,
+   "brier_base": 0.25002,
+   "brier_gain": -0.00652,
+   "hit_rate": 0.5218,
+   "base_up_rate": 0.5362,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 32,
+     "predicted": 0.335,
+     "actual": 0.438
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 35,
+     "predicted": 0.427,
+     "actual": 0.6
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 76,
+     "predicted": 0.482,
+     "actual": 0.684
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 609,
+     "predicted": 0.533,
+     "actual": 0.555
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 913,
+     "predicted": 0.571,
+     "actual": 0.521
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 491,
+     "predicted": 0.653,
+     "actual": 0.519
+    }
+   ],
+   "reason": "OOS Brier 0.2565 does not beat base rate 0.2500 by 0.002"
+  },
+  "IN:MARUTI": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.26005,
+   "brier_base": 0.25161,
+   "brier_gain": -0.00844,
+   "hit_rate": 0.4847,
+   "base_up_rate": 0.5037,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 16,
+     "predicted": 0.37,
+     "actual": 0.812
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 97,
+     "predicted": 0.431,
+     "actual": 0.546
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 578,
+     "predicted": 0.481,
+     "actual": 0.519
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 1016,
+     "predicted": 0.523,
+     "actual": 0.525
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 294,
+     "predicted": 0.567,
+     "actual": 0.469
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 155,
+     "predicted": 0.685,
+     "actual": 0.316
+    }
+   ],
+   "reason": "OOS Brier 0.2601 does not beat base rate 0.2516 by 0.002"
+  },
+  "IN:SUNPHARMA": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25308,
+   "brier_base": 0.24901,
+   "brier_gain": -0.00407,
+   "hit_rate": 0.507,
+   "base_up_rate": 0.5468,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 166,
+     "predicted": 0.343,
+     "actual": 0.47
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 268,
+     "predicted": 0.429,
+     "actual": 0.481
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 466,
+     "predicted": 0.477,
+     "actual": 0.614
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 674,
+     "predicted": 0.526,
+     "actual": 0.539
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 428,
+     "predicted": 0.57,
+     "actual": 0.558
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 154,
+     "predicted": 0.647,
+     "actual": 0.545
+    }
+   ],
+   "reason": "OOS Brier 0.2531 does not beat base rate 0.2490 by 0.002"
+  },
+  "IN:TITAN": {
+   "published": false,
+   "n_test": 2156,
+   "brier_model": 0.25248,
+   "brier_base": 0.24645,
+   "brier_gain": -0.00602,
+   "hit_rate": 0.558,
+   "base_up_rate": 0.5682,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 44,
+     "predicted": 0.324,
+     "actual": 0.523
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 42,
+     "predicted": 0.429,
+     "actual": 0.5
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 114,
+     "predicted": 0.481,
+     "actual": 0.588
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 375,
+     "predicted": 0.529,
+     "actual": 0.581
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 816,
+     "predicted": 0.577,
+     "actual": 0.581
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 765,
+     "predicted": 0.646,
+     "actual": 0.552
+    }
+   ],
+   "reason": "OOS Brier 0.2525 does not beat base rate 0.2465 by 0.002"
+  },
+  "US:SPY": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.24898,
+   "brier_base": 0.24109,
+   "brier_gain": -0.00789,
+   "hit_rate": 0.5858,
+   "base_up_rate": 0.6004,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 27,
+     "predicted": 0.292,
+     "actual": 0.741
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 22,
+     "predicted": 0.426,
+     "actual": 0.636
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 39,
+     "predicted": 0.477,
+     "actual": 0.667
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 107,
+     "predicted": 0.529,
+     "actual": 0.579
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 499,
+     "predicted": 0.58,
+     "actual": 0.597
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1503,
+     "predicted": 0.66,
+     "actual": 0.598
+    }
+   ],
+   "reason": "OOS Brier 0.2490 does not beat base rate 0.2411 by 0.002"
+  },
+  "US:QQQ": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25004,
+   "brier_base": 0.24276,
+   "brier_gain": -0.00728,
+   "hit_rate": 0.5817,
+   "base_up_rate": 0.5917,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 11,
+     "predicted": 0.306,
+     "actual": 0.545
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 21,
+     "predicted": 0.427,
+     "actual": 0.619
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 36,
+     "predicted": 0.481,
+     "actual": 0.722
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 176,
+     "predicted": 0.53,
+     "actual": 0.631
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 595,
+     "predicted": 0.579,
+     "actual": 0.6
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1358,
+     "predicted": 0.661,
+     "actual": 0.58
+    }
+   ],
+   "reason": "OOS Brier 0.2500 does not beat base rate 0.2428 by 0.002"
+  },
+  "US:AAPL": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.24997,
+   "brier_base": 0.24442,
+   "brier_gain": -0.00555,
+   "hit_rate": 0.5658,
+   "base_up_rate": 0.5817,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 29,
+     "predicted": 0.309,
+     "actual": 0.552
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 29,
+     "predicted": 0.429,
+     "actual": 0.586
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 97,
+     "predicted": 0.478,
+     "actual": 0.639
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 265,
+     "predicted": 0.53,
+     "actual": 0.585
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 633,
+     "predicted": 0.578,
+     "actual": 0.58
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1144,
+     "predicted": 0.653,
+     "actual": 0.578
+    }
+   ],
+   "reason": "OOS Brier 0.2500 does not beat base rate 0.2444 by 0.002"
+  },
+  "US:MSFT": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25244,
+   "brier_base": 0.24476,
+   "brier_gain": -0.00768,
+   "hit_rate": 0.5803,
+   "base_up_rate": 0.5803,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 35,
+     "predicted": 0.323,
+     "actual": 0.514
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 42,
+     "predicted": 0.428,
+     "actual": 0.524
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 87,
+     "predicted": 0.479,
+     "actual": 0.483
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 223,
+     "predicted": 0.529,
+     "actual": 0.601
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 631,
+     "predicted": 0.577,
+     "actual": 0.599
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 1179,
+     "predicted": 0.677,
+     "actual": 0.578
+    }
+   ],
+   "reason": "OOS Brier 0.2524 does not beat base rate 0.2448 by 0.002"
+  },
+  "US:NVDA": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25069,
+   "brier_base": 0.24659,
+   "brier_gain": -0.0041,
+   "hit_rate": 0.5699,
+   "base_up_rate": 0.5731,
+   "calibration": [
+    {
+     "range": "0.40-0.45",
+     "n": 10,
+     "predicted": 0.432,
+     "actual": 0.6
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 23,
+     "predicted": 0.481,
+     "actual": 0.522
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 225,
+     "predicted": 0.533,
+     "actual": 0.644
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 939,
+     "predicted": 0.577,
+     "actual": 0.579
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 994,
+     "predicted": 0.641,
+     "actual": 0.55
+    }
+   ],
+   "reason": "OOS Brier 0.2507 does not beat base rate 0.2466 by 0.002"
+  },
+  "US:AMZN": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25505,
+   "brier_base": 0.25005,
+   "brier_gain": -0.00501,
+   "hit_rate": 0.5435,
+   "base_up_rate": 0.5453,
+   "calibration": [
+    {
+     "range": "0.40-0.45",
+     "n": 18,
+     "predicted": 0.432,
+     "actual": 0.611
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 100,
+     "predicted": 0.48,
+     "actual": 0.52
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 441,
+     "predicted": 0.53,
+     "actual": 0.599
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 1003,
+     "predicted": 0.574,
+     "actual": 0.542
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 627,
+     "predicted": 0.647,
+     "actual": 0.518
+    }
+   ],
+   "reason": "OOS Brier 0.2551 does not beat base rate 0.2500 by 0.002"
+  },
+  "US:GOOGL": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25311,
+   "brier_base": 0.247,
+   "brier_gain": -0.0061,
+   "hit_rate": 0.5517,
+   "base_up_rate": 0.564,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 27,
+     "predicted": 0.346,
+     "actual": 0.444
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 31,
+     "predicted": 0.43,
+     "actual": 0.581
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 79,
+     "predicted": 0.48,
+     "actual": 0.658
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 372,
+     "predicted": 0.531,
+     "actual": 0.554
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 782,
+     "predicted": 0.575,
+     "actual": 0.591
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 906,
+     "predicted": 0.652,
+     "actual": 0.54
+    }
+   ],
+   "reason": "OOS Brier 0.2531 does not beat base rate 0.2470 by 0.002"
+  },
+  "US:META": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25741,
+   "brier_base": 0.24818,
+   "brier_gain": -0.00923,
+   "hit_rate": 0.528,
+   "base_up_rate": 0.5535,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 69,
+     "predicted": 0.331,
+     "actual": 0.464
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 78,
+     "predicted": 0.429,
+     "actual": 0.538
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 209,
+     "predicted": 0.478,
+     "actual": 0.632
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 379,
+     "predicted": 0.528,
+     "actual": 0.575
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 585,
+     "predicted": 0.575,
+     "actual": 0.532
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 877,
+     "predicted": 0.668,
+     "actual": 0.548
+    }
+   ],
+   "reason": "OOS Brier 0.2574 does not beat base rate 0.2482 by 0.002"
+  },
+  "US:TSLA": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25744,
+   "brier_base": 0.25065,
+   "brier_gain": -0.00679,
+   "hit_rate": 0.5102,
+   "base_up_rate": 0.5262,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 53,
+     "predicted": 0.306,
+     "actual": 0.604
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 57,
+     "predicted": 0.43,
+     "actual": 0.596
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 181,
+     "predicted": 0.483,
+     "actual": 0.536
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 816,
+     "predicted": 0.529,
+     "actual": 0.521
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 688,
+     "predicted": 0.571,
+     "actual": 0.523
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 402,
+     "predicted": 0.657,
+     "actual": 0.517
+    }
+   ],
+   "reason": "OOS Brier 0.2574 does not beat base rate 0.2507 by 0.002"
+  },
+  "US:JPM": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25594,
+   "brier_base": 0.24785,
+   "brier_gain": -0.0081,
+   "hit_rate": 0.5289,
+   "base_up_rate": 0.5576,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 64,
+     "predicted": 0.347,
+     "actual": 0.781
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 120,
+     "predicted": 0.429,
+     "actual": 0.542
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 297,
+     "predicted": 0.479,
+     "actual": 0.529
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 605,
+     "predicted": 0.528,
+     "actual": 0.577
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 739,
+     "predicted": 0.573,
+     "actual": 0.54
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 372,
+     "predicted": 0.653,
+     "actual": 0.551
+    }
+   ],
+   "reason": "OOS Brier 0.2559 does not beat base rate 0.2478 by 0.002"
+  },
+  "US:AMD": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25661,
+   "brier_base": 0.24852,
+   "brier_gain": -0.00809,
+   "hit_rate": 0.5262,
+   "base_up_rate": 0.5517,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 102,
+     "predicted": 0.314,
+     "actual": 0.569
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 111,
+     "predicted": 0.43,
+     "actual": 0.541
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 269,
+     "predicted": 0.478,
+     "actual": 0.561
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 466,
+     "predicted": 0.528,
+     "actual": 0.536
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 563,
+     "predicted": 0.575,
+     "actual": 0.536
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 686,
+     "predicted": 0.653,
+     "actual": 0.57
+    }
+   ],
+   "reason": "OOS Brier 0.2566 does not beat base rate 0.2485 by 0.002"
+  },
+  "US:AVGO": {
+   "published": false,
+   "n_test": 2197,
+   "brier_model": 0.25167,
+   "brier_base": 0.24782,
+   "brier_gain": -0.00385,
+   "hit_rate": 0.5403,
+   "base_up_rate": 0.5544,
+   "calibration": [
+    {
+     "range": "0.00-0.40",
+     "n": 91,
+     "predicted": 0.353,
+     "actual": 0.473
+    },
+    {
+     "range": "0.40-0.45",
+     "n": 126,
+     "predicted": 0.432,
+     "actual": 0.563
+    },
+    {
+     "range": "0.45-0.50",
+     "n": 308,
+     "predicted": 0.478,
+     "actual": 0.532
+    },
+    {
+     "range": "0.50-0.55",
+     "n": 474,
+     "predicted": 0.525,
+     "actual": 0.58
+    },
+    {
+     "range": "0.55-0.60",
+     "n": 550,
+     "predicted": 0.574,
+     "actual": 0.542
+    },
+    {
+     "range": "0.60-1.00",
+     "n": 648,
+     "predicted": 0.652,
+     "actual": 0.566
+    }
+   ],
+   "reason": "OOS Brier 0.2517 does not beat base rate 0.2478 by 0.002"
+  }
+ },
+ "vrp": {
+  "IN:NIFTY": {
+   "available": true,
+   "days": 2427,
+   "from": "2016-11-18",
+   "iv_above_rv_pct": 80.1,
+   "mean_iv_minus_rv": 2.51,
+   "median_iv_minus_rv": 3.28,
+   "worst_5pct": -5.94
+  },
+  "US:SPX": {
+   "available": true,
+   "days": 2490,
+   "from": "2016-11-18",
+   "iv_above_rv_pct": 83.3,
+   "mean_iv_minus_rv": 3.6,
+   "median_iv_minus_rv": 4.65,
+   "worst_5pct": -7.2
+  }
+ },
+ "momentum": {
+  "IN": {
+   "published": true,
+   "reason": "t-stat 2.35 and 59.8% positive months meet the bar (t >= 2 and >= 55%)",
+   "overall": {
+    "months": 107,
+    "from": "2017-12",
+    "to": "2026-10",
+    "mean_excess_pct": 1.179,
+    "t_stat": 2.35,
+    "pct_months_positive": 59.8,
+    "max_drawdown_excess_pct": -18.67,
+    "cum_excess_pct": 207.01,
+    "avg_names": 32.1
+   },
+   "per_year": {
+    "2017": {
+     "months": 1,
+     "mean_excess_pct": 2.48
+    },
+    "2018": {
+     "months": 12,
+     "from": "2018-01",
+     "to": "2018-12",
+     "mean_excess_pct": 0.552,
+     "t_stat": 0.85,
+     "pct_months_positive": 50.0,
+     "max_drawdown_excess_pct": -2.71,
+     "cum_excess_pct": 6.54,
+     "avg_names": 29.2
+    },
+    "2019": {
+     "months": 12,
+     "from": "2019-01",
+     "to": "2019-12",
+     "mean_excess_pct": 0.972,
+     "t_stat": 1.16,
+     "pct_months_positive": 58.3,
+     "max_drawdown_excess_pct": -4.29,
+     "cum_excess_pct": 11.79,
+     "avg_names": 30.7
+    },
+    "2020": {
+     "months": 12,
+     "from": "2020-01",
+     "to": "2020-12",
+     "mean_excess_pct": 0.997,
+     "t_stat": 0.66,
+     "pct_months_positive": 66.7,
+     "max_drawdown_excess_pct": -13.28,
+     "cum_excess_pct": 10.98,
+     "avg_names": 31.0
+    },
+    "2021": {
+     "months": 12,
+     "from": "2021-01",
+     "to": "2021-12",
+     "mean_excess_pct": 6.334,
+     "t_stat": 1.99,
+     "pct_months_positive": 66.7,
+     "max_drawdown_excess_pct": -15.8,
+     "cum_excess_pct": 97.28,
+     "avg_names": 31.0
+    },
+    "2022": {
+     "months": 12,
+     "from": "2022-01",
+     "to": "2022-12",
+     "mean_excess_pct": -1.163,
+     "t_stat": -1.01,
+     "pct_months_positive": 50.0,
+     "max_drawdown_excess_pct": -14.52,
+     "cum_excess_pct": -13.88,
+     "avg_names": 31.5
+    },
+    "2023": {
+     "months": 12,
+     "from": "2023-01",
+     "to": "2023-12",
+     "mean_excess_pct": 0.687,
+     "t_stat": 0.78,
+     "pct_months_positive": 58.3,
+     "max_drawdown_excess_pct": -4.55,
+     "cum_excess_pct": 8.02,
+     "avg_names": 33.0
+    },
+    "2024": {
+     "months": 12,
+     "from": "2024-01",
+     "to": "2024-12",
+     "mean_excess_pct": 2.948,
+     "t_stat": 3.55,
+     "pct_months_positive": 91.7,
+     "max_drawdown_excess_pct": -0.84,
+     "cum_excess_pct": 41.11,
+     "avg_names": 33.3
+    },
+    "2025": {
+     "months": 12,
+     "from": "2025-01",
+     "to": "2025-12",
+     "mean_excess_pct": 0.634,
+     "t_stat": 0.69,
+     "pct_months_positive": 66.7,
+     "max_drawdown_excess_pct": -7.23,
+     "cum_excess_pct": 7.29,
+     "avg_names": 34.2
+    },
+    "2026": {
+     "months": 10,
+     "from": "2026-01",
+     "to": "2026-10",
+     "mean_excess_pct": -1.985,
+     "t_stat": -2.41,
+     "pct_months_positive": 20.0,
+     "max_drawdown_excess_pct": -18.43,
+     "cum_excess_pct": -18.43,
+     "avg_names": 36.0
+    }
+   },
+   "symbols_with_history": 36,
+   "universe_size": 36,
+   "survivorship_note": "Universe = today's large caps (the scanner list), back-filled 10 years: stocks that fell out or were delisted are missing, and names that became large caps are included before they were. This biases momentum results upward; treat the numbers as an optimistic upper bound."
+  },
+  "US": {
+   "published": true,
+   "reason": "t-stat 2.87 and 62.6% positive months meet the bar (t >= 2 and >= 55%)",
+   "overall": {
+    "months": 107,
+    "from": "2017-12",
+    "to": "2026-10",
+    "mean_excess_pct": 2.105,
+    "t_stat": 2.87,
+    "pct_months_positive": 62.6,
+    "max_drawdown_excess_pct": -22.64,
+    "cum_excess_pct": 595.85,
+    "avg_names": 40.7
+   },
+   "per_year": {
+    "2017": {
+     "months": 1,
+     "mean_excess_pct": -0.29
+    },
+    "2018": {
+     "months": 12,
+     "from": "2018-01",
+     "to": "2018-12",
+     "mean_excess_pct": 0.251,
+     "t_stat": 0.17,
+     "pct_months_positive": 58.3,
+     "max_drawdown_excess_pct": -14.92,
+     "cum_excess_pct": 1.52,
+     "avg_names": 34.0
+    },
+    "2019": {
+     "months": 12,
+     "from": "2019-01",
+     "to": "2019-12",
+     "mean_excess_pct": 0.654,
+     "t_stat": 0.59,
+     "pct_months_positive": 50.0,
+     "max_drawdown_excess_pct": -8.6,
+     "cum_excess_pct": 7.26,
+     "avg_names": 34.2
+    },
+    "2020": {
+     "months": 12,
+     "from": "2020-01",
+     "to": "2020-12",
+     "mean_excess_pct": 5.768,
+     "t_stat": 4.12,
+     "pct_months_positive": 91.7,
+     "max_drawdown_excess_pct": -0.07,
+     "cum_excess_pct": 93.78,
+     "avg_names": 36.1
+    },
+    "2021": {
+     "months": 12,
+     "from": "2021-01",
+     "to": "2021-12",
+     "mean_excess_pct": 1.562,
+     "t_stat": 0.56,
+     "pct_months_positive": 50.0,
+     "max_drawdown_excess_pct": -11.84,
+     "cum_excess_pct": 14.75,
+     "avg_names": 38.2
+    },
+    "2022": {
+     "months": 12,
+     "from": "2022-01",
+     "to": "2022-12",
+     "mean_excess_pct": 2.653,
+     "t_stat": 2.02,
+     "pct_months_positive": 75.0,
+     "max_drawdown_excess_pct": -8.61,
+     "cum_excess_pct": 35.39,
+     "avg_names": 43.1
+    },
+    "2023": {
+     "months": 12,
+     "from": "2023-01",
+     "to": "2023-12",
+     "mean_excess_pct": 0.435,
+     "t_stat": 0.18,
+     "pct_months_positive": 66.7,
+     "max_drawdown_excess_pct": -22.64,
+     "cum_excess_pct": 1.01,
+     "avg_names": 45.0
+    },
+    "2024": {
+     "months": 12,
+     "from": "2024-01",
+     "to": "2024-12",
+     "mean_excess_pct": 4.572,
+     "t_stat": 1.43,
+     "pct_months_positive": 66.7,
+     "max_drawdown_excess_pct": -14.79,
+     "cum_excess_pct": 61.16,
+     "avg_names": 45.2
+    },
+    "2025": {
+     "months": 12,
+     "from": "2025-01",
+     "to": "2025-12",
+     "mean_excess_pct": 0.45,
+     "t_stat": 0.32,
+     "pct_months_positive": 58.3,
+     "max_drawdown_excess_pct": -12.37,
+     "cum_excess_pct": 4.13,
+     "avg_names": 46.0
+    },
+    "2026": {
+     "months": 10,
+     "from": "2026-01",
+     "to": "2026-10",
+     "mean_excess_pct": 2.935,
+     "t_stat": 0.77,
+     "pct_months_positive": 50.0,
+     "max_drawdown_excess_pct": -16.47,
+     "cum_excess_pct": 25.59,
+     "avg_names": 46.0
+    }
+   },
+   "symbols_with_history": 46,
+   "universe_size": 46,
+   "survivorship_note": "Universe = today's large caps (the scanner list), back-filled 10 years: stocks that fell out or were delisted are missing, and names that became large caps are included before they were. This biases momentum results upward; treat the numbers as an optimistic upper bound."
+  }
+ },
+ "institutional": {
+  "from": "2022-08-12",
+  "to": "2026-11-06",
+  "test_days": 1044,
+  "base_mean_5d_pct": 0.185,
+  "base_up_rate": 0.5421,
+  "signals": {
+   "low": {
+    "days": 298,
+    "non_overlapping": 63,
+    "mean_5d_pct": 0.325,
+    "up_rate": 0.594,
+    "mean_excess_pct": 0.129,
+    "t_stat": 0.58
+   },
+   "high": {
+    "days": 134,
+    "non_overlapping": 28,
+    "mean_5d_pct": 0.131,
+    "up_rate": 0.5448,
+    "mean_excess_pct": -0.099,
+    "t_stat": -0.32
+   }
+  },
+  "brier": {
+   "n": 387,
+   "model": 0.25262,
+   "base": 0.24989,
+   "gain": -0.00273
+  },
+  "published": false,
+  "reason": "best |t| 0.58 on 63 non-overlapping events, OOS Brier gain -0.00273 over 387 signal days: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+  "pcr": "skipped: no historical option-chain PCR source (only today's chain is served; markets.db snapshots are too short)",
+  "basis": "skipped: futures basis history exists only inside the daily NSE F&O bhavcopy (~1.4 MB/day zip, ~1 GB for 3 years); not downloaded for this run"
+ },
+ "institutional_global": {
+  "cot_extremes": {
+   "per_symbol": {
+    "EURUSD": {
+     "from": "2012-12-27",
+     "to": "2026-10-16",
+     "observations": 721,
+     "base_mean_pct": -0.075,
+     "base_up_rate": 0.4702,
+     "signals": {
+      "high": {
+       "days": 69,
+       "non_overlapping": 20,
+       "mean_fwd_pct": 0.19,
+       "up_rate": 0.5072,
+       "mean_excess_pct": 0.467,
+       "t_stat": 1.04
+      },
+      "low": {
+       "days": 36,
+       "non_overlapping": 11,
+       "mean_fwd_pct": -0.017,
+       "up_rate": 0.5,
+       "mean_excess_pct": 0.169,
+       "t_stat": 0.19
+      }
+     },
+     "brier": {
+      "n": 80,
+      "model": 0.29374,
+      "base": 0.25169,
+      "gain": -0.04205
+     },
+     "published": false,
+     "reason": "best |t| 1.04 on 20 non-overlapping events, OOS Brier gain -0.04205 over 80 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 20
+    },
+    "GBPUSD": {
+     "from": "2012-12-27",
+     "to": "2026-10-16",
+     "observations": 721,
+     "base_mean_pct": -0.077,
+     "base_up_rate": 0.4993,
+     "signals": {
+      "high": {
+       "days": 58,
+       "non_overlapping": 21,
+       "mean_fwd_pct": -0.538,
+       "up_rate": 0.3966,
+       "mean_excess_pct": -0.462,
+       "t_stat": -1.04
+      },
+      "low": {
+       "days": 50,
+       "non_overlapping": 16,
+       "mean_fwd_pct": 0.432,
+       "up_rate": 0.74,
+       "mean_excess_pct": 0.186,
+       "t_stat": 0.21
+      }
+     },
+     "brier": {
+      "n": 82,
+      "model": 0.23388,
+      "base": 0.25809,
+      "gain": 0.02421
+     },
+     "published": false,
+     "reason": "best |t| 1.04 on 21 non-overlapping events, OOS Brier gain 0.02421 over 82 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 20
+    },
+    "USDJPY": {
+     "from": "2012-12-27",
+     "to": "2026-10-16",
+     "observations": 721,
+     "base_mean_pct": 0.361,
+     "base_up_rate": 0.5839,
+     "signals": {
+      "high": {
+       "days": 82,
+       "non_overlapping": 29,
+       "mean_fwd_pct": 0.003,
+       "up_rate": 0.5122,
+       "mean_excess_pct": -0.634,
+       "t_stat": -1.06
+      },
+      "low": {
+       "days": 108,
+       "non_overlapping": 30,
+       "mean_fwd_pct": -0.1,
+       "up_rate": 0.463,
+       "mean_excess_pct": -0.533,
+       "t_stat": -1.18
+      }
+     },
+     "brier": {
+      "n": 166,
+      "model": 0.26971,
+      "base": 0.26295,
+      "gain": -0.00676
+     },
+     "published": false,
+     "reason": "best |t| 1.18 on 30 non-overlapping events, OOS Brier gain -0.00676 over 166 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 20
+    },
+    "USDCAD": {
+     "from": "2012-12-27",
+     "to": "2026-10-16",
+     "observations": 721,
+     "base_mean_pct": 0.212,
+     "base_up_rate": 0.552,
+     "signals": {
+      "high": {
+       "days": 90,
+       "non_overlapping": 29,
+       "mean_fwd_pct": -0.265,
+       "up_rate": 0.4333,
+       "mean_excess_pct": -0.372,
+       "t_stat": -1.14
+      },
+      "low": {
+       "days": 47,
+       "non_overlapping": 14,
+       "mean_fwd_pct": 0.571,
+       "up_rate": 0.6596,
+       "mean_excess_pct": 0.705,
+       "t_stat": 1.91
+      }
+     },
+     "brier": {
+      "n": 115,
+      "model": 0.25612,
+      "base": 0.25576,
+      "gain": -0.00037
+     },
+     "published": false,
+     "reason": "best |t| 1.91 on 14 non-overlapping events, OOS Brier gain -0.00037 over 115 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 20
+    },
+    "XAUUSD": {
+     "from": "2012-12-27",
+     "to": "2026-10-16",
+     "observations": 721,
+     "base_mean_pct": 0.63,
+     "base_up_rate": 0.5451,
+     "signals": {
+      "high": {
+       "days": 59,
+       "non_overlapping": 18,
+       "mean_fwd_pct": 1.319,
+       "up_rate": 0.7119,
+       "mean_excess_pct": 0.984,
+       "t_stat": 1.51
+      },
+      "low": {
+       "days": 68,
+       "non_overlapping": 19,
+       "mean_fwd_pct": 0.397,
+       "up_rate": 0.6324,
+       "mean_excess_pct": 0.539,
+       "t_stat": 0.56
+      }
+     },
+     "brier": {
+      "n": 102,
+      "model": 0.24389,
+      "base": 0.27689,
+      "gain": 0.033
+     },
+     "published": false,
+     "reason": "best |t| 1.51 on 18 non-overlapping events, OOS Brier gain 0.033 over 102 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 20
+    },
+    "BTCUSD": {
+     "from": "2021-04-02",
+     "to": "2026-10-16",
+     "observations": 290,
+     "base_mean_pct": 1.554,
+     "base_up_rate": 0.5172,
+     "signals": {
+      "high": {
+       "days": 57,
+       "non_overlapping": 19,
+       "mean_fwd_pct": -0.109,
+       "up_rate": 0.5439,
+       "mean_excess_pct": -3.315,
+       "t_stat": -0.97
+      },
+      "low": {
+       "days": 9,
+       "non_overlapping": 4,
+       "mean_fwd_pct": 0.887,
+       "up_rate": 0.4444,
+       "mean_excess_pct": -3.363,
+       "t_stat": -0.75
+      }
+     },
+     "brier": {
+      "n": 45,
+      "model": 0.27834,
+      "base": 0.24819,
+      "gain": -0.03015
+     },
+     "published": false,
+     "reason": "best |t| 0.97 on 19 non-overlapping events, OOS Brier gain -0.03015 over 45 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 28
+    },
+    "ETHUSD": {
+     "from": "2024-03-29",
+     "to": "2026-10-16",
+     "observations": 134,
+     "base_mean_pct": 0.646,
+     "base_up_rate": 0.4478,
+     "signals": {
+      "high": {
+       "days": 17,
+       "non_overlapping": 5,
+       "mean_fwd_pct": -3.726,
+       "up_rate": 0.2941,
+       "mean_excess_pct": -5.49,
+       "t_stat": -0.51
+      },
+      "low": {
+       "days": 2,
+       "non_overlapping": 1,
+       "mean_fwd_pct": 34.84,
+       "up_rate": 1.0,
+       "mean_excess_pct": 15.517,
+       "t_stat": null
+      }
+     },
+     "brier": {
+      "n": 6,
+      "model": 0.50784,
+      "base": 0.27963,
+      "gain": -0.22822
+     },
+     "published": false,
+     "reason": "best |t| 0.51 on 5 non-overlapping events, OOS Brier gain -0.22822 over 6 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)",
+     "horizon_bars": 28
+    }
+   },
+   "pooled": {
+    "non_overlapping": 236,
+    "mean_contrarian_excess_pct": 0.48,
+    "t_stat": 1.21,
+    "brier_n": 596,
+    "brier_gain": -0.0032
+   },
+   "published": false,
+   "reason": "pooled contrarian t 1.21 on 236 non-overlapping extremes, OOS Brier gain -0.0032 over 596 obs: does not meet the bar (t >= 2, >= 30 events, Brier gain >= 0.002)"
+  },
+  "dxy_trend_EURUSD": {
+   "from": "2006-12-18",
+   "to": "2026-11-06",
+   "observations": 4975,
+   "base_mean_pct": -0.019,
+   "base_up_rate": 0.4927,
+   "signals": {
+    "down": {
+     "days": 1441,
+     "non_overlapping": 373,
+     "mean_fwd_pct": -0.005,
+     "up_rate": 0.4941,
+     "mean_excess_pct": 0.061,
+     "t_stat": 0.96
+    },
+    "up": {
+     "days": 1551,
+     "non_overlapping": 403,
+     "mean_fwd_pct": -0.036,
+     "up_rate": 0.4926,
+     "mean_excess_pct": 0.012,
+     "t_stat": 0.17
+    }
+   },
+   "brier": {
+    "n": 2951,
+    "model": 0.25255,
+    "base": 0.25048,
+    "gain": -0.00207
+   },
+   "published": false,
+   "reason": "best |t| 0.96 on 373 non-overlapping events, OOS Brier gain -0.00207 over 2951 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)"
+  },
+  "dxy_trend_XAUUSD": {
+   "from": "2006-12-18",
+   "to": "2026-11-09",
+   "observations": 5003,
+   "base_mean_pct": 0.215,
+   "base_up_rate": 0.5531,
+   "signals": {
+    "down": {
+     "days": 1446,
+     "non_overlapping": 364,
+     "mean_fwd_pct": 0.234,
+     "up_rate": 0.5539,
+     "mean_excess_pct": 0.011,
+     "t_stat": 0.08
+    },
+    "up": {
+     "days": 1568,
+     "non_overlapping": 400,
+     "mean_fwd_pct": 0.237,
+     "up_rate": 0.5478,
+     "mean_excess_pct": 0.032,
+     "t_stat": 0.22
+    }
+   },
+   "brier": {
+    "n": 2973,
+    "model": 0.25096,
+    "base": 0.24878,
+    "gain": -0.00218
+   },
+   "published": false,
+   "reason": "best |t| 0.22 on 400 non-overlapping events, OOS Brier gain -0.00218 over 2973 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)"
+  },
+  "yields_gold": {
+   "from": "2006-12-18",
+   "to": "2026-11-09",
+   "observations": 5000,
+   "base_mean_pct": 0.216,
+   "base_up_rate": 0.5532,
+   "signals": {
+    "down": {
+     "days": 1190,
+     "non_overlapping": 314,
+     "mean_fwd_pct": 0.365,
+     "up_rate": 0.5697,
+     "mean_excess_pct": -0.01,
+     "t_stat": -0.06
+    },
+    "up": {
+     "days": 1247,
+     "non_overlapping": 328,
+     "mean_fwd_pct": 0.291,
+     "up_rate": 0.5734,
+     "mean_excess_pct": 0.032,
+     "t_stat": 0.23
+    }
+   },
+   "brier": {
+    "n": 2389,
+    "model": 0.2488,
+    "base": 0.2461,
+    "gain": -0.00269
+   },
+   "published": false,
+   "reason": "best |t| 0.23 on 328 non-overlapping events, OOS Brier gain -0.00269 over 2389 signal obs: does not meet the bar (|t| >= 2, >= 30 events, Brier gain >= 0.002)"
+  }
+ }
+}

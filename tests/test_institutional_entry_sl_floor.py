@@ -345,3 +345,15 @@ class TestEndToEndStopInvariant(_InvariantMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_gold_stop_ceiling_scales_with_style_atr():
+    # XAUUSD D1 ATR ~$86 needs a >= 0.45x ATR (~$39) stop; the old flat $18 cap made
+    # every D1 gold setup fail "Valid Stop Loss Distance". H1-sized ATR keeps the $18 cap.
+    eng = InstitutionalEntryEngine()
+    wide = eng.calculate_entry_and_levels(_make_context("XAUUSD", 3850.0, 86.0), _regime(),
+                                          tentative_bias="SELL", trade_style="D1_SWING", mtf_data=None)
+    assert wide["risk_dist"] >= 0.45 * 86.0
+    tight = eng.calculate_entry_and_levels(_make_context("XAUUSD", 3850.0, 14.0), _regime(),
+                                           tentative_bias="SELL", trade_style="SWING", mtf_data=None)
+    assert tight["risk_dist"] <= 18.0

@@ -169,7 +169,10 @@ class ExposureManager:
         # 1. Total Concurrent Positions Limit (with Risk-Free Breakeven Exemption)
         # Positions that have reached Breakeven or locked in profit carry $0 capital risk.
         active_risk_positions = []
-        for p in positions:
+        # Forward-test ("FT_") positions run their own pre-registered book; they must not
+        # use up the main engine's slots (2026-11-18: 4 FT trades filled all 4).
+        main_positions = [p for p in positions if not str(getattr(p, "comment", "") or "").startswith("FT_")]
+        for p in main_positions:
             side = getattr(p, "side", getattr(p, "type", "")).upper()
             sl = float(getattr(p, "sl", 0.0) or 0.0)
             entry = float(getattr(p, "entry_price", getattr(p, "open_price", 0.0)) or 0.0)
@@ -201,8 +204,8 @@ class ExposureManager:
                 effective_max_open_positions = max(self.max_open_positions, 4)
 
         max_total_ceiling = effective_max_open_positions + 2
-        if len(active_risk_positions) >= effective_max_open_positions or len(positions) >= max_total_ceiling:
-            breaches.append(f"Max Concurrent Positions reached ({len(active_risk_positions)} active risk / {len(positions)} total >= {effective_max_open_positions} allowed).")
+        if len(active_risk_positions) >= effective_max_open_positions or len(main_positions) >= max_total_ceiling:
+            breaches.append(f"Max Concurrent Positions reached ({len(active_risk_positions)} active risk / {len(main_positions)} total >= {effective_max_open_positions} allowed).")
 
         # 2. Per-Symbol Exposure (Soft Limit = 1, Hard Limit = 2)
         sym_positions = [p for p in positions if self.resolve_canonical(p.symbol) == target_canon]

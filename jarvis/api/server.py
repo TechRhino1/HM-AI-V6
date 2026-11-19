@@ -46,8 +46,32 @@ LEGACY_PAGE_REDIRECTS = {
     "/console": "/#trading", "/console.html": "/#trading",
     "/classic": "/#controls", "/classic.html": "/#controls",
     "/positions": "/#positions", "/positions.html": "/#positions",
+    # The old stocks / India / F&O pages were replaced by the SPA's live markets sections.
+    **dict.fromkeys(("/stocks", "/stocks.html", "/screener"), "/#markets/us"),
+    **dict.fromkeys(("/india", "/india.html", "/india/stocks", "/nse", "/bse"), "/#markets/india"),
+    **dict.fromkeys(("/options", "/options.html", "/india/options", "/india-options", "/fno"), "/#markets/fno"),
 }
 PUBLIC_API_POSTS = frozenset({"/api/auth/login", "/api/auth/logout", "/api/auth/verify", "/api/auth/register"})
+
+
+def _broker_frame(df: Any) -> bool:
+    """Only frames the broker actually returned may leave the process; the feed's internal
+    fallback frames (labelled, used by the engine only to refuse) never reach an API client."""
+    return df is not None and not getattr(df, "empty", True) and df.attrs.get("data_source") == "LIVE_MT5"
+
+
+def _bars_unavailable(df: Any) -> Dict[str, Any]:
+    src = (getattr(df, "attrs", None) or {}).get("data_source") or "none"
+    return {"source": "mt5", "kind": "unavailable", "as_of": None,
+            "note": f"broker returned no bars for this symbol/timeframe (feed state: {str(src).lower()}); nothing is substituted"}
+
+
+def _last_alert_id(last_event_id: str, market_alerts: Any) -> int:
+    """Resume after the alert a reconnecting client last saw; a fresh client starts from now."""
+    if last_event_id.startswith("alert-") and last_event_id[6:].isdigit():
+        return int(last_event_id[6:])
+    recent = market_alerts.recent_since(0)
+    return recent[-1]["id"] if recent else 0
 
 
 def _status_class(status_code: int) -> str:
@@ -615,22 +639,12 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 self._serve_dashboard_ui()
             elif path in LEGACY_PAGE_REDIRECTS:
                 self._redirect(LEGACY_PAGE_REDIRECTS[path])
-            elif path in ["/stocks", "/stocks.html", "/screener"]:
-                self._serve_stocks_ui()
-            elif path in ["/india", "/india.html", "/india/stocks", "/nse", "/bse"]:
-                self._serve_india_ui()
-            elif path in ["/options", "/options.html", "/india/options", "/india-options", "/fno"]:
-                self._serve_options_ui()
             elif path.startswith("/static/"):
                 self._serve_static_file(path)
-            elif path.startswith("/api/stocks/"):
-                from jarvis.stocks.stock_service import STOCK_SERVICE
-                if not STOCK_SERVICE.handle_request(path, query, self):
-                    self.send_error(404, f"Stock API {path} not found")
-            elif path.startswith("/api/india/"):
-                from jarvis.india.india_service import INDIA_SERVICE
-                if not INDIA_SERVICE.handle_request(path, query, self):
-                    self.send_error(404, f"India API {path} not found")
+            elif path.startswith("/api/markets/"):
+                from jarvis.markets.api import handle_request as markets_request
+                if not markets_request(path, query, self):
+                    self.send_error(404, f"Markets API {path} not found")
             elif path == "/api/admin/users":
                 ok, _ = self._require_role("ADMIN")
                 if not ok:
@@ -670,10 +684,23 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 }
                 self._send_json(snap)
             elif path == "/api/alerts":
+                # `alerts`/`count` are the system (observability) alerts as before; `rules` are user market alert rules.
                 from jarvis.observability.alerting import ALERT_MANAGER
+                from jarvis.markets import alerts as market_alerts
                 limit = int(query.get("limit", [50])[0])
                 alerts = ALERT_MANAGER.get_recent_alerts(limit=limit)
-                self._send_json({"alerts": alerts, "count": len(alerts)})
+                self._send_json({"alerts": alerts, "count": len(alerts), "rules": market_alerts.list_rules(),
+                                 "rule_types": market_alerts.RULE_TYPES})
+            elif path == "/api/alerts/fired":
+                from jarvis.markets import alerts as market_alerts
+                try:
+                    since = float(query.get("since", ["0"])[0] or 0)
+                except ValueError:
+                    since = 0.0
+                rows = market_alerts.fired(since=since)
+                self._send_json({"fired": rows, "count": len(rows)})
+            elif path.startswith("/api/ai/"):
+                self._ai_get(path, query)
             elif path == "/api/market-status":
                 sym = query.get("symbol", ["XAUUSD"])[0]
                 status = SessionEngine.get_market_trading_status(sym)
@@ -745,6 +772,12 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 spec = resolve_symbol(sym)
                 digits = getattr(spec, "digits", 2 if "XAU" in sym or "BTC" in sym else 5)
                 candles = []
+                if not _broker_frame(df):
+                    # Never serve generated bars: the chart shows its empty/error state instead.
+                    payload = {"symbol": sym, "timeframe": tf, "candles": [], "prov": _bars_unavailable(df)}
+                    self._CANDLES_CACHE[cache_key] = (payload, now)
+                    self._send_json(payload)
+                    return
                 if df is not None and not df.empty:
                     records = df.to_dict(orient="records")
                     for r in records:
@@ -760,7 +793,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                             "close": round(float(r["close"]), digits),
                             "volume": float(r.get("volume", 0.0))
                         })
-                payload = {"symbol": sym, "timeframe": tf, "candles": candles}
+                payload = {"symbol": sym, "timeframe": tf, "candles": candles,
+                           "prov": {"source": "mt5:copy_rates_from_pos", "kind": "live", "as_of": candles[-1]["time"] if candles else None,
+                                    "freshness": str(df.attrs.get("freshness"))}}
                 self._CANDLES_CACHE[cache_key] = (payload, now)
                 self._send_json(payload)
             elif path == "/api/rates":
@@ -770,13 +805,17 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 bars = max(1, min(5000, int(query.get("num_bars", query.get("bars", [150]))[0])))
                 if trade_style:
                     mtf = self.data_feed.fetch_multi_timeframe(sym, trade_style=trade_style, num_bars=bars)
-                    res = {}
+                    res, prov = {}, {}
                     for role, df in mtf.items():
-                        res[role] = df.tail(bars).to_dict(orient="records")
-                    self._send_json({"symbol": sym, "trade_style": trade_style, "rates": res})
+                        ok = _broker_frame(df)
+                        res[role] = df.tail(bars).to_dict(orient="records") if ok else []
+                        prov[role] = {"source": "mt5", "kind": "live", "as_of": None} if ok else _bars_unavailable(df)
+                    self._send_json({"symbol": sym, "trade_style": trade_style, "rates": res, "prov": prov})
                 else:
                     df = self.data_feed.fetch_rates(sym, timeframe=tf, num_bars=bars, include_current_bar=True)
-                    self._send_json({"symbol": sym, "timeframe": tf, "rates": df.to_dict(orient="records")})
+                    ok = _broker_frame(df)
+                    self._send_json({"symbol": sym, "timeframe": tf, "rates": df.to_dict(orient="records") if ok else [],
+                                     "prov": {"source": "mt5", "kind": "live", "as_of": None} if ok else _bars_unavailable(df)})
             elif path == "/api/radar":
                 style_filter = query.get("trade_style", query.get("style", [None]))[0]
                 opps = list(self.state_manager.radar_opportunities)
@@ -1028,11 +1067,19 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     return
 
                 # SSE Event Loop
+                from jarvis.markets import alerts as market_alerts
+                last_alert = _last_alert_id(self.headers.get("Last-Event-ID", ""), market_alerts)
                 last_ver = self.state_manager.get_state_version()
                 for _ in range(60): # 60 iterations (approx 1-2 mins before clean client reconnect)
                     time.sleep(1.0)
                     cur_ver = self.state_manager.get_state_version()
                     try:
+                        fresh = market_alerts.recent_since(last_alert)
+                        for a in fresh:
+                            self.wfile.write(market_alerts.sse_event(a).encode("utf-8"))
+                            last_alert = a["id"]
+                        if fresh:
+                            self.wfile.flush()
                         if cur_ver != last_ver:
                             last_ver = cur_ver
                             cur_snap = self.state_manager.get_state_digest()
@@ -1057,8 +1104,14 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 try:
                     acc = self.mt5_client.get_account_snapshot() if (hasattr(self, "mt5_client") and self.mt5_client) else None
                     pos = self.mt5_client.get_open_positions() if (hasattr(self, "mt5_client") and self.mt5_client) else []
-                    equity = getattr(acc, "equity", 10000.0) or 10000.0
-                    balance = getattr(acc, "balance", 10000.0) or 10000.0
+                    # No broker handle: use the last synced account rather than an invented
+                    # 10,000 (which showed a 94% "drawdown" on a $520 account).
+                    synced = (self.state_manager.get_state_snapshot().get("account") or {}) if acc is None else {}
+                    equity = float(getattr(acc, "equity", 0.0) or synced.get("equity") or 0.0)
+                    balance = float(getattr(acc, "balance", 0.0) or synced.get("balance") or 0.0)
+                    if equity <= 0:
+                        self._send_json({"status": "UNAVAILABLE", "error": "No broker account synced yet"}, status_code=503)
+                        return
                     if hasattr(self, "orchestrator") and self.orchestrator and hasattr(self.orchestrator, "risk_engine"):
                         r_status = self.orchestrator.risk_engine.get_risk_status(equity, balance, account=acc, positions=pos)
                     else:
@@ -1179,6 +1232,12 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                             "digits": digits,
                             "spread_pips": spread_pips,
                             "max_spread_pips": spec.max_spread_pips,
+                            # Contract data for the order ticket's money-at-risk preview.
+                            "tick_value": float(sym_spec.get("trade_tick_value") or spec.pip_value_per_lot or 0.0),
+                            "tick_size": float(sym_spec.get("trade_tick_size") or pip_size),
+                            "volume_min": float(sym_spec.get("volume_min") or 0.01),
+                            "volume_step": float(sym_spec.get("volume_step") or 0.01),
+                            "volume_max": float(sym_spec.get("volume_max") or 100.0),
                             "bias": bias,
                             "decision": decision,
                             "regime": regime,
@@ -1383,6 +1442,13 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 # Conversation memory is per caller. A curl with no token and no
                 # local origin still gets the old stateless behaviour.
                 session_id = self._copilot_session_id()
+                from jarvis.ai import client as ai_client
+                if ai_client.get_provider() is not None:
+                    from jarvis.ai import copilot as ai_copilot
+                    ai = ai_copilot.ask(query, session_id=session_id, context=context)
+                    self._send_json({"query": query, "response": ai["answer"], "session": bool(session_id),
+                                     "provider": True, "ai": ai})
+                    return
                 response_text = self.copilot.ask(query, context=context,
                                                  session_id=session_id)
                 # `session` and `provider` are additive: both front ends read
@@ -1394,6 +1460,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     "session": bool(session_id),
                     "provider": bool(self.copilot.provider.available),
                 })
+            elif path.startswith("/api/ai/") or path in ("/api/alerts", "/api/alerts/delete", "/api/alerts/ack"):
+                self._ai_post(path, data)
             elif path == "/api/action/auto-select" or path.startswith("/api/backtest/") or path.startswith("/api/intelligence/"):
                 from jarvis.api.intelligence_api import INTELLIGENCE
                 if not INTELLIGENCE.handle_post(path, data, self):
@@ -1960,6 +2028,97 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             "ts": datetime.now(timezone.utc).isoformat(),
         })
 
+    # ------------------------------------------------------------ AI layer + market alerts
+    def _ai_get(self, path: str, query: Dict[str, list]) -> None:
+        q = lambda k, d="": (query.get(k) or [d])[0].strip()
+        try:
+            if path == "/api/ai/status":
+                from jarvis.ai import client as ai_client
+                self._send_json(ai_client.status())
+            elif path == "/api/ai/brief":
+                from jarvis.ai import briefs
+                kind = q("kind", "pre")
+                if kind not in ("pre", "post"):
+                    self._send_json({"error": "kind must be pre or post"}, status_code=400)
+                    return
+                b = briefs.latest(kind)
+                self._send_json(b or {"kind": kind, "text": None, "error": "no brief generated yet"}, status_code=200 if b else 404)
+            elif path == "/api/ai/explain":
+                from jarvis.ai import explain
+                if not q("metric"):
+                    self._send_json({"error": "metric is required"}, status_code=400)
+                    return
+                self._send_json(explain.explain(q("metric"), q("value"), {"symbol": q("symbol")}))
+            elif path == "/api/ai/review":
+                from jarvis.ai import review
+                self._send_json(review.weekly_review())
+            else:
+                self.send_error(404, f"AI API {path} not found")
+        except Exception as exc:
+            from jarvis.ai.providers.base import redact
+            logger.warning("AI GET %s failed: %s", path, redact(exc))
+            self._send_json({"status": "ERROR", "error": redact(f"{type(exc).__name__}: {exc}")}, status_code=500)
+
+    def _ai_post(self, path: str, data: Dict[str, Any]) -> None:
+        from jarvis.markets import alerts as market_alerts
+        try:
+            if path == "/api/alerts":
+                self._send_json({"rule": market_alerts.create(data.get("rule") if isinstance(data.get("rule"), dict) else data)})
+            elif path == "/api/alerts/delete":
+                self._send_json({"deleted": market_alerts.delete(str(data.get("id", "")))})
+            elif path == "/api/alerts/ack":
+                ids = data.get("ids") if isinstance(data.get("ids"), list) else [data.get("id")]
+                self._send_json({"acked": market_alerts.ack([i for i in ids if str(i).isdigit()])})
+            elif path == "/api/ai/chat":
+                from jarvis.ai import copilot as ai_copilot
+                ctx = data.get("context") if isinstance(data.get("context"), dict) else None
+                self._send_json(ai_copilot.ask(str(data.get("message", "")), session_id=self._ai_session(data), context=ctx))
+            elif path == "/api/ai/chat/stream":
+                self._ai_chat_stream(data)
+            elif path == "/api/ai/brief/generate":
+                from jarvis.ai import briefs
+                self._send_json(briefs.generate(str(data.get("kind", "pre"))))
+            elif path == "/api/ai/alerts/parse":
+                from jarvis.ai import nl_alerts
+                self._send_json(nl_alerts.parse(str(data.get("text", ""))))
+            else:
+                self.send_error(404, f"API {path} not found")
+        except ValueError as exc:
+            self._send_json({"status": "FAILED", "error": str(exc)}, status_code=400)
+        except Exception as exc:
+            from jarvis.ai.providers.base import redact
+            logger.warning("POST %s failed: %s", path, redact(exc))
+            self._send_json({"status": "ERROR", "error": redact(f"{type(exc).__name__}: {exc}")}, status_code=500)
+
+    def _ai_session(self, data: Dict[str, Any]) -> Optional[str]:
+        """Caller's own session key, optionally sub-threaded by a client-chosen session_id."""
+        base = self._copilot_session_id()
+        sub = str(data.get("session_id") or "")[:64]
+        return f"{base}|{sub}" if base and sub else base
+
+    def _ai_chat_stream(self, data: Dict[str, Any]) -> None:
+        """text/event-stream: `event: tool` per tool call, then one `event: answer` (same body as /api/ai/chat), then `event: done`."""
+        from jarvis.ai import copilot as ai_copilot
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self._send_security_headers()
+        cors_origin = self._allowed_cors_origin(self.headers.get("Origin", ""))
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+        self.end_headers()
+
+        def emit(event: str, payload: Dict[str, Any]) -> None:
+            try:
+                self.wfile.write(f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+        ctx = data.get("context") if isinstance(data.get("context"), dict) else None
+        out = ai_copilot.ask(str(data.get("message", "")), session_id=self._ai_session(data), context=ctx, on_event=emit)
+        emit("answer", out)
+        emit("done", {})
+
     def _send_json(self, data: Any, status_code: int = 200, cookies: Optional[list] = None):
         try:
             payload = json.dumps(data, default=str).encode("utf-8")
@@ -1994,7 +2153,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
     def _serve_static_file(self, req_path: str):
         now = time.time()
-        is_vendor = "vendor" in req_path
+        # Vendored libs and the SPA's content-hashed bundles never change under one URL.
+        is_vendor = "vendor" in req_path or req_path.startswith("/static/app/assets/")
         is_asset = req_path.endswith((".css", ".js", ".svg", ".png", ".woff2"))
         cache_ttl = 3600.0 if (is_vendor or is_asset) else 5.0
 
@@ -2089,12 +2249,34 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, f"Template {template_name} not found")
 
     def _serve_dashboard_ui(self):
-        """Primary surface: the advanced trading terminal (dashboard.html).
+        """Primary surface: the React trading console.
 
-        Built on theme_terminal.css and bound entirely to live API data — no
-        market value is hard-coded in the template or its controller.
+        Source lives in ``frontend/`` and is built (``npm run build``) into
+        ``ui/static/app``, so the server needs no Node at runtime. Its assets are
+        content-hashed; the shell itself is never cached so a rebuild shows at once.
         """
-        self._serve_template("dashboard.html")
+        index = os.path.join(self.base_dir, "ui", "static", "app", "index.html")
+        try:
+            with open(index, "rb") as f:
+                body = f.read()
+        except OSError:
+            self.send_error(503, "Trading console is not built: run `npm install && npm run build` in frontend/")
+            return
+        is_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        if is_gzip:
+            body = gzip.compress(body, compresslevel=5)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            if is_gzip:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self._send_security_headers()
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
 
     def _redirect(self, location: str):
         try:
@@ -2105,15 +2287,6 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
-
-    def _serve_stocks_ui(self):
-        self._serve_template("stocks.html")
-
-    def _serve_india_ui(self):
-        self._serve_template("india.html")
-
-    def _serve_options_ui(self):
-        self._serve_template("india_options.html")
 
 class _NoReverseDNSHTTPServer(ThreadingHTTPServer):
     """`ThreadingHTTPServer` without the blocking reverse-DNS lookup on bind.
@@ -2165,8 +2338,21 @@ def start_server(host: str = "127.0.0.1", port: int = 8501, mt5_client: Optional
     ThreadingHTTPServer.allow_reuse_address = True
     server = _build_server(host, port)
     JarvisRequestHandler.start_background_syncer()
+    _start_markets_recorder()
     logger.info(f"HM Algo 2.0 Web Terminal Server running at http://{host}:{port}")
     return server
+
+def _start_markets_recorder() -> None:
+    """Record real option-chain snapshots / FII-DII during NSE hours (never in tests or offline runs)."""
+    try:
+        from jarvis.config.runtime import is_offline
+        if is_offline() or os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        from jarvis.markets.data.store import start_recorder
+        start_recorder()
+    except Exception as exc:
+        logger.warning(f"markets recorder not started: {exc}")
+
 
 def run_web_server(port: int = 8501, host: str = "127.0.0.1", mt5_client: Optional[MT5Client] = None,
                    orchestrator: Optional[Any] = None):
@@ -2181,6 +2367,7 @@ def run_web_server(port: int = 8501, host: str = "127.0.0.1", mt5_client: Option
     ThreadingHTTPServer.allow_reuse_address = True
     server = _build_server(host, port)
     JarvisRequestHandler.start_background_syncer()
+    _start_markets_recorder()
     logger.info(f"HM Algo 2.0 Web Terminal Server running at http://{host}:{port}")
     try:
         server.serve_forever()

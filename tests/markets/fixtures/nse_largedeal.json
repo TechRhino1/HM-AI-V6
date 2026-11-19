@@ -1,0 +1,72 @@
+{
+ "as_on_date": "17-Nov-2026",
+ "BULK_DEALS_DATA": [
+  {
+   "buySell": "BUY",
+   "clientName": "L7 HITECH PRIVATE LIMITED",
+   "date": "17-Nov-2026",
+   "name": "Aarey Drugs & Pharm Ltd",
+   "qty": "20500",
+   "remarks": "-",
+   "symbol": "AAREYDRUGS",
+   "watp": "106.65"
+  },
+  {
+   "buySell": "BUY",
+   "clientName": "SHREE SALASAR PROPERTIES & FIN.(P)LTD.",
+   "date": "17-Nov-2026",
+   "name": "Aarey Drugs & Pharm Ltd",
+   "qty": "200000",
+   "remarks": "-",
+   "symbol": "AAREYDRUGS",
+   "watp": "105.57"
+  }
+ ],
+ "BULK_DEALS": "122",
+ "SHORT_DEALS": "93",
+ "BLOCK_DEALS": "61",
+ "SHORT_DEALS_DATA": [
+  {
+   "buySell": null,
+   "clientName": null,
+   "date": "17-Nov-2026",
+   "name": "360 ONE WAM LIMITED",
+   "qty": "1",
+   "remarks": null,
+   "symbol": "360ONE",
+   "watp": null
+  },
+  {
+   "buySell": null,
+   "clientName": null,
+   "date": "17-Nov-2026",
+   "name": "ADITYA BIRLA CAPITAL LIMITED",
+   "qty": "100",
+   "remarks": null,
+   "symbol": "ABCAPITAL",
+   "watp": null
+  }
+ ],
+ "BLOCK_DEALS_DATA": [
+  {
+   "buySell": "BUY",
+   "clientName": "DSP MUTUAL FUND",
+   "date": "17-Nov-2026",
+   "name": "Alkem Laboratories Ltd.",
+   "qty": "160265",
+   "remarks": null,
+   "symbol": "ALKEM",
+   "watp": "5050"
+  },
+  {
+   "buySell": "BUY",
+   "clientName": "NIPPON INDIA MUTUAL FUND",
+   "date": "17-Nov-2026",
+   "name": "Alkem Laboratories Ltd.",
+   "qty": "160265",
+   "remarks": null,
+   "symbol": "ALKEM",
+   "watp": "5050"
+  }
+ ]
+}

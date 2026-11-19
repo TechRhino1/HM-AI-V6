@@ -735,156 +735,131 @@ the guard working.
 
 ---
 
-## 13. The dashboard UI contract
+## 13. The trading console (React SPA)
 
-The dashboard (`jarvis/ui/templates/dashboard.html` + `static/js/dashboard.js`,
-served at `/`, `/dashboard`) is a six-view terminal — Trade, News, Analyst,
-Markets, Analytics, Backtest — sitting on the `hm_ui.css` token set with
-`theme_terminal.css` as its component layer. Four desk tabs sit under the
-rail (Trading, Positions & Orders, Performance, Controls); the old `/console`,
-`/classic` and `/positions` pages were merged into them and now 302 to
-`/#trading`, `/#controls` and `/#positions`.
+The trading UI is a React 18 + TypeScript single-page app. Source is in
+`frontend/src/`; `npm run build` (Vite) writes it to `jarvis/ui/static/app/`,
+which is committed so the server needs no Node at runtime. `server.py`
+serves `static/app/index.html` at `/` and `/dashboard`; its JS/CSS bundles are
+content-hashed and cached as immutable. The stocks, India and options pages are
+still server templates (`ui/templates/`) and are linked from the sidebar.
 
-A view is reachable only if three things agree: the rail has a
-`data-view-btn="x"`, the template has a `data-view-panel="x"` and an
-`id="view-x"`, and the controller's `VIEWS` array accepts the name. Any one of
-them missing leaves the tab either absent or **inert** — and inert is the
-dangerous case, because the tab renders, the click does nothing, and nothing
-raises. `tests/test_ui_wiring.py` asserts all three for every view.
+### Sections — every feature lives in exactly one place
+
+| Section | Contents | Main endpoints |
+|---|---|---|
+| Overview | Account KPIs, risk guardrails, exposure by symbol, today's closed trades, market hours | `telemetry_state`, `risk_status`, `history?days=1` |
+| Trade | Watchlist, chart (your positions' entry/SL/TP + the engine's plan, nothing invented), engine view of the symbol, order ticket with money-at-risk and risk-% sizing | `candles`, `symbols/intelligence`, `action/manual_trade`, `action/place_pending_order` |
+| Signals | Scanner (every symbol × style the engine evaluated) with an inspector for gates and reasons; AI consensus across styles | telemetry `radar_opportunities`, `intelligence/auto-selection` |
+| Portfolio | Open positions (close, close all, management mode), pending orders (modify, cancel), trade journal (filters, totals, CSV) | `close_position`, `close_all_positions`, `set_manual_mode`, `pending_orders`, `history` |
+| Analytics | Performance with equity/drawdown curve; calibration (deployment gate, probability calibration, base rates, style reliability); backtest lab; research | `analytics/performance`, `calibration/deployment`, `intelligence/*`, `backtest/*` |
+| News & events | Economic calendar (with a "my exposure" filter) and headlines | `news`, `news/refresh` |
+| System | Mode, style, safe mode, emergency stop / resume, services, alerts preference; symbol universe; users (admin); password | `action/set_mode`, `set_trade_style`, `toggle_safe_mode`, `emergency_stop`, `resume_trading`, `toggle_symbol`, `batch_symbols`, `admin/*` |
+
+Old URLs keep working: `/console`, `/classic`, `/positions` still 302 to a
+hash, `/?view=<name>` is rewritten to `/#<name>`, and old hashes (`#trading`,
+`#positions`, `#controls`, `#performance`, `#backtest`, ...) are aliased in
+`App.tsx`.
+
+### Data flow
+
+`state/store.tsx` holds the shared live state. Fast-moving fields (account,
+positions, services, mode) arrive over the SSE stream `/api/stream/telemetry`;
+the full snapshot (with explainability and market statuses) is polled every 8s,
+or every 3s while the stream is down. Everything else is fetched per view with
+`usePoll`, which pauses while the tab is hidden. `lib/api.ts` is the only fetch
+wrapper: auth is the server's HttpOnly session cookie (no token in storage), a
+401 shows the sign-in screen, and a 200 whose `status` is
+`FAILED|ERROR|REJECTED|DENIED|BLOCKED` is treated as a failure, never success.
+Every order or destructive action goes through a confirm dialog and reports its
+result as a toast.
 
 ### The one rule
 
-**No element carries a market value.** Every price, P&L, count and timestamp is
-written by `dashboard.js` from an API response; where a value is unknown the
-element shows a dash or an explicit state. A trading UI that renders a
-plausible-looking price when its feed is down is worse than one that renders
-nothing, because the fabricated value is indistinguishable from a real one.
-`tools/verify_ui_live.py` scans every template on disk for bare numeric literals
-and fails if one appears.
+**No element carries a market value.** Every price, P&L, count and timestamp
+comes from an API response; where a value is unknown the UI shows a dash or an
+explicit state. The chart draws only real levels (your positions and the
+engine's current plan), and the trade journal excludes still-open rows and
+counts closes without a recorded P&L as "without P&L" instead of $0. The same
+rule applies server-side: `/api/risk_status` no longer substitutes a 10,000
+equity when no broker account is attached (it answers 503), and
+`/api/intelligence/missed-trades` returns an empty list rather than example
+rows, computing `protected_capital` from the price move instead of hard-coding
+it.
 
-### The provenance rule
+### Working on it
 
-The rule above catches fabricated values **in the markup**. It cannot catch a
-fabricated value **arriving from the API**, because such a value is a perfectly
-ordinary JSON number by the time the UI sees it. That gap is closed at the
-boundary instead:
+    cd frontend
+    npm install
+    npm run dev      # Vite on :5173, proxies /api to the bot on :8501
+    npm test         # vitest (risk maths, CSV export)
+    npm run build    # writes jarvis/ui/static/app — commit the result
 
-> A response that returns modelled, fixed or placeholder values must say so in
-> its own payload. A UI cannot label what the backend does not describe.
+## 14. Markets adviser — US stocks, India equities, India F&O (`jarvis/markets/`)
 
-The vocabulary is the one already in use — `live`, `calibrated_feed`,
-`synthetic`, `synthetic_fallback`, `profile_reference`, `sample`, `mixed`,
-`unknown` (see `gamma_exposure.py` and `india_engine.py` for the precedent).
-Each panel renders its source as a chip via `renderProvChip()`, and a panel
-reports the **weakest** source among its rows rather than the majority one: if a
-single row is a static reference price, the panel is not wholly live, and
-labelling it "live" because most rows were would be exactly the mistake the
-markers exist to prevent (`weakestSource()`).
+**Rule: no generated data.** Every value comes from a real source and carries
+`prov = {source, kind, as_of, age_sec, delay_sec, note}` with kind
+`live | delayed | close | eod | stale | unavailable`, graded from the data's own
+timestamp. If no source answers, the value is absent and the analysis that needs
+it is skipped. Enforced by `tests/markets/test_markets_no_generated_data.py`
+(static scan) and `api.require_provenance` (served payloads), and proven by
+`tools/markets_live_audit.py` (compares served values with direct NSE/BSE/Yahoo
+fetches at the same moment).
 
-Three consequences worth keeping:
+| Data | Source (accuracy order) |
+|---|---|
+| NSE option chains, VIX, indices, FII/DII, OI spurts, market status | NSE API on www.nseindia.in → www.nseindia.com (`data/nse.py`, curl_cffi) |
+| SENSEX / BANKEX option chains | BSE API (`data/bse.py`) |
+| Indian & US stock quotes, bulk prices | Yahoo chart/spark (real time for NSE, measured 2–12 s) |
+| Sector, RVOL, RSI, ATR, earnings date | TradingView scanner — **15-min delayed**, labelled so |
 
-* **A failed analysis is not a setup.** `stock_service.py` marks a row whose
-  analysis failed with `analysis_source: "fallback"` and `data_source:
-  "profile_reference"`; the renderer then suppresses the grade, probability,
-  bias, entry, stop and target entirely and marks the price as a reference. A
-  screener that invents a "GRADE B" breakout for a symbol it could not analyse
-  is worse than one that says the symbol was not analysed.
-* **A number that picks a direction is labelled.** The India options chain's
-  `iv_rank` is drawn from a local RNG and gates the `iv_rank < 50` branch in
-  `options_signal_engine`, so the UI labels it "IV rank (modelled)" rather than
-  presenting it as measured. The value is not removed — removing it would change
-  which branch runs — it is *described*.
-* **Only what is computed is shown.** The India heatmap deliberately has no
-  `avg_cmf` tile even though the US heatmap does: the India engine computes no
-  money-flow index, so a tile would be invented. The asymmetry is intentional and
-  `tools/verify_ui_live.py` asserts it.
+**F&O adviser** (`adviser/fno.py`): prices every option off the chain's own
+forward (put-call parity), solves IV from live mids, and compares ten standard
+strategies at executable prices (buy ask / sell bid). Its only claimed edge is
+the volatility risk premium — India VIX exceeded subsequent realised NIFTY vol on
+80% of days over ~10 years (`reports/MARKETS_MODEL_VALIDATION_*`). Price-direction
+models are validated walk-forward and used only if they beat the base rate (none
+did: 0/32). Trend/PCR/OI positioning are shown as unvalidated context. Gates:
+live data, defined risk, liquidity, edge ≥ 2× costs; otherwise NO TRADE.
 
-### The chart
+**Institutional** (`inst.py`, routes `/api/markets/inst/*`): NSE participant-wise
+OI (NSCCL archive, stored daily in `markets.db`, `inst.backfill(days)`), futures
+basis / annualised basis / build-up / rollover (live lists + previous-day F&O
+bhavcopy for OI change), bulk/block/short deals, event calendar (`events_for`),
+corporate announcements, delivery % accumulation screen (sec_bhavdata, stored),
+52-week highs/lows, most active contracts, F&O ban list, near/next ATM IV term
+structure. `inst.daily_job()` is idempotent and refreshes the stored archives.
+The F&O adviser shows this under `institutional` (context; a stock in the ban
+list is NO TRADE). India session fallback uses NSE's holiday master; the US
+session uses `America/New_York` plus the Nasdaq Trader holiday calendar.
+`inst.refresh_all_fno()` (also run by `daily_job`) precomputes every F&O stock
+(bhavcopy futures build-up/basis/rollover, delivery accumulation, upcoming
+results, ban) into `inst_fno_universe`, served by `/api/markets/inst/fno-universe`.
 
-Built at runtime against the vendored `lightweight-charts` v4, which means a
-missing container or an unloaded library is silent — hence
-`tools/verify_dashboard_render.js`, which drives the real controller against a
-stubbed DOM and asserts on the drawing calls it makes.
+**Global institutional** (`inst_global.py`, `data/cftc.py`, `data/macro.py`;
+routes `/api/markets/inst/global?symbol=`, `/api/markets/inst/global/all`):
+CFTC Legacy futures-only COT (Socrata dataset `6dca-aqww`, stored weekly in
+`cot_weekly` since 2010; Tuesday positions, Friday release) mapped to the engine
+symbols (USDJPY/USDCAD inverted, SOLUSD unavailable) with net, net % OI, 1-week
+change and 3-year COT index; macro drivers from Yahoo daily closes (DXY, ^TNX,
+^FVX, ^IRX, ^VIX, ^GVZ; ^EVZ delisted → unavailable; Yahoo `=X` FX bars are
+relabelled to the previous weekday, the session they actually close), FRED
+`DFII10` real yield and Deribit DVOL (BTC/ETH implied vol); 60-day correlations,
+regime labels and realised-vs-implied vol regime. `adverse_flags(symbol, side)`
+is a pure threat list for the devil's advocate (not wired). `inst_global.daily_job()`
+refreshes COT on Fri/Sat (or when > 10 days stale) and rebuilds the views — call
+it once a day. Walk-forward tests live in section 5 of the validation tool
+(`--only-global`); none passed on 2026-11-18, so all of it is labelled
+"context · not validated".
 
-Four properties are load-bearing:
+**Equities** (`equities/`): live scanner, detail (technicals from real bars,
+pivots, momentum), news (India: NSE filings first, Yahoo RSS second), compare. 12-1 momentum picks are shown only
+while the walk-forward test passes (survivorship-biased universe — stated).
 
-1. **Live ticks update, they do not reload.** The first paint calls `setData()`;
-   later polls call `update()` on the forming bar only. `setData()` on every poll
-   resets the viewport and throws the user out of wherever they had scrolled to.
-2. **Levels are derived, never invented.** `computeLevels()` finds swing pivots —
-   a bar whose high exceeds the two bars either side — and takes the two nearest
-   above the last close as R1/R2 and the two nearest below as S1/S2. Where a side
-   has no pivot that level is *absent*: `null`, no line drawn, and the legend
-   reads "No swing pivot in range". A synthesised level reads as a real price.
-3. **Overlays are the trade.** Entry, stop and target are price lines whose axis
-   labels carry side, size and price, with a floating HUD repeating them and the
-   live P&L. A stop that has moved past entry is drawn amber and labelled
-   "locked" — a stop in profit is a different fact from a stop at risk.
-4. **The chart and the table are the same data.** Candle precision comes from
-   `priceDigits()`, which mirrors the backend's per-symbol resolution, so a price
-   read off the axis and the same price read off a table row agree digit for
-   digit.
-
-### Switching the chart to TradingView
-
-A segmented control (`#chart-src-native`, `#chart-src-tv`) swaps the vendored
-chart for an embedded TradingView widget. Three properties:
-
-1. **The external script is not fetched until it is asked for.** `tv.js` is
-   loaded lazily by `ensureTvScript()`; the render harness asserts it is not
-   requested on page load, because a third-party script is a network dependency
-   and a privacy consideration the user did not opt into by opening the page.
-2. **A blocked CDN fails loudly.** `ensureTvScript()` resolves `false` on error
-   or timeout, the panel renders an explicit failure state naming the native
-   chart as the fallback, and a later click retries. An empty box where a chart
-   should be is indistinguishable from a chart that has not loaded yet.
-3. **The symbol mapping is visible.** `tradingViewSymbol()` maps the internal
-   symbol to an exchange-qualified ticker (`XAUUSD` → `OANDA:XAUUSD`, `NIFTY` →
-   `NSE:NIFTY`, and so on). The resolved ticker is printed next to the switch, so
-   a wrong mapping is a visible fact rather than a chart showing the wrong
-   instrument.
-
-### The news calendar
-
-`/api/news` returns each event with both a `diff_seconds` and a pre-rendered
-`status_badge` string ("IN 14h 33m"), computed at generation time. **The badge is
-not rendered.** It is stale the moment it arrives, so the countdown is derived
-locally instead: each row is anchored to its own `timestamp_iso`, corrected for
-clock skew against the payload's `timestamp`, and the backend's own live window
-(−5 min / +15 min, `NEWS_LIVE_BEFORE` / `NEWS_LIVE_AFTER`) is applied client-side.
-A row therefore flips live → released while the page is open rather than holding
-the payload's snapshot. `tools/verify_ui_live.py` asserts the server's
-`diff_seconds` agrees in sign with its own `timestamp_iso`, which is what makes
-deriving it locally safe.
-
-### Restored surfaces
-
-The redesign had dropped three surfaces the previous terminal had. All three are
-back, each bound to a real endpoint and each with an honest empty state:
-
-| Surface | Source | Empty state |
-|---|---|---|
-| Support/resistance + trade overlays | computed from the candle series | "No swing pivot in range" |
-| Scanner radar | `telemetry.radar_opportunities` | "No scan published" |
-| Pending orders | `GET /api/pending_orders` | "No working orders" |
-
-The radar's accent comes from `is_actionable` on the candidate, so a row the
-engine would not trade renders without it and the list never implies that
-everything in it is tradeable. MT5 reports a pending order's type as a numeric
-enum; `pendingTypeName()` maps it to a name, because "2" under a column headed
-Type tells the user nothing.
-
-### The devil's advocate panel
-
-The Analyst view renders `DecisionObject`'s adversarial half — the penalty, the
-bull and bear cases, the risk factors, the invalidation levels, the quality-gate
-checks and the objections. Two properties:
-
-1. **An empty list is rendered as empty.** `daList()` writes "the engine returned
-   none" rather than an all-clear. A panel that renders nothing when it has no
-   evidence looks identical to a panel that has considered the evidence and found
-   it clean.
-2. **Failures sort first.** `renderQualityGate()` orders the failing checks above
-   the passing ones, so the reason a decision was refused is at the top of the
-   list rather than below thirty green rows.
-
+**Ledger** (`ledger.py`): every recommendation is recorded and marked to live
+mids, closed on target/stop/expiry, and its hit rate shown in the UI.
+`data/store.py` records chain snapshots every 3 min in market hours (IV
+percentile, intraday OI shift). Re-validate with
+`python tools/markets_model_validation.py`; audit with
+`python tools/markets_live_audit.py`. A `broker/` adapter for Kite/Alpaca is the
+planned plug-in point for automated execution.

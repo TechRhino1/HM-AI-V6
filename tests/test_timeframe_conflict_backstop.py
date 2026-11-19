@@ -28,3 +28,24 @@ def test_btcusd_trend_following_banned():
     cfg = get_symbol_profile_config("BTCUSD")
     assert "TREND_FOLLOWING" in cfg.banned_strategies
     assert cfg.strategy_weights["TREND_FOLLOWING"] == 0.0
+
+
+def test_htf_consensus_overrides_scalp_pullback_read():
+    # XAUUSD 2026-11-18: D1/SWING/DAY all SELL, SCALP read the M5 bounce as BUY. The
+    # H4 SELL is a pullback entry with the master trend and must not be vetoed.
+    votes = {"SCALP": ("BUY", NOW - 20), "DAY_TRADING": ("SELL", NOW - 30),
+             "SWING": ("SELL", NOW - 30), "D1_SWING": ("SELL", NOW - 30)}
+    assert not faster_style_conflict(votes, "H4_SWING", "SELL", NOW)
+    assert not faster_style_conflict(votes, "D1_SWING", "SELL", NOW)  # slowest style, backed by peers
+
+
+def test_one_slower_vote_is_not_consensus():
+    votes = {"SCALP": ("BUY", NOW - 20), "SWING": ("SELL", NOW - 30)}
+    assert faster_style_conflict(votes, "H4_SWING", "SELL", NOW)
+
+
+def test_counter_trend_entry_against_htf_consensus_blocked():
+    votes = {"SWING": ("SELL", NOW - 30), "H4_SWING": ("SELL", NOW - 30), "D1_SWING": ("SELL", NOW - 30)}
+    why = faster_style_conflict(votes, "SCALP", "BUY", NOW)
+    assert "higher timeframes" in why
+    assert not faster_style_conflict(votes, "SCALP", "SELL", NOW)

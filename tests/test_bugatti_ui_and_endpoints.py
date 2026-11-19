@@ -39,20 +39,34 @@ class TestBugattiEndpoints(unittest.TestCase):
         class MockHandler:
             def __init__(self): self.data = None
         import jarvis.api.intelligence_api as mod
+        from unittest.mock import patch
+        from jarvis.application.state_manager import GLOBAL_STATE
+        refused = [
+            # SELL refused, price then fell: the refusal cost a winner.
+            {"symbol": "XAUUSD", "bias": "SELL", "trade_style": "SCALP", "decision": "WAIT",
+             "entry_price": 3821.0, "current_price": 3792.0, "failing_reasons": ["Devil Adversarial Guard"]},
+            # BUY refused, price then fell: the refusal protected capital.
+            {"symbol": "EURUSD", "bias": "BUY", "trade_style": "SWING", "decision": "WAIT",
+             "entry_price": 1.10, "current_price": 1.09, "failing_reasons": ["Forex Prime Session"]},
+        ]
         old_json = mod._json
         try:
             mod._json = lambda h, p, c=200: setattr(h, 'data', p)
             handler = MockHandler()
-            handled = INTELLIGENCE.handle_get('/api/intelligence/missed-trades', {}, handler)
+            with patch.object(GLOBAL_STATE, "get_state_snapshot", return_value={"radar_opportunities": refused}):
+                handled = INTELLIGENCE.handle_get('/api/intelligence/missed-trades', {}, handler)
             self.assertTrue(handled)
-            self.assertIsNotNone(handler.data)
             self.assertEqual(handler.data["status"], "OK")
-            self.assertIn("missed_trades", handler.data)
-            self.assertGreater(handler.data["count"], 0)
-            trade = handler.data["missed_trades"][0]
-            self.assertIn("symbol", trade)
-            self.assertIn("gate", trade)
-            self.assertIn("reason", trade)
+            by_sym = {t["symbol"]: t for t in handler.data["missed_trades"]}
+            self.assertFalse(by_sym["XAUUSD"]["protected_capital"])
+            self.assertTrue(by_sym["EURUSD"]["protected_capital"])
+            self.assertEqual(by_sym["XAUUSD"]["style"], "SCALP")
+            self.assertIn("gate", by_sym["XAUUSD"])
+
+            # No refused setups: an empty list, never invented examples.
+            with patch.object(GLOBAL_STATE, "get_state_snapshot", return_value={"radar_opportunities": []}):
+                INTELLIGENCE.handle_get('/api/intelligence/missed-trades', {}, handler)
+            self.assertEqual(handler.data["count"], 0)
         finally:
             mod._json = old_json
 
@@ -100,33 +114,6 @@ class TestBugattiEndpoints(unittest.TestCase):
             self.assertIn(profiles["XAUUSD"]["fast_cash_r"], (1.10, 1.50))
         finally:
             mod._json = old_json
-
-    def test_theme_bugatti_css_exists_and_valid(self):
-        """Verify theme_bugatti.css exists and defines core luxury palette tokens."""
-        css_path = os.path.join(os.path.dirname(__file__), "..", "jarvis", "ui", "static", "css", "theme_bugatti.css")
-        self.assertTrue(os.path.exists(css_path))
-        with open(css_path, "r", encoding="utf-8") as fh:
-            content = fh.read()
-        self.assertIn("--bg-onyx", content)
-        self.assertIn("--bugatti-blue", content)
-        self.assertIn("--electric-cyan", content)
-        self.assertIn("--hyper-crimson", content)
-        self.assertIn("cockpit-gauge", content)
-        self.assertIn("lifecycle-stepper", content)
-
-    def test_dashboard_html_components_present(self):
-        """Verify dashboard.html contains the Trade Lifecycle Stepper, Gauge, and Modals."""
-        html_path = os.path.join(os.path.dirname(__file__), "..", "jarvis", "ui", "templates", "dashboard.html")
-        self.assertTrue(os.path.exists(html_path))
-        with open(html_path, "r", encoding="utf-8") as fh:
-            html = fh.read()
-        self.assertIn("theme_bugatti.css", html)
-        self.assertIn('id="trade-lifecycle-stepper"', html)
-        self.assertIn('id="cockpit-gauge-meter"', html)
-        self.assertIn('id="cockpit-confirm-modal"', html)
-        self.assertIn('id="missed-body"', html)
-        self.assertIn('id="calibration-metrics"', html)
-        self.assertIn('id="profiles-body"', html)
 
 
 if __name__ == "__main__":

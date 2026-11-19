@@ -1,6 +1,6 @@
 """The action routes report a refusal with HTTP 200 and a status of their own.
 
-`dashboard.js` cannot decide an order's outcome from the HTTP status code. The
+The UI (`frontend/src/lib/api.ts`) cannot decide an order's outcome from the HTTP status code. The
 broker answers a *refused* order with **200** and puts the outcome in `status` —
 `FAILED` when the broker said no, `BLOCKED` when execution is disabled so nothing
 was ever sent — and the route passes that dict straight through. The response
@@ -27,7 +27,7 @@ from jarvis.api.server import JarvisRequestHandler
 from jarvis.execution.mt5_client import MT5Client
 
 
-DASHBOARD_JS = Path(__file__).resolve().parents[1] / "jarvis/ui/static/js/dashboard.js"
+API_TS = Path(__file__).resolve().parents[1] / "frontend/src/lib/api.ts"
 
 
 class _RouteHarness(JarvisRequestHandler):
@@ -156,7 +156,7 @@ class RefusalStatusesAgreeWithTheUiTest(unittest.TestCase):
     # The action did NOT happen.
     REFUSALS = {"FAILED", "BLOCKED", "REJECTED", "ERROR"}
     # The action DID happen.
-    COMPLETIONS = {"PLACED", "FILLED", "MODIFIED", "CANCELLED", "CLOSED",
+    COMPLETIONS = {"PLACED", "FILLED", "PARTIAL", "MODIFIED", "CANCELLED", "CLOSED",
                    "PARTIALLY_CLOSED", "SUCCESS", "OK"}
     # Refusals the server only ever pairs with a non-2xx code, so `res.ok`
     # already rejects them and the body-level guard never sees them.
@@ -168,14 +168,16 @@ class RefusalStatusesAgreeWithTheUiTest(unittest.TestCase):
     # can double a position. It must be surfaced as "not confirmed".
     INDETERMINATE = {"UNKNOWN"}
 
-    def _ui_refusal_set(self):
-        src = DASHBOARD_JS.read_text(encoding="utf-8")
-        m = re.search(r"var\s+ACTION_REFUSED\s*=\s*\{([^}]*)\}", src)
-        self.assertIsNotNone(m, "ACTION_REFUSED is gone from dashboard.js")
-        # The literal is a lookup map — `{ FAILED: 1, BLOCKED: 1 }` — so take the
-        # key of each entry and drop the value.
-        return {k.split(":")[0].strip().strip("'\"").upper()
-                for k in m.group(1).split(",") if k.strip()}
+    def _ui_refusal_regex(self):
+        """The status regex api.ts uses to turn a 200 into a thrown ApiError."""
+        src = API_TS.read_text(encoding="utf-8")
+        m = re.search(r"/(\^\([A-Z_|]+\)\$)/i\.test\(data\.status\)", src)
+        self.assertIsNotNone(m, "the 200-refusal status regex is gone from api.ts")
+        return re.compile(m.group(1), re.IGNORECASE)
+
+    def _ui_refuses(self, statuses):
+        rx = self._ui_refusal_regex()
+        return {s for s in statuses if rx.search(s)}
 
     def _statuses(self, path):
         return set(re.findall(r'"status":\s*"([A-Z_]+)"',
@@ -221,7 +223,7 @@ class RefusalStatusesAgreeWithTheUiTest(unittest.TestCase):
         """`UNKNOWN` (broker timeout) must not be classified as a completion.
 
         An order we cannot confirm is not an order that happened. If this drifted
-        into COMPLETIONS the dashboard would show a filled trade that may not
+        into COMPLETIONS the UI would show a filled trade that may not
         exist, and the caller would release the risk reservation and retry --
         potentially opening a second position.
         """
@@ -229,26 +231,32 @@ class RefusalStatusesAgreeWithTheUiTest(unittest.TestCase):
             self.INDETERMINATE & self.COMPLETIONS,
             "an indeterminate status must never be classified as a completion",
         )
-        ui_refusals = self._ui_refusal_set()
-        missing = self.INDETERMINATE - ui_refusals
-        self.assertFalse(
-            missing,
-            f"the UI must treat {sorted(missing)} as 'not confirmed'; otherwise "
-            f"an unconfirmed order renders as a completed trade",
-        )
+
+    def test_the_spa_does_not_render_an_indeterminate_outcome_as_success(self):
+        """A 200 `{status: "UNKNOWN"}` (broker timeout) must surface as "not
+        confirmed": api.ts raises UnconfirmedError and the feedback runner shows
+        it as such, never as success and never as a refusal (a refusal invites a
+        retry that can double a position)."""
+        api_ts = API_TS.read_text(encoding="utf-8")
+        feedback = (API_TS.parents[1] / "components" / "feedback.tsx").read_text(encoding="utf-8")
+        self.assertRegex(api_ts, r"/\^UNKNOWN\$/i\.test\(data\.status\)\)\s*\{\s*throw new UnconfirmedError")
+        self.assertIn("instanceof UnconfirmedError", feedback)
+        self.assertFalse(self._ui_refuses(self.INDETERMINATE),
+                         "UNKNOWN must not be classified as a refusal either")
 
     def test_every_refusal_the_action_path_can_emit_is_treated_as_one(self):
         emitted = (self._statuses(Path(__file__).resolve().parents[1]
                                   / "jarvis/execution/mt5_client.py")
                    | self._action_route_statuses())
-        refusals = emitted & self.REFUSALS
-        self.assertTrue(refusals, "expected the action path to have refusal statuses")
-        handled = self._ui_refusal_set() | self.NON_2XX_ONLY
-        self.assertTrue(
-            refusals <= handled,
-            f"the action path can refuse with {sorted(refusals)} but the UI only "
-            f"knows {sorted(self._ui_refusal_set())} and {sorted(self.NON_2XX_ONLY)} "
-            f"arrive with a non-2xx code — an unhandled refusal renders as success",
+        self.assertTrue(emitted & self.REFUSALS,
+                        "expected the action path to have refusal statuses")
+        # Every classified refusal, emitted today or not, must be caught on a 200.
+        missed = self.REFUSALS - self._ui_refuses(self.REFUSALS)
+        self.assertFalse(
+            missed,
+            f"api.ts does not treat {sorted(missed)} as a refusal on a 200 "
+            f"({sorted(self.NON_2XX_ONLY)} arrive with a non-2xx code) — an "
+            f"unhandled refusal renders as success",
         )
 
     def test_the_two_classifications_do_not_overlap(self):
@@ -258,7 +266,7 @@ class RefusalStatusesAgreeWithTheUiTest(unittest.TestCase):
     def test_a_completed_action_is_never_treated_as_a_refusal(self):
         """The opposite mistake, which would turn a filled order into an error."""
         self.assertFalse(
-            self.COMPLETIONS & self._ui_refusal_set(),
+            self._ui_refuses(self.COMPLETIONS),
             "a completed status is in the UI's refusal set",
         )
 

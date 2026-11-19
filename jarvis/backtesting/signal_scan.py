@@ -63,6 +63,9 @@ CANDIDATE_COLUMNS: List[str] = [
     "regime", "strategy", "zone", "trend_score", "confluence_count",
     "gate_passed", "hard_gate_failed", "n_failed_gates", "failing_gates",
     "decision", "order_type",
+    # Devil's Advocate inputs for tools/calibrate_devil_gate.py. The critic judges the
+    # TENTATIVE side, which can differ from the decision's side.
+    "devil_side", "devil_flags", "devil_n_threats",
 ]
 
 # Selectivity variables calibration may threshold on, in preference order.
@@ -341,6 +344,9 @@ class SignalScanner:
                 "failing_gates": "|".join(failing),
                 "decision": str(getattr(decision, "decision", "NO_TRADE")),
                 "order_type": str(getattr(decision, "order_type", "MARKET")),
+                "devil_side": tentative,
+                "devil_flags": "|".join(getattr(devil, "threat_flags", []) or []),
+                "devil_n_threats": len(getattr(devil, "threats_detected", []) or []),
             })
 
         frame = pd.DataFrame(rows, columns=CANDIDATE_COLUMNS) if rows else pd.DataFrame(columns=CANDIDATE_COLUMNS)

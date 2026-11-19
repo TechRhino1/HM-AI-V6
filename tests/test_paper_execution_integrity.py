@@ -207,14 +207,12 @@ def test_six_char_usd_symbols_still_resolve_as_forex():
     assert prov._resolve_candidate_tickers("GBPUSD")[0] == "FX:GBPUSD"
 
 
-def test_an_unresolvable_symbol_is_labelled_not_disguised():
+def test_an_unresolvable_symbol_gets_no_invented_quote():
+    """It once came back as 150.0 labelled "tradingview", later as a labelled static baseline.
+    Both were invented prices; an unresolvable symbol now simply has no quote."""
     prov = TradingViewDataProvider()
     quotes = prov.fetch_quotes(["ZZZNOTAREALSYMBOL"])
-    q = quotes.get("ZZZNOTAREALSYMBOL")
-    assert q is not None, "the provider is expected to still supply a baseline"
-    # Pre-fix this said "tradingview" and carried a fabricated RSI of 55.0.
-    assert q["source"] == "profile_reference"
-    assert q["is_fallback"] is True
+    assert quotes.get("ZZZNOTAREALSYMBOL") is None
 
 
 # ── 6. executor classification is token-based ─────────────────────────────

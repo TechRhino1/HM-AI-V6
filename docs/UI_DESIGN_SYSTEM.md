@@ -4,6 +4,13 @@
 **Scope owner:** HM Algo 2.0 web terminal
 **Artefacts:** `jarvis/ui/static/css/hm_ui.css`, `jarvis/ui/static/js/hm_ui.js`, `docs/ui_preview.html`
 
+> **Superseded.** The server-rendered pages, `jarvis/ui/static/css/*`, `jarvis/ui/static/js/*`
+> and `jarvis/ui/templates/*` described below were deleted when the console moved to the React
+> SPA. The current design system is `frontend/src/styles.css` (tokens on `:root` /
+> `[data-theme="light"]`) with components in `frontend/src/components/` (`ui.tsx`, `ProvBadge.tsx`,
+> `Explain.tsx`, `Chart.tsx`); the build lands in `jarvis/ui/static/app/`. The `tools/ui_verification`
+> scripts that drove the old pages were removed with them. This file is kept as history.
+
 ---
 
 ## 1. Scope of the changes

@@ -25,9 +25,18 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-JS_GLOBS = ["jarvis/ui/static/js/*.js"]
-# Skip vendored libraries — they contain no first-party endpoint calls.
-SKIP = {"lightweight-charts"}
+# The React SPA in frontend/ (built into jarvis/ui/static/app). Tests hold no real calls.
+JS_GLOBS = ["frontend/src/**/*.ts", "frontend/src/**/*.tsx"]
+SKIP = {".test."}
+# `api.post("/api/...")` marks a POST route; anything else is probed with GET.
+POST_CALL = re.compile(r"""\bpost\s*(?:<[^()]*?>)?\s*\(\s*["'`](/api/[A-Za-z0-9_/.\-]*)""")
+# Routes that exist but must not be probed: they write state or take minutes.
+NO_PROBE = {
+    "/api/ai/brief/generate": "writes a brief and takes up to a minute",
+    "/api/markets/fno/scan": "scans every F&O underlying (10-60 s)",
+}
+# Routes that legitimately take longer than the default 20 s leash (seconds).
+SLOW = {"/api/markets/inst/delivery": 150}  # rebuilds the 20-session bhavdata screen
 
 # Endpoints that are POST-only. Probing these with GET returns 404 by design —
 # the route exists but is not dispatched on GET — so the audit must use POST or
@@ -48,6 +57,7 @@ POST_ONLY = {
     "/api/backtest/cancel",
     "/api/backtest/run",
     "/api/copilot/ask",
+    "/api/ai/chat/stream",  # called with fetch(), not api.post()
 }
 
 # Routes that reach a live external provider (NSE / equity data). They get a
@@ -64,14 +74,7 @@ POST_ONLY = {
 #
 # So a timeout here is reported as HANG and fails the run. Use
 # --allow-provider-hang only in a genuinely air-gapped environment.
-EXTERNAL = {
-    "/api/india/export_csv",
-    "/api/india/heatmap",
-    "/api/india/indices",
-    "/api/india/options/single_signals",
-    "/api/india/scanner",
-    "/api/stocks/alerts",
-}
+EXTERNAL: set[str] = set()  # the NSE / US-equity routes that lived here were removed
 
 # Endpoints that need a query parameter to be meaningful. Requesting them bare
 # is expected to 400, not 404; the point is to prove the route is dispatched.
@@ -79,31 +82,22 @@ NEEDS_PARAMS = {
     "/api/candles": "symbol=EURUSD&timeframe=H1",
     "/api/radar": "symbol=EURUSD",
     "/api/history": "symbol=EURUSD",
-    "/api/stocks/details": "symbol=AAPL",
-    "/api/stocks/compare": "symbols=AAPL,MSFT",
-    "/api/stocks/search": "q=a",
-    "/api/india/details": "symbol=RELIANCE",
-    "/api/india/search": "q=a",
-    "/api/india/option_chain": "symbol=NIFTY",
-    "/api/india/options/chain": "symbol=NIFTY",
-    "/api/india/options/payoff": "symbol=NIFTY",
-    "/api/india/options/single_signals": "symbol=NIFTY",
-    "/api/india/scanner": "symbol=NIFTY",
 }
 
 
 def ui_endpoints() -> list[str]:
+    """Every /api path the SPA references (query strings and `${...}` suffixes cut off); POST ones join POST_ONLY."""
     found: set[str] = set()
     for pattern in JS_GLOBS:
-        for path in glob.glob(os.path.join(ROOT, pattern)):
+        for path in glob.glob(os.path.join(ROOT, pattern), recursive=True):
             if any(s in os.path.basename(path) for s in SKIP):
                 continue
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
+            POST_ONLY.update(m.group(1) for m in POST_CALL.finditer(text))
             for m in re.finditer(r"""["'`](/api/[A-Za-z0-9_/.\-]*)""", text):
                 url = m.group(1)
-                # Normalise template interpolation and trailing slashes.
-                url = re.sub(r"\$\{[^}]*\}", "{X}", url)
+                # Prefixes such as "/api/ai/" in a startsWith() are not calls.
                 if url.endswith("/"):
                     continue
                 found.add(url)
@@ -168,15 +162,19 @@ def main() -> int:
         external: list[tuple[str, str]] = []
         ok = 0
         for path in endpoints:
+            if path in NO_PROBE:
+                print(f"skip  {path}  ({NO_PROBE[path]})")
+                continue
             q = NEEDS_PARAMS.get(path, "")
             target = f"{path}?{q}" if q else path
             method = "POST" if path in POST_ONLY else "GET"
             # Provider-backed routes get a short leash; a stall there is
             # indefinite, and this run should not wait on it.
-            timeout = 6 if path in EXTERNAL else 20
+            timeout = 6 if path in EXTERNAL else SLOW.get(path, 20)
             status, body = probe(base, target, method=method, timeout=timeout)
 
-            if status == 404:
+            # An app-level 404 answers JSON ("no brief yet"); an undispatched route gets the HTML error page.
+            if status == 404 and not body.lstrip().startswith("{"):
                 dead.append((path, status, body))
                 print(f"DEAD  {method} {path}")
                 if body:
@@ -196,7 +194,7 @@ def main() -> int:
                 print(f"  ok  {method} {path}  -> {status}")
 
         print("=" * 78)
-        print(f"dispatched        : {ok}/{len(endpoints)}")
+        print(f"dispatched        : {ok}/{len(endpoints) - len(NO_PROBE.keys() & set(endpoints))}  (+{len(NO_PROBE.keys() & set(endpoints))} not probed)")
         print(f"external-provider : {len(external)}  (tolerated by --allow-provider-hang)")
         print(f"dead/error        : {len(dead)}")
         return 1 if dead else 0

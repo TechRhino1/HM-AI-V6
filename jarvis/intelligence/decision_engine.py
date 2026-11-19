@@ -36,6 +36,7 @@ from jarvis.market.news import GLOBAL_NEWS_ENGINE
 from jarvis.data.symbol_registry import resolve as resolve_symbol, is_crypto as check_is_crypto
 from jarvis.risk.account_tier import is_micro_account, get_effective_min_ev
 from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
+from jarvis.analysts.devil_calibration import gate_passes as devil_gate_passes
 
 from jarvis.intelligence.meta_labeler import MetaLabeler
 from jarvis.intelligence.gate_policy import AdaptiveGatePolicy, HARD_GATES
@@ -1338,7 +1339,7 @@ class DecisionEngine:
             "Spread Protection": spread <= max_spread and not context.volatility.is_excessive_spread,
             "Volatility Spike Circuit Breaker": not getattr(context.volatility, "volatility_spike_breaker", False),
             "AI Multi-Score Gate": ai_score >= min_score,
-            "Devil Adversarial Guard": devil_report.penalty_score <= (self.max_devil_penalty + (10.0 if ai_score >= 75.0 else 0.0)) and len(devil_report.threats_detected) <= 3,
+            "Devil Adversarial Guard": devil_gate_passes(devil_report, context.symbol, ai_score, self.max_devil_penalty),
             "Calibrated Win Prob >= 50%": calibrated_win_p >= (required_win_p - 0.005),
             "Valid Stop Loss Distance": risk_dist >= (context.volatility.atr * min_sl_atr_mult),
             "Premium/Discount Alignment": premium_discount_valid,

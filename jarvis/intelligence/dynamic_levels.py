@@ -650,7 +650,7 @@ class DynamicRiskAndLevelsEngine:
 
                     # small-account ceiling of \ instead of a fixed \ cap.
 
-                    max_swing_sl = min(18.0, max(9.0, 1.5 * atr))
+                    max_swing_sl = min(max(18.0, 0.5 * atr), max(9.0, 1.5 * atr))  # ceiling scales with the style's ATR
 
                     min_target_rr = 2.0 if is_ranging else 2.5
 
@@ -1165,7 +1165,7 @@ class DynamicRiskAndLevelsEngine:
 
                     # small-account ceiling of \ instead of a fixed \ cap.
 
-                    max_swing_sl = min(18.0, max(9.0, 1.5 * atr))
+                    max_swing_sl = min(max(18.0, 0.5 * atr), max(9.0, 1.5 * atr))  # ceiling scales with the style's ATR
 
                     min_target_rr = 2.0 if is_ranging else 2.5
 

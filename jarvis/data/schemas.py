@@ -263,6 +263,12 @@ class DevilAdvocateReport:
     critique_confidence: float = 1.0
     correlated_threats: List[str] = field(default_factory=list)
     execution_time_ms: float = 0.0
+    # Stable ids of the threat checks that fired, their historical stats, and — only when a
+    # published walk-forward calibration exists for the symbol's group — P(loss | flags).
+    threat_flags: List[str] = field(default_factory=list)
+    threat_stats: List[Dict[str, Any]] = field(default_factory=list)
+    calibrated_loss_prob: Optional[float] = None
+    calibration_group: Optional[str] = None
 
 @dataclass
 class CompetingHypotheses:

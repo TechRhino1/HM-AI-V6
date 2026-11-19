@@ -1,25 +1,19 @@
 """
-Real market-data provider for MT5 broker feeds, India (NSE/BSE), and global equities.
+Real market-data provider for MT5 broker feeds and global equities.
 
-The India/Stocks analytical engines must never silently present fabricated
-price history as if it were real. This module centralises the attempt to fetch
-genuine OHLCV candles from a live source. When no live source is available
-(e.g. MT5 is unavailable, yfinance is not installed, or there is no network
-connectivity), it returns ``None`` so the caller can fall back to a clearly
-labelled synthetic generator.
+Callers must never silently present fabricated price history as if it were
+real. This module centralises the attempt to fetch genuine OHLCV candles from a
+live source and returns ``None`` when none is reachable (MT5 unavailable,
+yfinance not installed, or no network connectivity).
 
 Live sources (attempted in order):
-  1. `MetaTrader5` (MT5) — real-time broker prices & tick volume for US/global equities.
-  2. `yfinance`  — free, no API key; covers NSE/BSE indices & equities
-                   (e.g. ``^NSEI``, ``RELIANCE.NS``) and US equities
-                   (e.g. ``AAPL``). This is the practical substitute for a
-                   TradingView/Indian exchange feed in environments without a
-                   broker data entitlement.
+  1. `MetaTrader5` (MT5) — real-time broker prices & tick volume.
+  2. TradingView scanner feed.
+  3. `yfinance`  — free, no API key (e.g. ``AAPL``).
 """
 from typing import Optional, List, Dict, Any
 
 from jarvis.data.broker_symbols import resolve_broker_symbol
-from jarvis.data.determinism import stable_seed
 import logging
 import re
 import threading
@@ -109,20 +103,6 @@ _TF_TO_MT5 = {
     "MN1": getattr(mt5, "TIMEFRAME_MN1", 49153) if (MT5_AVAILABLE and mt5) else 49153,
 }
 
-_INDIA_INDEX_MAP = {
-    "NIFTY": "^NSEI",
-    "NIFTY50": "^NSEI",
-    "NIFTY 50": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-    "BANK NIFTY": "^NSEBANK",
-    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-    "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
-    "BANKEX": "^BSEBANK",
-    "NIFTYAUTO": "^CNXAUTO",
-    "NIFTYIT": "^CNXIT",
-    "SENSEX": "^BSESN",
-}
-
 _COMMON_STOCK_ALIASES = {
     "GOOGL": "Google",
     "GOOG": "Google",
@@ -185,8 +165,8 @@ def _ensure_mt5_connected() -> bool:
     call blocks inside native code **holding the GIL** and never returns — measured:
     a child process calling ``generate_candles("NVDA")`` was still alive after 25s
     and had to be killed (``.scratch/prove_mt5_block.py``). Because the GIL is held,
-    no other thread runs either, so a single ``/api/stocks/candles`` request
-    (``stock_service.py:677``) wedged the entire server — the process stayed alive
+    no other thread runs either, so a single candle request
+    wedged the entire server — the process stayed alive
     and kept logging while answering nothing.
 
     ``ensure_mt5_terminal`` is the read-path gate: it refuses to call
@@ -325,20 +305,6 @@ def _try_mt5(symbol: str, timeframe: str = "1D", num_bars: int = 120) -> Optiona
         return None
 
 
-def _resolve_ticker(symbol: str, market: str) -> str:
-    s = symbol.strip().upper()
-    if market == "IN":
-        if s in _INDIA_INDEX_MAP:
-            return _INDIA_INDEX_MAP[s]
-        if s.endswith(".NS") or s.endswith(".BO"):
-            return s
-        if s.isalpha() and "." not in symbol:
-            return f"{s}.NS"
-        return s
-    # US / generic
-    return symbol
-
-
 def _try_yfinance(ticker: str, timeframe: str, num_bars: int) -> Optional[List[Dict[str, Any]]]:
     try:
         import yfinance as yf
@@ -370,49 +336,6 @@ def _try_yfinance(ticker: str, timeframe: str, num_bars: int) -> Optional[List[D
     return rows if rows else None
 
 
-def _try_nse(symbol: str, timeframe: str, num_bars: int) -> Optional[List[Dict[str, Any]]]:
-    """Live NSE candles (real exchange data) wrapped with a 2.5s timeout."""
-    def _fetch() -> Optional[List[Dict[str, Any]]]:
-        try:
-            from jarvis.india.nse_bse_adapter import fetch_nse_historical
-            rows = fetch_nse_historical(symbol, days=num_bars, timeframe=timeframe)
-            if not rows:
-                return None
-            out: List[Dict[str, Any]] = []
-            for r in rows:
-                try:
-                    ts = r.get("time") or r.get("date")
-                    if isinstance(ts, str):
-                        ts = int(_dt.datetime.strptime(ts, "%Y-%m-%d").timestamp())
-                    elif hasattr(ts, "timestamp"):
-                        ts = int(ts.timestamp())
-                    else:
-                        ts = int(ts) if ts else 0
-                    out.append({
-                        "time": ts,
-                        "open": float(r["open"]),
-                        "high": float(r["high"]),
-                        "low": float(r["low"]),
-                        "close": float(r["close"]),
-                        "volume": int(r.get("volume", 0) or 0),
-                    })
-                except Exception as exc:
-                    logger.debug("Skipping malformed NSE row for %s: %s", symbol, exc)
-                    continue
-            out = out[-num_bars:]
-            return out if out else None
-        except Exception as exc:
-            logger.debug("NSE fetch failed for %s: %s", symbol, exc)
-            return None
-
-    try:
-        from jarvis.common.timeout_guard import TimeoutGuard
-        return TimeoutGuard.run_sync(_fetch, timeout_sec=2.5, default=None, task_name=f"NSE_Historical_{symbol}")
-    except Exception as exc:
-        logger.debug("NSE timeout guard execution failed for %s: %s", symbol, exc)
-        return None
-
-
 def _try_tradingview(symbol: str, timeframe: str = "1D", num_bars: int = 120) -> Optional[List[Dict[str, Any]]]:
     """Attempt to fetch live candles via TradingView scanner and real-time feeds."""
     try:
@@ -421,78 +344,6 @@ def _try_tradingview(symbol: str, timeframe: str = "1D", num_bars: int = 120) ->
     except Exception as exc:
         logger.debug("TradingView fetch failed for %s: %s", symbol, exc)
         return None
-
-
-def get_calibrated_baseline_candles(
-    symbol: str, timeframe: str = "1D", num_bars: int = 120, market: str = "US"
-) -> List[Dict[str, Any]]:
-    """Tier 4 graceful fallback: generates geometrically bounded candle series
-    anchored to 2026 calibrated baseline prices when all live feeds are unreachable."""
-    import math
-    import time
-    import numpy as np
-
-    if market == "IN":
-        try:
-            from jarvis.india.universe import get_india_profile
-            prof = get_india_profile(symbol)
-            base_p = float(prof.get("base_price", 1000.0))
-            beta_v = 1.0
-        except Exception:
-            base_p = 1000.0
-            beta_v = 1.0
-    else:
-        try:
-            from jarvis.stocks.universe import get_stock_profile
-            prof = get_stock_profile(symbol)
-            base_p = float(prof.get("base_price", 150.0))
-            beta_v = float(prof.get("beta", 1.2))
-        except Exception:
-            base_p = 150.0
-            beta_v = 1.2
-
-    tf_sec = _TF_TO_MT5.get(timeframe.upper(), 86400)
-    if isinstance(tf_sec, int) and tf_sec > 10000:
-        step_sec = 86400 if tf_sec == 16408 else (604800 if tf_sec == 32769 else 2592000)
-    else:
-        step_sec = int(tf_sec) if isinstance(tf_sec, int) and tf_sec < 10000 else 86400
-
-    now_ts = int(time.time())
-    vol_scalar = max(0.003, min(0.015 * beta_v * math.sqrt(step_sec / 86400.0), 0.045))
-    # Seeded from `stable_seed`, NOT from `hash()`. CPython salts `hash()` per
-    # process, so the same symbol and timeframe produced a different series after
-    # every restart, which made the generated history irreproducible between runs
-    # and moved the chart's derived support/resistance levels.
-    seed = stable_seed(f"{symbol}_{timeframe}_{now_ts // 3600}")
-    rng = np.random.RandomState(seed)
-
-    returns = rng.normal(loc=0.0003, scale=vol_scalar, size=num_bars)
-    prices = base_p * np.exp(np.cumsum(returns))
-    scale_factor = base_p / prices[-1]
-    prices *= scale_factor
-
-    candles: List[Dict[str, Any]] = []
-    for i in range(num_bars):
-        bar_time = now_ts - (num_bars - 1 - i) * step_sec
-        c = float(prices[i])
-        prev_c = float(prices[i - 1]) if i > 0 else c * (1.0 - returns[0])
-        o = prev_c + float(rng.normal(0, c * vol_scalar * 0.2))
-        h = max(o, c) + abs(float(rng.normal(0, c * vol_scalar * 0.7)))
-        l = min(o, c) - abs(float(rng.normal(0, c * vol_scalar * 0.7)))
-        v = int(1000000 * beta_v * rng.uniform(0.7, 1.5))
-        candles.append({
-            "time": bar_time,
-            "open": round(float(o), 4),
-            "high": round(float(h), 4),
-            "low": round(float(l), 4),
-            "close": round(float(c), 4),
-            "volume": v,
-        })
-    return CandleSeries(
-        candles,
-        source=SOURCE_CALIBRATED_FEED,
-        anchor_source="calibrated_baseline",
-    )
 
 
 def fetch_real_candles(
@@ -507,41 +358,10 @@ def fetch_real_candles(
       Tier 1: MT5 live broker feed
       Tier 2: TradingView Scanner real-time feed
       Tier 3: yfinance free exchange feed
-      Tier 4: Callers fallback to 2026 calibrated baseline prices.
-
-    Hierarchy for India (market == "IN"):
-      Tier 1: Fast TradingView Scanner feed (_try_tradingview)
-      Tier 2: yfinance free exchange feed (_try_yfinance)
-      Tier 3: Live NSE feed with strict 0.5s timeout (_try_nse)
-      Tier 4: Return None (caller immediately generates 2026 calibrated candles in < 0.1ms).
 
     Returns a list of candle dicts (newest last) or ``None`` when no live
     source is reachable.
     """
-    # Indian equities/indices:
-    if market == "IN":
-        # Tier 1: Live NSE / BSE multi-timeframe exchange feed
-        candles = _try_nse(symbol, timeframe=timeframe, num_bars=num_bars)
-        if candles:
-            logger.info("Live NSE candles for %s (%d bars)", symbol, len(candles))
-            return candles
-
-        # Tier 2: yfinance free exchange feed
-        ticker = _resolve_ticker(symbol, market)
-        candles = _try_yfinance(ticker, timeframe=timeframe, num_bars=num_bars)
-        if candles:
-            logger.info("Live candles for %s (ticker=%s, %d bars)", symbol, ticker, len(candles))
-            return candles
-
-        # Tier 3: TradingView feed
-        candles = _try_tradingview(symbol, timeframe=timeframe, num_bars=num_bars)
-        if candles:
-            logger.info("Live TradingView candles for %s (%d bars)", symbol, len(candles))
-            return candles
-
-        # Tier 4: Return None (caller gracefully falls back to calibrated baseline)
-        return None
-
     # US / Global equities:
     # Tier 1: MT5 live broker feed
     candles = _try_mt5(symbol, timeframe=timeframe, num_bars=num_bars)
@@ -556,10 +376,9 @@ def fetch_real_candles(
         return candles
 
     # Tier 3: yfinance free exchange feed
-    ticker = _resolve_ticker(symbol, market)
-    candles = _try_yfinance(ticker, timeframe, num_bars)
+    candles = _try_yfinance(symbol, timeframe, num_bars)
     if candles:
-        logger.info("Live candles for %s (ticker=%s, %d bars)", symbol, ticker, len(candles))
+        logger.info("Live yfinance candles for %s (%d bars)", symbol, len(candles))
         return candles
 
     return None

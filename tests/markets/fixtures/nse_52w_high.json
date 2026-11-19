@@ -1,0 +1,48 @@
+{
+ "high": 52,
+ "data": [
+  {
+   "change": -1.97,
+   "comapnyName": "Algoquant Fintech Limited",
+   "ltp": 85.06,
+   "nearWKH": 2.6662089483922644,
+   "nearWKL": -77.94979079497908,
+   "new52WHL": 87.39,
+   "pChange": -2.2635872687578997,
+   "prev52WHL": 87.38,
+   "prevClose": "87.03",
+   "prevHLDate": "17-Nov-2026",
+   "series": "EQ",
+   "symbol": "ALGOQUANT"
+  },
+  {
+   "change": 3.76,
+   "comapnyName": "Amanta Healthcare Limited",
+   "ltp": 238.27,
+   "nearWKH": 3.024013024013024,
+   "nearWKL": -158.9891304347826,
+   "new52WHL": 245.7,
+   "pChange": 1.6033431410174406,
+   "prev52WHL": 244.64,
+   "prevClose": "234.51",
+   "prevHLDate": "17-Nov-2026",
+   "series": "EQ",
+   "symbol": "AMANTA"
+  },
+  {
+   "change": -13.3,
+   "comapnyName": "Aries Agro Limited",
+   "ltp": 537.5,
+   "nearWKH": 4.690132103909921,
+   "nearWKL": -88.3651655861223,
+   "new52WHL": 563.95,
+   "pChange": -2.4146695715323165,
+   "prev52WHL": 553.05,
+   "prevClose": "550.8",
+   "prevHLDate": "17-Nov-2026",
+   "series": "BE",
+   "symbol": "ARIES"
+  }
+ ],
+ "timestamp": "18-Nov-2026 12:45:38"
+}

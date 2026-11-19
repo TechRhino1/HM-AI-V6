@@ -26,11 +26,6 @@ from jarvis.data.market_data_provider import (
     SOURCE_CALIBRATED_FEED,
     SYNTHETIC_SOURCES,
 )
-from jarvis.stocks import stock_engine as se
-from jarvis.stocks.stock_engine import StockIntelligenceEngine
-
-LIVE_ANCHOR = {"price": 250.0, "source": "tradingview", "beta": 1.2, "name": "TESTCO"}
-STATIC_ANCHOR = {"price": 250.0, "source": "calibrated", "beta": 1.2, "name": "TESTCO"}
 
 
 def _bars(n=120, start=100.0):
@@ -44,14 +39,6 @@ def _bars(n=120, start=100.0):
             "close": c, "volume": 1_000_000 + i,
         })
     return out
-
-
-@pytest.fixture(autouse=True)
-def no_real_feed(monkeypatch):
-    """`generate_candles` asks MT5/exchange first; keep tests off real network feeds."""
-    import jarvis.data.market_data_provider as mdp
-    monkeypatch.setattr(mdp, "_try_mt5", lambda *a, **k: None)
-    monkeypatch.setattr(mdp, "fetch_real_candles", lambda *a, **k: None)
 
 
 # ---------------------------------------------------------------------------
@@ -105,100 +92,6 @@ class TestCandleSeriesContract:
 
 
 # ---------------------------------------------------------------------------
-# The stock engine
-# ---------------------------------------------------------------------------
-
-class TestStockEngineProvenance:
-    def test_a_generated_series_is_not_labelled_live(self, monkeypatch, no_real_feed):
-        """The defect: the anchor was live, so the generated series claimed `live`."""
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(LIVE_ANCHOR))
-        candles = StockIntelligenceEngine().generate_candles("TESTCO", "1D", 120)
-        assert candles.source != SOURCE_LIVE
-        assert candles.source == SOURCE_SYNTHETIC_ANCHORED
-
-    def test_the_anchor_provenance_is_kept_separately(self, monkeypatch, no_real_feed):
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(LIVE_ANCHOR))
-        candles = StockIntelligenceEngine().generate_candles("TESTCO", "1D", 120)
-        assert candles.anchor_source == "tradingview"
-        assert candles.is_synthetic is True
-
-    def test_a_static_anchor_is_calibrated_not_anchored(self, monkeypatch, no_real_feed):
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(STATIC_ANCHOR))
-        candles = StockIntelligenceEngine().generate_candles("TESTCO", "1D", 120)
-        assert candles.source == SOURCE_CALIBRATED_FEED
-
-    def test_real_bars_are_labelled_live(self, monkeypatch):
-        """The one branch that may say `live`."""
-        import jarvis.data.market_data_provider as mdp
-        monkeypatch.setattr(mdp, "_try_mt5", lambda *a, **k: _bars(120))
-        candles = StockIntelligenceEngine().generate_candles("TESTCO", "1D", 120)
-        assert candles.source == SOURCE_LIVE
-        assert candles.is_synthetic is False
-
-    def test_the_series_still_has_the_expected_bars(self, monkeypatch, no_real_feed):
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(LIVE_ANCHOR))
-        candles = StockIntelligenceEngine().generate_candles("TESTCO", "1D", 120)
-        assert len(candles) == 120
-        assert candles[-1]["close"] == pytest.approx(250.0, abs=0.01)
-        assert all(b["close"] > 0 for b in candles)
-
-    def test_the_response_reads_the_series_not_the_instance(self, monkeypatch):
-        """`_last_data_source` is per-INSTANCE on a singleton driven by 16 threads.
-
-        Simulate the race directly: another symbol has just set the instance attribute to
-        `live`. The response for THIS symbol must still report this symbol's own series.
-        """
-        engine = StockIntelligenceEngine()
-        series = CandleSeries(_bars(120), source=SOURCE_CALIBRATED_FEED)
-        monkeypatch.setattr(engine, "generate_candles", lambda *a, **k: series)
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(STATIC_ANCHOR))
-        engine._last_data_source = SOURCE_LIVE          # <- the other thread's value
-
-        result = engine.analyze_stock("RACETEST", "1D")
-        assert result["data_source"] == SOURCE_CALIBRATED_FEED
-        assert result["data_source"] != SOURCE_LIVE
-
-    def test_the_response_never_claims_live_for_generated_bars(self, monkeypatch, no_real_feed):
-        monkeypatch.setattr(se, "get_stock_profile", lambda sym: dict(LIVE_ANCHOR))
-        result = StockIntelligenceEngine().analyze_stock("TESTCO", "1D")
-        assert result["data_source"] in SYNTHETIC_SOURCES
-        assert result["data_source"] != SOURCE_LIVE
-
-
-# ---------------------------------------------------------------------------
-# The India engine
-# ---------------------------------------------------------------------------
-
-class TestIndiaEngineProvenance:
-    def _engine(self):
-        from jarvis.india.india_engine import IndiaTechnicalEngine
-        return IndiaTechnicalEngine()
-
-    def test_a_generated_series_is_never_live(self, monkeypatch):
-        """This engine has no live-bar branch at all, so `live` was never right."""
-        import jarvis.india.india_engine as ie
-        monkeypatch.setattr(ie, "get_india_profile", lambda sym: {"price": 22000.0, "source": "tradingview"})
-        candles = self._engine().generate_candles("NIFTY", "1D", 120)
-        assert candles.source != SOURCE_LIVE
-        assert candles.source == SOURCE_SYNTHETIC_ANCHORED
-
-    def test_a_static_anchor_is_calibrated(self, monkeypatch):
-        import jarvis.india.india_engine as ie
-        monkeypatch.setattr(ie, "get_india_profile", lambda sym: {"price": 22000.0, "source": "calibrated"})
-        candles = self._engine().generate_candles("NIFTY", "1D", 120)
-        assert candles.source == SOURCE_CALIBRATED_FEED
-
-    def test_the_delegate_reports_the_same_provenance(self, monkeypatch):
-        """`_generate_synthetic_candles` is a documented delegate to `generate_candles`."""
-        import jarvis.india.india_engine as ie
-        monkeypatch.setattr(ie, "get_india_profile", lambda sym: {"price": 22000.0, "source": "tradingview"})
-        engine = self._engine()
-        assert engine._generate_synthetic_candles("NIFTY", "1D", 30).source == (
-            engine.generate_candles("NIFTY", "1D", 30).source
-        )
-
-
-# ---------------------------------------------------------------------------
 # The providers
 # ---------------------------------------------------------------------------
 
@@ -216,11 +109,3 @@ class TestProviderProvenance:
         assert candles.source == SOURCE_SYNTHETIC_ANCHORED
         assert candles.anchor_source == "tradingview"
         assert len(candles) == 50
-
-    def test_the_calibrated_baseline_declares_synthetic_calibrated(self, monkeypatch):
-        import jarvis.data.market_data_provider as mdp
-        import jarvis.stocks.universe as su
-        monkeypatch.setattr(su, "get_stock_profile", lambda sym: {"base_price": 150.0, "beta": 1.2})
-        candles = mdp.get_calibrated_baseline_candles("AAPL", "1D", 20, market="US")
-        assert candles.source == SOURCE_CALIBRATED_FEED
-        assert candles.is_synthetic is True

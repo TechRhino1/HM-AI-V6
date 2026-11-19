@@ -8,6 +8,7 @@ from typing import List, Optional
 from jarvis.data.schemas import MarketContext, RegimeOutput, DevilAdvocateReport
 from jarvis.market.correlations import DynamicCorrelationEngine
 from jarvis.data.symbol_registry import resolve as resolve_symbol
+from jarvis.analysts.devil_calibration import annotate as annotate_calibration
 
 class DevilAdvocateAnalyst:
     """
@@ -28,6 +29,7 @@ class DevilAdvocateAnalyst:
         invalidation_triggers: List[str] = []
         traps: List[str] = []
         correlated_threats: List[str] = []
+        flags: List[str] = []  # stable ids, one per threat check that fired (calibration input)
 
         penalty_score = 0.0
         st = context.structure
@@ -52,36 +54,44 @@ class DevilAdvocateAnalyst:
         unswept_equal_levels = liq.equal_lows if is_buy else liq.equal_highs
 
         if trend_score_against:
+            flags.append("trend_against")
             penalty_score += 15.0
             threats.append(f"Counter-trend {proposed_bias} against opposing momentum score ({mom.trend_score}).")
 
         if rsi_overextended:
+            flags.append("rsi_overextended")
             penalty_score += 12.0
             threats.append(f"Overextended {proposed_bias} entry with RSI at {mom.rsi:.1f}.")
 
         if adx_strong_counter:
+            flags.append("adx_strong_counter")
             penalty_score += 14.0
             threats.append(f"Strong adverse directional trend present (ADX={mom.adx:.1f}, Counter-DI dominant).")
 
         if adverse_divergence:
+            flags.append("adverse_divergence")
             penalty_score += 14.0
             threats.append(f"Adverse RSI divergence warning against {proposed_bias} impulse.")
 
         if unfavorable_zone:
+            flags.append("unfavorable_zone")
             penalty_score += 10.0
             threats.append(f"Attempting {proposed_bias} in unfavorable {st.discount_premium_zone} zone relative to equilibrium.")
 
         if trend_broken:
+            flags.append("trend_broken")
             penalty_score += 18.0
             threats.append("Primary market structure actively prints counter-trend swing points.")
 
         if htf_conflict:
             macro_bias = mtf.get("H4") or mtf.get("D1")
+            flags.append("htf_conflict")
             penalty_score += 12.0
             threats.append(f"Higher timeframe structural conflict: Macro timeframe is {macro_bias}.")
 
         # ── 2. Deep Liquidity Sweep & Order Book Traps ──────────────────────────────
         if unswept_equal_levels:
+            flags.append("unswept_equal_levels")
             zone_target = st.demand_zone[0] if is_buy else st.supply_zone[1]
             traps.append(f"Unswept Equal {'Lows' if is_buy else 'Highs'} near {zone_target} — smart money stop-hunt risk.")
             penalty_score += 8.0
@@ -89,6 +99,7 @@ class DevilAdvocateAnalyst:
         if liq.sweep_detected:
             # If a sweep just happened opposing our trade, it's a stop-run against us
             if (is_buy and liq.sweep_type == "BUY_SIDE") or (not is_buy and liq.sweep_type == "SELL_SIDE"):
+                flags.append("adverse_sweep")
                 penalty_score += 10.0
                 threats.append(f"Fresh {liq.sweep_type} sweep detected — active stop-hunt in progress ({liq.sweep_magnitude:.1f} pips).")
 
@@ -96,6 +107,7 @@ class DevilAdvocateAnalyst:
         if liq.buy_side_liquidity > 0 and liq.sell_side_liquidity > 0:
             ratio = liq.sell_side_liquidity / (liq.buy_side_liquidity + 1e-9) if is_buy else liq.buy_side_liquidity / (liq.sell_side_liquidity + 1e-9)
             if ratio > 2.0:
+                flags.append("liquidity_imbalance")
                 penalty_score += 6.0
                 traps.append(f"Severe liquidity pool imbalance ({ratio:.1f}x opposing volume resting in order book).")
 
@@ -106,12 +118,16 @@ class DevilAdvocateAnalyst:
             delta_score = float(of_data.get("delta_score", 0.0))
 
             if is_buy and trap == "SELLER_ABSORPTION_TRAP":
+                flags.append("absorption_trap")
                 penalty_score += 15.0
                 threats.append("SELLER_ABSORPTION_TRAP detected: Institutional sellers quietly absorbing buyer flow at highs.")
             elif (not is_buy) and trap == "BUYER_ABSORPTION_TRAP":
+                flags.append("absorption_trap")
                 penalty_score += 15.0
                 threats.append("BUYER_ABSORPTION_TRAP detected: Institutional buyers quietly absorbing seller flow at lows.")
 
+            if (delta_score <= -35.0) if is_buy else (delta_score >= 35.0):
+                flags.append("adverse_delta")
             if is_buy and delta_score <= -35.0:
                 opposing_penalty = round(min(15.0, abs(delta_score) * 0.15), 1)
                 penalty_score += opposing_penalty
@@ -124,22 +140,27 @@ class DevilAdvocateAnalyst:
         # ── 3. Volatility, Spread & Session Timing Risk ─────────────────────────────
         spec = resolve_symbol(context.symbol)
         if vol.is_excessive_spread:
+            flags.append("excessive_spread")
             penalty_score += 12.0
             threats.append(f"Excessive spread ({vol.current_spread_pips:.1f} pips > {spec.typical_spread_pips*2:.1f} typical) creates severe slippage drag.")
 
         if vol.state == "EXTREME":
+            flags.append("extreme_volatility")
             penalty_score += 18.0
             threats.append("Extreme volatility shock in progress — stop loss vulnerability elevated.")
 
         if not sess.is_prime_session and not getattr(spec, "is_crypto", False):
+            flags.append("off_hours")
             penalty_score += 8.0
             threats.append(f"Trading during low-liquidity off-hours ({sess.current_session}) increases false breakout risk.")
 
         # ── 4. Market Regime Transition Threat ──────────────────────────────────────
         if regime.regime_transition:
+            flags.append("regime_transition")
             penalty_score += 10.0
             threats.append("Market regime currently transitioning — statistical edges temporarily unstable.")
         elif regime.confidence < 0.60:
+            flags.append("low_regime_confidence")
             penalty_score += 8.0
             threats.append(f"Low regime classification confidence ({regime.confidence*100:.0f}%).")
 
@@ -151,6 +172,7 @@ class DevilAdvocateAnalyst:
             if corr_val >= min_corr and pair_sym in mtf:
                 pair_bias = mtf[pair_sym] if isinstance(mtf.get(pair_sym), str) else ""
                 if pair_bias and ((is_buy and pair_bias == "BEARISH") or (not is_buy and pair_bias == "BULLISH")):
+                    flags.append("correlated_conflict")
                     penalty_score += 8.0
                     c_threat = f"Correlated instrument {pair_sym} (r={corr_val:.2f}) exhibits conflicting {pair_bias} structure."
                     threats.append(c_threat)
@@ -188,6 +210,7 @@ class DevilAdvocateAnalyst:
                 dist_to_res = threat_price_level - c_price
                 if dist_to_res < (0.50 * atr_val):
                     col_penalty = 20.0 if dist_to_res < (0.15 * atr_val) else 12.0
+                    flags.append("structural_collision")
                     penalty_score += col_penalty
                     threats.append(
                         f"Immediate overhead structural supply collision at {threat_price_level:.2f} "
@@ -198,6 +221,7 @@ class DevilAdvocateAnalyst:
             dyn_res = getattr(st, "dynamic_resistance_trendline", 0.0)
             res_boundary = max(chan_up, dyn_res)
             if res_boundary > c_price and (res_boundary - c_price) < (0.25 * atr_val):
+                flags.append("dynamic_level_collision")
                 penalty_score += 8.0
                 threats.append(f"Immediate dynamic resistance/trendline collision at {res_boundary:.2f}.")
         else:
@@ -216,6 +240,7 @@ class DevilAdvocateAnalyst:
                 dist_to_sup = c_price - threat_price_level
                 if dist_to_sup < (0.50 * atr_val):
                     col_penalty = 20.0 if dist_to_sup < (0.15 * atr_val) else 12.0
+                    flags.append("structural_collision")
                     penalty_score += col_penalty
                     threats.append(
                         f"Immediate dynamic support zone collision at {threat_price_level:.2f} "
@@ -226,6 +251,7 @@ class DevilAdvocateAnalyst:
             dyn_sup = getattr(st, "dynamic_support_trendline", 0.0)
             sup_boundary = max(chan_low, dyn_sup)
             if 0 < sup_boundary < c_price and (c_price - sup_boundary) < (0.25 * atr_val):
+                flags.append("dynamic_level_collision")
                 penalty_score += 8.0
                 threats.append(f"Immediate dynamic support/trendline collision at {sup_boundary:.2f}.")
 
@@ -240,7 +266,7 @@ class DevilAdvocateAnalyst:
 
         elapsed = (time.perf_counter() - t0) * 1000.0
 
-        return DevilAdvocateReport(
+        report = DevilAdvocateReport(
             symbol=context.symbol,
             counter_bias=counter_bias,
             penalty_score=final_penalty,
@@ -251,5 +277,8 @@ class DevilAdvocateAnalyst:
             threat_price_level=threat_price_level,
             critique_confidence=critique_conf,
             correlated_threats=correlated_threats,
-            execution_time_ms=round(elapsed, 2)
+            execution_time_ms=round(elapsed, 2),
+            threat_flags=list(dict.fromkeys(flags)),
         )
+        annotate_calibration(report, context.symbol)
+        return report

@@ -1,0 +1,108 @@
+{
+ "volume": {
+  "data": [
+   {
+    "identifier": "OPTIDXNIFTY23-11-2026PE25300.00",
+    "instrumentType": "OPTIDX",
+    "instrument": "Index Options",
+    "underlying": "NIFTY",
+    "expiryDate": "23-Nov-2026",
+    "optionType": "Put",
+    "strikePrice": 25300,
+    "lastPrice": 232.5,
+    "numberOfContractsTraded": 2242577,
+    "totalTurnover": 282657.76894549996,
+    "premiumTurnover": 37161836.5339455,
+    "openInterest": 106481,
+    "underlyingValue": 25186.2,
+    "pChange": 71.46017699115045
+   },
+   {
+    "identifier": "OPTIDXNIFTY23-11-2026CE25300.00",
+    "instrumentType": "OPTIDX",
+    "instrument": "Index Options",
+    "underlying": "NIFTY",
+    "expiryDate": "23-Nov-2026",
+    "optionType": "Call",
+    "strikePrice": 25300,
+    "lastPrice": 126.4,
+    "numberOfContractsTraded": 2058626,
+    "totalTurnover": 216893.74742099998,
+    "premiumTurnover": 34070998.317421004,
+    "openInterest": 166633,
+    "underlyingValue": 25186.2,
+    "pChange": -47.74700289375775
+   },
+   {
+    "identifier": "OPTIDXNIFTY23-11-2026PE25200.00",
+    "instrumentType": "OPTIDX",
+    "instrument": "Index Options",
+    "underlying": "NIFTY",
+    "expiryDate": "23-Nov-2026",
+    "optionType": "Put",
+    "strikePrice": 25200,
+    "lastPrice": 176.6,
+    "numberOfContractsTraded": 1986854,
+    "totalTurnover": 194183.188836,
+    "premiumTurnover": 32738851.708836,
+    "openInterest": 113412,
+    "underlyingValue": 25186.2,
+    "pChange": 77.93450881612091
+   }
+  ],
+  "timestamp": "18-Nov-2026 12:44:49"
+ },
+ "value": {
+  "data": [
+   {
+    "identifier": "FUTIDXNIFTY23-11-2026XX0.00",
+    "instrumentType": "FUTIDX",
+    "instrument": "Index Futures",
+    "underlying": "NIFTY",
+    "expiryDate": "23-Nov-2026",
+    "optionType": "-",
+    "strikePrice": 0,
+    "lastPrice": 25196.4,
+    "numberOfContractsTraded": 32324,
+    "totalTurnover": 530846.886102,
+    "premiumTurnover": 530846.886102,
+    "openInterest": 177181,
+    "underlyingValue": 25186.2,
+    "pChange": -0.8612922137452637
+   },
+   {
+    "identifier": "FUTSTKRELIANCE23-11-2026XX0.00",
+    "instrumentType": "FUTSTK",
+    "instrument": "Stock Futures",
+    "underlying": "RELIANCE",
+    "expiryDate": "23-Nov-2026",
+    "optionType": "-",
+    "strikePrice": 0,
+    "lastPrice": 1358.9,
+    "numberOfContractsTraded": 45107,
+    "totalTurnover": 307095.22205,
+    "premiumTurnover": 307095.22205,
+    "openInterest": 196057,
+    "underlyingValue": 1357.7,
+    "pChange": -0.8464064210142284
+   },
+   {
+    "identifier": "FUTSTKRELIANCE29-12-2026XX0.00",
+    "instrumentType": "FUTSTK",
+    "instrument": "Stock Futures",
+    "underlying": "RELIANCE",
+    "expiryDate": "29-Dec-2026",
+    "optionType": "-",
+    "strikePrice": 0,
+    "lastPrice": 1370.1,
+    "numberOfContractsTraded": 44243,
+    "totalTurnover": 303573.3445,
+    "premiumTurnover": 303573.3445,
+    "openInterest": 136161,
+    "underlyingValue": 1357.7,
+    "pChange": -0.8754160034727246
+   }
+  ],
+  "timestamp": "18-Nov-2026 12:44:49"
+ }
+}

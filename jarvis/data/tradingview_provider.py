@@ -570,80 +570,9 @@ class TradingViewDataProvider:
                         for s in matched:
                             quotes[s] = quote_data
 
-        # If any symbols still unresolved (e.g. network offline/rate-limited), supply calibrated fallback quotes
-        still_unresolved = [s for s in uncached_symbols if s.strip().upper() not in quotes and not any(k.endswith(f":{s.strip().upper()}") for k in quotes)]
-        if still_unresolved:
-            for s in still_unresolved:
-                clean_s = s.strip().upper()
-                if clean_s.startswith("BTC"):
-                    base_p = 65000.0
-                    name = "Bitcoin / US Dollar"
-                elif clean_s.startswith("ETH"):
-                    base_p = 3500.0
-                    name = "Ethereum / US Dollar"
-                elif clean_s.startswith("SOL"):
-                    base_p = 150.0
-                    name = "Solana / US Dollar"
-                elif clean_s in ("EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"):
-                    base_p = 1.0850 if clean_s == "EURUSD" else (1.2750 if clean_s == "GBPUSD" else 0.6550)
-                    name = f"{clean_s[:3]}/{clean_s[3:]} Forex"
-                elif clean_s in ("USDJPY", "EURJPY", "GBPJPY", "CADJPY", "CHFJPY"):
-                    base_p = 155.00 if clean_s == "USDJPY" else 168.00
-                    name = f"{clean_s[:3]}/{clean_s[3:]} Forex"
-                else:
-                    # A STATIC REFERENCE PRICE, read straight from the universe
-                    # tables.
-                    #
-                    # This must NOT go through get_india_profile() or
-                    # get_stock_profile(). Those hydrate, and hydration resolves
-                    # quotes by calling back into this very function for the same
-                    # symbol, so the two formed an unbounded cycle:
-                    #
-                    #   fetch_quotes -> get_india_profile -> get_profile
-                    #     -> hydrate_batch -> fetch_quotes -> ...
-                    #
-                    # Nothing raised, so the except clauses below never ran; the
-                    # stack simply grew while each level opened another blocking
-                    # connection. Measured: 233 re-entries for a single NIFTY
-                    # lookup, and the price that came back was the last-resort
-                    # 150.0 rather than NIFTY's own reference. Any /api/india/*
-                    # route reaching a symbol this branch handles — every index,
-                    # since NIFTY and BANKNIFTY match no earlier pattern — never
-                    # returned.
-                    #
-                    # All this branch needs is a baseline number, which is
-                    # exactly what the static tables hold.
-                    from jarvis.india.universe import INDIA_UNIVERSE
-                    from jarvis.stocks.universe import STOCK_UNIVERSE
-
-                    prof = INDIA_UNIVERSE.get(clean_s) or STOCK_UNIVERSE.get(clean_s)
-                    if prof:
-                        base_p = float(prof.get("base_price", 150.0))
-                        name = prof.get("name", f"{clean_s} Inc.")
-                    else:
-                        base_p = 150.0
-                        name = f"{clean_s} Inc."
-                quotes[clean_s] = {
-                    "price": base_p,
-                    "open": round(base_p * 0.995, 4),
-                    "high": round(base_p * 1.01, 4),
-                    "low": round(base_p * 0.99, 4),
-                    "close": base_p,
-                    "change_val": round(base_p * 0.005, 4),
-                    "change_pct": 0.5,
-                    "volume": 25000000,
-                    "rsi": 55.0,
-                    "macd": 0.12,
-                    "recommendation": 0.5,
-                    "description": name,
-                    # NOT "tradingview". This quote is SYNTHESISED from a static
-                    # reference price, and labelling it as a live source is how a
-                    # fabricated 150.0 gold price became indistinguishable from a
-                    # real one - it even carried a made-up RSI of 55.0. Callers
-                    # that need real data must check `is_fallback`.
-                    "source": "profile_reference",
-                    "is_fallback": True,
-                }
+        # Unresolved symbols (network down, unknown ticker) get NO quote. A static reference
+        # price used to be synthesised here; it was invented data, so callers now see the
+        # symbol as missing and report it unavailable instead.
 
         # Update cache under lock
         with self._cache_lock:

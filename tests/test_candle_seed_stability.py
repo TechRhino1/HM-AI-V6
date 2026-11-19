@@ -1,6 +1,6 @@
 """Generated candle history must be identical across processes.
 
-Both synthetic candle generators seeded their RNG from ``hash()`` of a composite
+The synthetic candle generator seeded their RNG from ``hash()`` of a composite
 key (``f"{symbol}_{timeframe}_{hour}"``). CPython salts ``hash()`` per process,
 so the same symbol and timeframe produced a *different* series after every
 server restart.
@@ -19,8 +19,7 @@ in-process test passes against the broken code and pins nothing. The
 discriminating test has to vary ``PYTHONHASHSEED``, which means a fresh
 interpreter.
 
-Both generators are exercised in one subprocess so the cost is two interpreter
-starts rather than four. The network is stubbed out; the seed derivation is what
+The network is stubbed out; the seed derivation is what
 is under test, not the fetch.
 """
 import json
@@ -35,14 +34,6 @@ DRIVER = r"""
 import json, sys
 sys.path.insert(0, REPO_ROOT)
 
-# The calibrated-baseline generator reads a profile for its anchor price, and
-# that path hydrates (which reaches the network). Anchor it statically.
-import jarvis.stocks.universe as _su
-_su.get_stock_profile = lambda sym: {"base_price": 150.0, "beta": 1.2, "name": sym}
-
-from jarvis.data.market_data_provider import get_calibrated_baseline_candles
-baseline = get_calibrated_baseline_candles("AAPL", "1D", 40, market="US")
-
 # The TradingView generator anchors on a live quote first. Stub the quote so the
 # candle construction runs offline.
 import jarvis.data.tradingview_provider as _tvp
@@ -56,7 +47,6 @@ _tvp.TRADINGVIEW_PROVIDER.fetch_quotes = lambda symbols: {
 tv = _tvp.TRADINGVIEW_PROVIDER.fetch_candles("XAUUSD", "H1", 40)
 
 print(json.dumps({
-    "baseline": [c["close"] for c in baseline],
     "tv": [c["close"] for c in (tv or [])],
 }))
 """.replace("REPO_ROOT", repr(REPO_ROOT))
@@ -109,7 +99,7 @@ class TestCandleSeedsAreStableAcrossProcesses(unittest.TestCase):
         first = _series_with_hash_seed(0)
         second = _series_with_hash_seed(1)
 
-        for key in ("baseline", "tv"):
+        for key in ("tv",):
             self.assertTrue(
                 first[key],
                 f"{key} produced no candles — the driver stubbed something wrong",
@@ -125,9 +115,8 @@ class TestCandleSeedsAreStableAcrossProcesses(unittest.TestCase):
         """Guard the guard: if the driver silently returned nothing, the
         comparison above would pass on two empty lists."""
         series = _series_with_hash_seed(0)
-        self.assertGreater(len(series["baseline"]), 10)
         self.assertGreater(len(series["tv"]), 10)
-        for key in ("baseline", "tv"):
+        for key in ("tv",):
             self.assertTrue(all(v > 0 for v in series[key]))
 
 
