@@ -67,6 +67,24 @@ export function CentredBar({ frac, tone }: { frac: number; tone: "up" | "down" }
   );
 }
 
+export interface BarRow { label: string; value: number | null; display: string; title?: string }
+/** Labelled bars growing left/right from zero, scaled to the largest magnitude; null values show "unavailable". */
+export function DivergingBars({ rows, label }: { rows: BarRow[]; label: string }) {
+  const max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.value ?? 0)));
+  return (
+    <div className="dbars" role="list" aria-label={label}>
+      {rows.map((r) => (
+        <div key={r.label} className="dbar-row" role="listitem" title={r.title}>
+          <span className="dbar-lbl">{r.label}</span>
+          {r.value === null ? <span className="faint dbar-na">unavailable</span>
+            : <CentredBar frac={r.value / max} tone={r.value >= 0 ? "up" : "down"} />}
+          <span className={`mono dbar-val ${r.value === null ? "faint" : r.value > 0 ? "up" : r.value < 0 ? "down" : ""}`}>{r.value === null ? "—" : r.display}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Rolling buffer of real readings for a session sparkline: skips repeats of the same timestamp, keeps the last `cap`. */
 export function pushSample(buf: { t: number; v: number }[], t: number, v: number, cap = 240) {
   if (!Number.isFinite(v) || (buf.length && buf[buf.length - 1].t === t)) return buf;

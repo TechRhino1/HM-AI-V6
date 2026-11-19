@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../../lib/api";
-import { usePoll } from "../../lib/hooks";
+import { useLocalStorage, usePoll } from "../../lib/hooks";
 import { ago } from "../../lib/format";
 import { useStore } from "../../state/store";
-import { Badge, Card, Empty, ErrorNote, Loading } from "../../components/ui";
+import { Badge, Card, Empty, ErrorNote, Loading, Seg } from "../../components/ui";
+import { BriefCharts, briefModel } from "./BriefCharts";
 import { Icon } from "../../components/Icon";
 import { ProvBadge } from "../../components/ProvBadge";
 import { getLastScan } from "../markets/scanCache";
@@ -12,7 +13,7 @@ import { recName } from "../markets/types";
 import type { Prov } from "../markets/logic";
 import { briefKind, istNow } from "../../lib/ist";
 
-interface Brief { kind?: string; day?: string; ts?: number; provider?: string; text?: string | null; error?: string }
+interface Brief { kind?: string; day?: string; ts?: number; provider?: string; text?: string | null; error?: string; facts?: Record<string, any> }
 interface Session { open?: boolean; status?: string; message?: string; trade_date?: string; source?: string }
 interface Ev { symbol: string; purpose?: string; date?: string; is_results?: boolean; company?: string }
 
@@ -31,6 +32,8 @@ export function Today({ go }: { go: (r: string) => void }) {
   const scan = getLastScan();
   const opps = (scan?.data.summary || []).filter((s) => s.status === "RECOMMEND").sort((a, b) => (b.edge_per_lot ?? 0) - (a.edge_per_lot ?? 0)).slice(0, 3);
   const noBrief = !brief.data?.text;
+  const model = useMemo(() => briefModel(brief.data?.facts), [brief.data?.facts]);
+  const [view, setView] = useLocalStorage<"charts" | "text">("hm.overview.briefView", "charts");
 
   const generate = async () => {
     setBusy(true); setGenErr(null);
@@ -55,7 +58,11 @@ export function Today({ go }: { go: (r: string) => void }) {
           {brief.loading && !brief.data && !brief.error ? <Loading rows={4} />
             : noBrief ? <Empty title={`No ${kind === "pre" ? "pre-open" : "post-close"} brief yet today`} icon="news">
                 Briefs are written automatically at 08:50 and 15:45 IST from live data only, or press “Generate now”.</Empty>
-              : <div className="brief" style={{ maxHeight: 340, overflow: "auto" }}>{brief.data!.text}</div>}
+              : <>
+                  {model && <Seg value={view} onChange={setView} options={[{ value: "charts", label: "Charts" }, { value: "text", label: brief.data!.provider === "template" ? "Text" : "AI text" }]} />}
+                  {model && view === "charts" ? <div style={{ maxHeight: 420, overflow: "auto" }}><BriefCharts m={model} /></div>
+                    : <div className="brief" style={{ maxHeight: 340, overflow: "auto" }}>{brief.data!.text}</div>}
+                </>}
         </div>
 
         <div className="stack" style={{ gap: 14 }}>

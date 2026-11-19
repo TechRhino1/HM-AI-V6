@@ -14,7 +14,7 @@ echo.
 echo  Keep this window open - closing it stops the dashboard.
 echo ======================================================================
 echo.
-python -c "import sys; sys.path.insert(0, '.'); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8501, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8501', flush=True); s.serve_forever()"
+python -c "import sys; sys.path.insert(0, '.'); from jarvis.common.envfile import load_env; load_env(); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8501, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8501', flush=True); s.serve_forever()"
 echo.
 echo Dashboard stopped.
 pause

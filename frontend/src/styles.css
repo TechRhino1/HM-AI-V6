@@ -483,3 +483,16 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .widget-grid.dense .card-body:not(.flush), .widget-grid.dense .stat { padding: 10px 12px; }
 @media (max-width: 560px) { .gauges { grid-template-columns: repeat(3, minmax(0, 1fr)); } .gauge-cell { font-size: 11px; } }
 @media (prefers-reduced-motion: reduce) { .gauge-fill, .cbar > i { transition: none; } }
+
+/* Brief charts (features/overview/BriefCharts.tsx) */
+.dbars { display: grid; gap: 4px; }
+.dbar-row { display: grid; grid-template-columns: minmax(70px, 30%) 1fr 76px; align-items: center; gap: 8px; font-size: 12px; }
+.dbar-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.dbar-val { text-align: right; font-size: 11.5px; }
+.dbar-na { font-size: 11px; }
+.vixbar { position: relative; height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--up-soft), var(--warn-soft), var(--down-soft)); border: 1px solid var(--line); }
+.vixbar > i { position: absolute; top: -4px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: var(--text); }
+.smap { display: grid; gap: 4px; }
+.smap-svg { width: 100%; height: 30px; display: block; }
+.smap-key { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; }
+.smap-key i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: -6px; }

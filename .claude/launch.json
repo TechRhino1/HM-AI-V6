@@ -6,7 +6,7 @@
       "runtimeExecutable": "python",
       "runtimeArgs": [
         "-c",
-        "import sys; sys.path.insert(0, '.'); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8511, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8511', flush=True); s.serve_forever()"
+        "import sys; sys.path.insert(0, '.'); from jarvis.common.envfile import load_env; load_env(); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8511, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8511', flush=True); s.serve_forever()"
       ],
       "port": 8511
     },
@@ -28,7 +28,7 @@
       "runtimeExecutable": "python",
       "runtimeArgs": [
         "-c",
-        "import sys; sys.path.insert(0, '.'); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8512, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8512', flush=True); s.serve_forever()"
+        "import sys; sys.path.insert(0, '.'); from jarvis.common.envfile import load_env; load_env(); from jarvis.api.server import start_server; s = start_server(host='127.0.0.1', port=8512, mt5_client=None, orchestrator=None); print('listening on http://127.0.0.1:8512', flush=True); s.serve_forever()"
       ],
       "port": 8512
     }
