@@ -39,3 +39,22 @@ def test_expired_close_is_emitted_unmeasured(monkeypatch):
     s._pending_closes[7] = time.time() - s.CLOSE_RETRY_SEC - 1
     assert s._emit_trade_closed(7, SimpleNamespace(equity=1.0)) is True
     assert "pnl" not in bus.publish_sync.call_args[0][1]
+
+
+def test_position_that_reappears_is_not_closed(monkeypatch):
+    # 2026-11-18 16:36:51: four open FT positions dropped out of one snapshot, sat in
+    # _pending_closes, and were journaled closed with no P&L while still open at the broker.
+    s, bus, fake = _sync([[_deal(0, 1.1)]] * 5)
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake)
+    pos = SimpleNamespace(ticket=9, volume=0.01, symbol="EURUSD", current_price=1.1)
+    acct = SimpleNamespace(equity=500.0, login=1)
+    s.mt5_client.is_connected = True
+    s.mt5_client.get_account_snapshot = lambda: acct
+    s._last_position_tickets, s._last_position_volumes = {9}, {9: 0.01}
+    s.mt5_client.get_open_positions = lambda: []          # transient empty snapshot
+    s.sync_once()
+    s._pending_closes[9] = time.time() - s.CLOSE_RETRY_SEC - 1   # retry window has expired
+    s.mt5_client.get_open_positions = lambda: [pos]       # it is back
+    s.sync_once()
+    assert 9 not in s._pending_closes
+    assert not [c for c in bus.publish_sync.call_args_list if c[0][0] == "trade_closed"]
