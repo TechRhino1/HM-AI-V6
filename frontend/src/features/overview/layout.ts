@@ -1,11 +1,11 @@
 /** Overview widget layout (order, visibility, width) kept per browser in localStorage, plus timeline filtering. */
 
 export type WidgetId =
-  | "today" | "kpis" | "since" | "positions" | "timeline" | "guardrails" | "exposure"
+  | "today" | "kpis" | "attention" | "since" | "positions" | "timeline" | "guardrails" | "exposure"
   | "trades" | "pulse" | "watchlist" | "hours";
 
 export const WIDGETS: Record<WidgetId, string> = {
-  today: "Today", kpis: "Account KPIs", since: "Since you last looked", positions: "Positions", timeline: "Today timeline",
+  today: "Today", kpis: "Account KPIs", attention: "Needs attention", since: "Since you last looked", positions: "Positions", timeline: "Today timeline",
   guardrails: "Risk guardrails", exposure: "Exposure", trades: "Today's closed trades", pulse: "Market pulse",
   watchlist: "Watchlist", hours: "Market hours",
 };
@@ -14,7 +14,7 @@ export interface WidgetState { id: WidgetId; hidden: boolean; span: 1 | 2 }
 export const LAYOUT_KEY = "hm.overview.layout";
 
 export const DEFAULT_LAYOUT: WidgetState[] = ([
-  ["today", 2], ["kpis", 2], ["since", 1], ["positions", 1], ["timeline", 1], ["pulse", 1],
+  ["today", 2], ["kpis", 2], ["attention", 2], ["since", 1], ["positions", 1], ["timeline", 1], ["pulse", 1],
   ["guardrails", 1], ["exposure", 1], ["trades", 1], ["watchlist", 1], ["hours", 2],
 ] as [WidgetId, 1 | 2][]).map(([id, span]) => ({ id, hidden: false, span }));
 

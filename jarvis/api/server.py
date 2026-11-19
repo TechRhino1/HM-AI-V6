@@ -2052,6 +2052,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/ai/review":
                 from jarvis.ai import review
                 self._send_json(review.weekly_review())
+            elif path == "/api/ai/insights":
+                from jarvis.ai import insights
+                self._send_json(insights.overview())
             else:
                 self.send_error(404, f"AI API {path} not found")
         except Exception as exc:
