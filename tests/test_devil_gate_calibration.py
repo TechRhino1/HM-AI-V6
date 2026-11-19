@@ -1,5 +1,6 @@
 """Devil's Advocate gate calibration: the math on fixed data, and the gate wiring."""
 import json
+import os
 from datetime import datetime, timezone
 
 import numpy as np
@@ -124,6 +125,9 @@ def write(path, published, threshold=0.5, weights=None):
                   "weights": weights or {"trend_broken": 2.0, "rsi_overextended": 0.5},
                   "flag_stats": [{"flag": "rsi_overextended", "n": 1240, "win_rate_delta": -0.06, "mean_r_delta": -0.08, "t_stat": -2.1}]},
         "pooled": {"published": False, "flag_stats": []}}}), encoding="utf-8")
+    # Two writes can land in one mtime tick and the loader caches on mtime; make each one distinct.
+    write.n = getattr(write, "n", 0) + 1
+    os.utime(path, (1_000_000_000 + write.n, 1_000_000_000 + write.n))
 
 
 def test_flags_recorded():
