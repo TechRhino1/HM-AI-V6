@@ -17,7 +17,7 @@ from jarvis.config.paths import mode_scoped_db_path
 from jarvis.config.settings import SETTINGS
 from jarvis.risk.position_sizing import PositionSizer
 from jarvis.risk.drawdown import DrawdownGuard
-from jarvis.risk.exposure import ExposureManager, HARD_MAX_TRADES_PER_SYMBOL
+from jarvis.risk.exposure import ExposureManager, HARD_MAX_TRADES_PER_SYMBOL, is_forward_test
 from jarvis.risk.circuit_breaker import CircuitBreaker
 from jarvis.risk.trade_guard import TradeGuard
 from jarvis.risk.portfolio_heat import PortfolioHeatEngine, PortfolioHeatResult
@@ -333,14 +333,15 @@ class RiskEngine:
 
             # Count active positions on this symbol (including canonical aliases)
             existing_sym_positions = [
-                p for p in positions if resolve_symbol(p.symbol).canonical == canon
+                p for p in positions if resolve_symbol(p.symbol).canonical == canon and not is_forward_test(p)
             ]
             symbol_count = len(existing_sym_positions)
             
             # Count pending orders on this symbol to prevent duplicate order stacking
             pending_orders = kwargs.get("pending_orders", [])
             pending_count = len([
-                o for o in pending_orders if resolve_symbol(o.get("symbol", "")).canonical == canon
+                o for o in pending_orders
+                if resolve_symbol(o.get("symbol", "")).canonical == canon and not is_forward_test(o)
             ])
             total_symbol_exposure = symbol_count + pending_count
             is_second_trade = total_symbol_exposure == 1

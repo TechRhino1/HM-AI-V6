@@ -85,7 +85,8 @@ _REGISTRY: Dict[str, SymbolSpec] = {
     "GER40": SymbolSpec(
         canonical="GER40", asset_class="INDEX",
         contract_size=1.0, pip_size=1.0, pip_value_per_lot=1.0,
-        typical_spread_pips=2.0, max_spread_pips=6.0,
+        # Real bars: median 2.0, p95 8.3 (off-hours); the 08-17 UTC profile window gates those.
+        typical_spread_pips=2.0, max_spread_pips=9.0,
         typical_atr_pct=0.9, margin_pct=0.2, digits=2
     ),
     "UK100": SymbolSpec(

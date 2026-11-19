@@ -53,6 +53,21 @@ def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
     return float(equity) * pct / 100.0, pct
 
 
+# Gold's 100 oz contract: on $250+ accounts its minimum lot may risk up to this much (c3ac298).
+GOLD_MIN_LOT_RISK_PCT = 3.5
+
+
+def min_lot_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
+    """(max_risk_usd, max_risk_pct) for a broker-minimum lot as the executor enforces it:
+    the policy cap, with gold's headroom on $250+ accounts. One place for both sizer and executor."""
+    usd, pct = get_nano_risk_cap(equity, symbol)
+    sym = (symbol or "").upper()
+    if ("XAU" in sym or "GOLD" in sym) and float(equity) >= 250.0 and pct < GOLD_MIN_LOT_RISK_PCT:
+        pct = GOLD_MIN_LOT_RISK_PCT
+        usd = float(equity) * pct / 100.0
+    return usd, pct
+
+
 def get_milestone_risk_budget(equity: float, symbol: str = "") -> tuple[float, float]:
     """(target_risk_usd, target_risk_pct) for a normally sized trade: ``max_risk_per_trade_pct``."""
     pct = float(_risk_policy().max_risk_per_trade_pct)

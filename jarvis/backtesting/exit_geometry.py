@@ -473,9 +473,8 @@ def live_profile(symbol: str) -> Optional[Any]:
         from jarvis.config.settings import SETTINGS
         if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
-        if _LIVE_PROFILES is None:
-            from jarvis.intelligence.winrate_targeting import load_profiles
-            _LIVE_PROFILES = load_profiles()
+        from jarvis.intelligence.winrate_targeting import load_profiles
+        _LIVE_PROFILES = load_profiles()  # mtime-cached inside load_profiles
         from jarvis.data.symbol_registry import resolve
         return _LIVE_PROFILES.get(str(resolve(symbol).canonical).upper()) or _LIVE_PROFILES.get(str(symbol).upper())
     except Exception:  # noqa: BLE001

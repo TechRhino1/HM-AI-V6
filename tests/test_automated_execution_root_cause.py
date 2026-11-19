@@ -23,12 +23,21 @@ from jarvis.data.schemas import (
 
 class TestAutomatedExecutionRootCauseFixes:
 
-    def test_deployment_refusal_passes_all_target_symbols(self):
-        """Verify that none of the 8 allowed universe symbols are blocked by deployment_refusal."""
+    def test_deployment_refusal_follows_the_real_profile_stats(self):
+        """The gate decides from calibrated OOS stats; it was never meant to pass a fixed list.
+        (c3ac298 hand-edited 4 profiles so this list passed; 2026-11-19 restored real output.)"""
+        import json
+        raw = json.load(open("config/winrate_profiles.json", encoding="utf-8"))["profiles"]
         target_symbols = ["BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "SOLUSD", "USDCAD", "USDJPY", "XAUUSD"]
         for sym in target_symbols:
+            p = raw[sym]
+            # every shipped profile is internally consistent
+            assert abs(p["oos_expectancy_r"] * p["oos_trades"] - p["oos_total_r"]) <= 0.5, sym
             refusal = deployment_refusal(sym)
-            assert refusal is None, f"Expected {sym} to be allowed, but got refusal: {refusal}"
+            from jarvis.data.symbol_registry import resolve
+            h = OOS_HURDLES.get(str(resolve(sym).asset_class).upper(), OOS_HURDLES["DEFAULT"])
+            clears = p["oos_trades"] >= h["min_trades"] and p["oos_expectancy_r"] >= h["min_expectancy_r"]
+            assert (refusal is None) == clears, (sym, refusal)
 
     def test_oos_hurdles_are_asset_class_aware(self):
         """Verify OOS_HURDLES has realistic asset-class hurdles."""

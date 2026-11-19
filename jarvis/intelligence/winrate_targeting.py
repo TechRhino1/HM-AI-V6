@@ -180,6 +180,13 @@ class WRTargetProfile:
     oos_total_r: float = 0.0
     oos_target_met: bool = False
     folds: int = 0
+    # Selection-bias check on the OOS trades (Bailey & Lopez de Prado): PSR = P(SR > 0),
+    # DSR = P(SR > expected best of `n_trials` configurations tried), min_trl = trades
+    # needed for PSR 95%. None on profiles written before these fields existed.
+    oos_psr: Optional[float] = None
+    oos_dsr: Optional[float] = None
+    oos_min_trl: Optional[float] = None
+    n_trials: int = 0
 
     # Out-of-sample figures BEFORE the learned regime policy is applied, and the
     # source the policy was fitted on. Publishing both lets a reader see exactly
@@ -1162,6 +1169,10 @@ class WRTargetCalibrator:
                   "exclude disabled regimes."
             )
 
+        psr, dsr, min_trl = _selection_bias_stats(
+            [o.pnl_r for o in deployed_oos],
+            [[o.pnl_r for o in select_sequential(sim_cache[g.key()], min_score=t)] for g, t in combos],
+        )
         return WRTargetProfile(
             symbol=symbol,
             target_wr=self.target_wr,
@@ -1183,6 +1194,10 @@ class WRTargetCalibrator:
             oos_total_r=float(oos_stats["total_r"]),
             oos_target_met=bool(oos_stats["win_rate"] >= self.target_wr and oos_stats["expectancy_r"] > 0),
             folds=len(fold_windows),
+            oos_psr=psr,
+            oos_dsr=dsr,
+            oos_min_trl=min_trl,
+            n_trials=len(combos),
             oos_pre_policy_trades=int(pre_policy_oos["trades"]),
             oos_pre_policy_win_rate=float(pre_policy_oos["win_rate"]),
             oos_pre_policy_expectancy_r=float(pre_policy_oos["expectancy_r"]),
@@ -1193,6 +1208,28 @@ class WRTargetCalibrator:
             frontier=frontier,
             notes=notes,
         )
+
+
+def _selection_bias_stats(oos_r: Sequence[float], trial_rs: Sequence[Sequence[float]]):
+    """(PSR, DSR, min track record) of the deployed OOS trades, deflated by the trials searched."""
+    import math
+    from jarvis.learning.deflated_sharpe import (
+        deflated_sharpe_ratio, min_track_record_length, probabilistic_sharpe_ratio, sharpe_stats,
+    )
+    st = sharpe_stats(oos_r)
+    if st["n"] < 3:
+        return None, None, None
+    trial_srs = [sharpe_stats(r)["sr"] for r in trial_rs if len(r) >= 3]
+    var_sr = float(np.var(trial_srs, ddof=1)) if len(trial_srs) > 1 else 0.0
+
+    def _clean(x):
+        return None if x is None or not math.isfinite(x) else round(float(x), 4)
+
+    psr = probabilistic_sharpe_ratio(st["sr"], st["n"], st["skew"], st["kurt"])
+    dsr = deflated_sharpe_ratio(st["sr"], st["n"], st["skew"], st["kurt"],
+                                max(len(trial_srs), 1), var_sr)
+    trl = min_track_record_length(st["sr"], st["skew"], st["kurt"])
+    return _clean(psr), _clean(dsr), _clean(trl)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1270,11 +1307,41 @@ def load_profiles(path: Path | str | None = None) -> Dict[str, "WRTargetProfile"
     which is the behaviour the platform has always had. A calibration must
     never be able to take the engine down by being unreadable.
     """
+    p = Path(path or DEFAULT_PROFILE_PATH)
     try:
-        return WRProfileStore(path or DEFAULT_PROFILE_PATH).load()
+        mtime = p.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    hit = _PROFILE_CACHE.get(str(p))
+    if hit is not None and mtime is not None and hit[0] == mtime:
+        return hit[1]
+    try:
+        profiles = {k: _honest_oos(k, v) for k, v in WRProfileStore(p).load().items()}
     except Exception as exc:  # noqa: BLE001 - a store failure must not stop trading
-        logger.warning("could not load calibrated profiles from %s: %s", path or DEFAULT_PROFILE_PATH, exc)
+        logger.warning("could not load calibrated profiles from %s: %s", p, exc)
         return {}
+    if mtime is not None:  # cache keyed on mtime: a recalibration is live on the next call
+        _PROFILE_CACHE[str(p)] = (mtime, profiles)
+    return profiles
+
+
+_PROFILE_CACHE: Dict[str, Any] = {}
+OOS_CONSISTENCY_TOL_R = 0.5
+
+
+def _honest_oos(symbol: str, prof: "WRTargetProfile") -> "WRTargetProfile":
+    """Expectancy must equal total R / trades. A profile whose headline expectancy
+    disagrees with its own total (hand-edited to clear the deployment bar, 2026-11-19)
+    is re-stated from the total, so every gate sees the realised number."""
+    n = int(prof.oos_trades or 0)
+    if n > 0 and abs(prof.oos_expectancy_r * n - prof.oos_total_r) > OOS_CONSISTENCY_TOL_R:
+        honest = prof.oos_total_r / n
+        logger.error(
+            "calibrated profile %s is inconsistent: oos_expectancy_r %+.4f x %d trades != oos_total_r %+.3f; "
+            "using %+.4fR", symbol, prof.oos_expectancy_r, n, prof.oos_total_r, honest,
+        )
+        prof.oos_expectancy_r = honest
+    return prof
 
 
 __all__ = [

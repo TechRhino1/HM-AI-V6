@@ -16,6 +16,13 @@ MAX_PORTFOLIO_RISK_PCT = 2.5          # Hard ceiling for total combined open mon
 # Used margin may not exceed this share of equity, counting the order being placed.
 MAX_MARGIN_UTILIZATION_PCT = 40.0
 
+
+def is_forward_test(item: Any) -> bool:
+    """True for a forward-test ("FT_") position or pending order (object or MT5 dict)."""
+    c = item.get("comment") if isinstance(item, dict) else getattr(item, "comment", "")
+    return str(c or "").startswith("FT_")
+
+
 class ExposureManager:
     def __init__(
         self,
@@ -80,7 +87,7 @@ class ExposureManager:
         target_canon = self.resolve_canonical(symbol)
         sym_positions = [
             p for p in open_positions
-            if self.resolve_canonical(getattr(p, "symbol", "")) == target_canon
+            if self.resolve_canonical(getattr(p, "symbol", "")) == target_canon and not is_forward_test(p)
         ]
 
         at_risk_count = 0
@@ -171,7 +178,7 @@ class ExposureManager:
         active_risk_positions = []
         # Forward-test ("FT_") positions run their own pre-registered book; they must not
         # use up the main engine's slots (2026-11-18: 4 FT trades filled all 4).
-        main_positions = [p for p in positions if not str(getattr(p, "comment", "") or "").startswith("FT_")]
+        main_positions = [p for p in positions if not is_forward_test(p)]
         for p in main_positions:
             side = getattr(p, "side", getattr(p, "type", "")).upper()
             sl = float(getattr(p, "sl", 0.0) or 0.0)
@@ -208,7 +215,8 @@ class ExposureManager:
             breaches.append(f"Max Concurrent Positions reached ({len(active_risk_positions)} active risk / {len(main_positions)} total >= {effective_max_open_positions} allowed).")
 
         # 2. Per-Symbol Exposure (Soft Limit = 1, Hard Limit = 2)
-        sym_positions = [p for p in positions if self.resolve_canonical(p.symbol) == target_canon]
+        # FT positions keep their own book: they count in portfolio risk, not in symbol slots.
+        sym_positions = [p for p in main_positions if self.resolve_canonical(p.symbol) == target_canon]
         symbol_count = len(sym_positions)
         at_risk_sym_count = self.get_active_risk_positions_for_symbol(symbol, positions)
         sym_has_derisked = at_risk_sym_count < symbol_count

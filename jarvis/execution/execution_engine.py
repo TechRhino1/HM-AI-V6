@@ -399,12 +399,9 @@ class ExecutionEngine:
 
             # Capital preservation: the minimum lot may not risk more than the
             # policy's min-lot ceiling (it was a hard-coded $12 under $500).
-            from jarvis.risk.account_tier import get_nano_risk_cap
+            from jarvis.risk.account_tier import min_lot_risk_cap
             min_lot_risk_usd = vol_min * executable_sl_dist * dollar_risk_per_price_unit
-            min_lot_cap_usd, min_lot_cap_pct = get_nano_risk_cap(account_equity, decision.symbol)
-            if ("XAU" in decision.symbol or "GOLD" in decision.symbol) and account_equity >= 250.0:
-                min_lot_cap_pct = max(min_lot_cap_pct, 3.50)
-                min_lot_cap_usd = account_equity * min_lot_cap_pct / 100.0
+            min_lot_cap_usd, min_lot_cap_pct = min_lot_risk_cap(account_equity, decision.symbol)
             if min_lot_risk_usd > min_lot_cap_usd + 1e-9:
                 logger.error(
                     f"🛑 EXECUTION BLOCKED for {decision.symbol}: Minimum lot {vol_min} would risk "
@@ -465,11 +462,8 @@ class ExecutionEngine:
             _vol_min = float(sym_spec.get("volume_min", 0.01) or 0.01)
             _vol_step = float(sym_spec.get("volume_step", 0.01) or 0.01)
             _risk_usd = executable_sl_dist * dollar_risk_per_price_unit * float(lots)
-            from jarvis.risk.account_tier import get_nano_risk_cap
-            _max_allowed_usd, _max_allowed_pct = get_nano_risk_cap(_equity, decision.symbol)
-            if ("XAU" in decision.symbol or "GOLD" in decision.symbol) and _equity >= 250.0:
-                _max_allowed_pct = max(_max_allowed_pct, 3.50)
-                _max_allowed_usd = _equity * (_max_allowed_pct / 100.0)
+            from jarvis.risk.account_tier import min_lot_risk_cap
+            _max_allowed_usd, _max_allowed_pct = min_lot_risk_cap(_equity, decision.symbol)
             # Risk policy: a broker-minimum lot may use the min-lot ceiling; any
             # larger size must fit the per-trade target.
             if float(lots) <= _vol_min + 1e-9:
