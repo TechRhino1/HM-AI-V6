@@ -712,6 +712,8 @@ class IntelligenceService:
     # ── GET ─────────────────────────────────────────────────────────────────
     def handle_get(self, path: str, query: Dict[str, List[str]], handler: Any) -> bool:
         try:
+            if path.startswith("/api/intelligence/auto-style"):
+                return self._get_auto_style(handler)
             if path.startswith("/api/intelligence/auto-selection"):
                 return self._get_auto_selection(query, handler)
             if path.startswith("/api/intelligence/missed-trades"):
@@ -735,6 +737,17 @@ class IntelligenceService:
             _json(handler, {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}, 500)
             return True
         return False
+
+    def _get_auto_style(self, handler: Any) -> bool:
+        """Last sweep's Trade Style AUTO verdicts (cached; never triggers a scan)."""
+        from jarvis.intelligence.auto_style import auto_style_live
+        orch = self.selection._get_orchestrator()
+        style = str(getattr(orch, "trade_style", "") or "").upper() if orch is not None else None
+        rows = list((getattr(orch, "_auto_decisions", None) or {}).values()) if orch is not None else []
+        _json(handler, {"active": style == "AUTO", "trade_style": style, "live": auto_style_live(),
+                        "orchestrator_attached": orch is not None,
+                        "symbols": sorted(rows, key=lambda r: ({"TRADE": 0, "VETO": 1}.get(r.get("action"), 2), r.get("symbol", "")))})
+        return True
 
     def _get_missed_trades(self, query: Dict[str, List[str]], handler: Any) -> bool:
         from jarvis.application.state_manager import GLOBAL_STATE

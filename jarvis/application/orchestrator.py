@@ -20,6 +20,7 @@ from jarvis.data.broker_symbols import terminal_live
 from jarvis.market.market_context import MarketContextEngine
 from jarvis.intelligence.regime_engine import MarketRegimeClassifier
 from jarvis.intelligence.opportunity_arbiter import UniversalOpportunityArbiter
+from jarvis.intelligence.auto_style import auto_style_live
 from jarvis.analysts.parallel_runner import ParallelAnalystCluster
 from jarvis.intelligence.decision_engine import DecisionEngine
 from jarvis.risk.risk_engine import RiskEngine
@@ -141,6 +142,7 @@ class JarvisOrchestrator:
 
         self.state_manager = GLOBAL_STATE
         self.state_manager.set_execution_mode(ExecutionMode(self.mode.upper()))
+        self.state_manager.set_trade_style(self.trade_style)  # UI shows the style the engine actually runs
         self.event_bus = GLOBAL_EVENT_BUS
 
         # Learning governance (2026-11-16): live trading uses the FROZEN active
@@ -237,6 +239,10 @@ class JarvisOrchestrator:
         self.order_manager = OrderManager(self.mt5_client)
         self.execution_engine = ExecutionEngine(self.mt5_client, self.state_manager)
         self.trade_memory = TradeMemory()
+        # Trade Style AUTO: per-symbol style/strategy pick + news verdict, refreshed each sweep.
+        from jarvis.intelligence.auto_style import AutoStyleSelector
+        self.auto_selector = AutoStyleSelector(self.trade_memory)
+        self._auto_decisions: Dict[str, Dict[str, Any]] = {}
         self.llm_controller = AutonomousLLMSystemController(state_manager=self.state_manager)
 
         self.state_synchronizer = MT5StateSynchronizer(self.mt5_client, self.state_manager, self.event_bus)
@@ -1751,8 +1757,15 @@ class JarvisOrchestrator:
             prev_reg = prev.get("prev")
             prev_persist = prev.get("persist", 0)
 
+        # AUTO live: last sweep's news BLOCK marks the regime EVENT_RISK, which the decision
+        # engine's existing hard gates already refuse.
+        _auto_news_block = (
+            (self.trade_style or "").upper() == "AUTO" and auto_style_live()
+            and ((getattr(self, "_auto_decisions", {}).get(symbol) or {}).get("news") or {}).get("state") == "BLOCK"
+        )
         regime = self.regime_classifier.classify_regime(
             context,
+            macro_news_risk=_auto_news_block,
             previous_regime=prev_reg,
             previous_persistence=prev_persist
         )
@@ -1880,7 +1893,7 @@ class JarvisOrchestrator:
             return s
 
         orch_style = (self.trade_style or "ALL").upper()
-        is_exec_style_match = (orch_style == "ALL") or (_normalize_style(active_trade_style) == _normalize_style(orch_style))
+        is_exec_style_match = (orch_style in ("ALL", "AUTO")) or (_normalize_style(active_trade_style) == _normalize_style(orch_style))
 
         positions = self.state_manager.positions
         _spec = _resolve_sym(symbol)
@@ -2424,6 +2437,50 @@ class JarvisOrchestrator:
         best_opportunity, ranked_candidates = self.opportunity_arbiter.rank_and_select_best(candidates)
         return best_opportunity, ranked_candidates, raw_results
 
+    def _apply_auto_style(self, ranked: List[Any]) -> List[Any]:
+        """Trade Style AUTO over one sweep: per symbol, pick the style/strategy with the best
+        utility x earned score and read the news verdict. Shadow (default) only records the
+        verdicts and returns `ranked` untouched; live keeps the picks the news doesn't veto and
+        scales their risk by the news size multiplier (which can only reduce it)."""
+        from jarvis.intelligence import news_risk
+        from jarvis.observability import decision_journal as _dj
+        live = auto_style_live()
+        keep: List[Any] = []
+        decisions: Dict[str, Dict[str, Any]] = {}
+        for sym in dict.fromkeys(c.symbol for c in ranked):
+            try:
+                sel = self.auto_selector.choose(sym, ranked)
+            except Exception as exc:
+                logger.warning("AUTO style selection failed for %s: %s", sym, exc)
+                sel = {"pick": None, "detail": {"reason": f"selection error: {exc}"}}
+            try:
+                news = news_risk.verdict(sym)
+            except Exception as exc:  # fail closed, like the news blackout
+                news = {"symbol": sym, "state": "BLOCK", "size_mult": 0.0, "blocked_directions": ["BUY", "SELL"],
+                        "ai_used": False, "reasons": [f"News check failed ({type(exc).__name__}); blocking"]}
+            pick = sel["pick"]
+            vetoed = pick is not None and pick.bias in news.get("blocked_directions", [])
+            action = "SKIP" if pick is None else "VETO" if vetoed else "TRADE"
+            decisions[sym] = {"symbol": sym, "action": action, "live": live, "pick": sel["detail"],
+                              "news": news, "updated": time.time()}
+            _dj.record_auto({"symbol": sym, "action": action, "live": live,
+                             "style": getattr(pick, "trade_style", None), "strategy": sel["detail"].get("strategy"),
+                             "bias": getattr(pick, "bias", None), "score": sel["detail"].get("score"),
+                             "news_state": news.get("state"), "size_mult": news.get("size_mult"),
+                             "blocked": news.get("blocked_directions"), "event": (news.get("event") or {}).get("event"),
+                             "ai_bias": (news.get("ai") or {}).get("bias")})
+            if live and action == "TRADE":
+                d = pick.decision_obj
+                if d is not None:
+                    d.governor_risk_mult = min(1.0, float(getattr(d, "governor_risk_mult", 1.0) or 1.0)
+                                               * float(news.get("size_mult", 1.0)))
+                keep.append(pick)
+        self._auto_decisions = decisions
+        if not live:
+            return ranked
+        kept = {id(c) for c in keep}
+        return [c for c in ranked if id(c) in kept]
+
     def _orchestration_loop_single_pass(self, dry_run: bool = False) -> List[Dict[str, Any]]:
         """Executes a single multi-style radar sweep across SWING, DAY_TRADING, and SCALP with Universal Opportunity Arbitration."""
         try:
@@ -2446,9 +2503,13 @@ class JarvisOrchestrator:
                 f"WinP={best_opportunity.win_prob:.0f}% | EV={best_opportunity.expected_value:.2f}R | Confluence={best_opportunity.confluence_score:.1f}"
             )
 
+        dispatch_candidates = ranked_candidates
+        if (self.trade_style or "").upper() == "AUTO" and ranked_candidates:
+            dispatch_candidates = self._apply_auto_style(ranked_candidates)
+
         # Autonomous Multi-Style Execution Dispatch over actionable ranked candidates
-        if ranked_candidates and not dry_run:
-            for candidate in ranked_candidates:
+        if dispatch_candidates and not dry_run:
+            for candidate in dispatch_candidates:
                 d_action = getattr(candidate.decision_obj, "decision", "") if candidate.decision_obj else ""
                 qg = getattr(candidate.decision_obj, "quality_gate", None) if candidate.decision_obj else None
                 raw_fails = getattr(qg, "failing_reasons", []) or []
@@ -2487,7 +2548,7 @@ class JarvisOrchestrator:
                 )
 
                 if not is_exec_ready:
-                    if candidate == ranked_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
+                    if candidate == dispatch_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
                         logger.info(
                             f"Arbiter selection {candidate.symbol} ({candidate.trade_style}) not exec-ready: "
                             f"action={d_action}, actionable={candidate.is_actionable}, grade={candidate.setup_grade}, "
