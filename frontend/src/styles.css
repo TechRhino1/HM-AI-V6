@@ -462,3 +462,37 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .spark-row { flex-wrap: wrap; }
   .pulse-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Overview charts (components/viz.tsx) */
+.gauge { width: 100%; max-width: 140px; display: block; margin: 0 auto; }
+.gauge-val { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--text); }
+.gauge-fill { transition: d 0.4s; }
+.gauge-cell { display: grid; justify-items: center; gap: 2px; text-align: center; font-size: 12.5px; min-width: 0; }
+.cbar { position: relative; height: 6px; border-radius: 99px; background: var(--surface-3); }
+.cbar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-2); }
+.cbar > i { position: absolute; top: 0; height: 100%; border-radius: 99px; transition: width 0.4s; }
+.waterfall { width: 100%; display: block; border-radius: var(--radius-sm); }
+.waterfall.clickable { cursor: pointer; }
+.waterfall.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.attn-head { padding: 10px 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent); background: var(--accent-soft); font-size: 13.5px; }
+.attn-head.down { border-color: var(--down); background: var(--down-soft); }
+.attn-head.warn { border-color: var(--warn); background: var(--warn-soft); }
+.attn-head.up { border-color: var(--up); background: var(--up-soft); }
+.attn-row { width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line); color: inherit; font: inherit; gap: 10px; }
+.widget-grid.dense { gap: 10px; }
+.widget-grid.dense .card-body:not(.flush), .widget-grid.dense .stat { padding: 10px 12px; }
+@media (max-width: 560px) { .gauges { grid-template-columns: repeat(3, minmax(0, 1fr)); } .gauge-cell { font-size: 11px; } }
+@media (prefers-reduced-motion: reduce) { .gauge-fill, .cbar > i { transition: none; } }
+
+/* Brief charts (features/overview/BriefCharts.tsx) */
+.dbars { display: grid; gap: 4px; }
+.dbar-row { display: grid; grid-template-columns: minmax(70px, 30%) 1fr 76px; align-items: center; gap: 8px; font-size: 12px; }
+.dbar-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.dbar-val { text-align: right; font-size: 11.5px; }
+.dbar-na { font-size: 11px; }
+.vixbar { position: relative; height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--up-soft), var(--warn-soft), var(--down-soft)); border: 1px solid var(--line); }
+.vixbar > i { position: absolute; top: -4px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: var(--text); }
+.smap { display: grid; gap: 4px; }
+.smap-svg { width: 100%; height: 30px; display: block; }
+.smap-key { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; }
+.smap-key i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: -6px; }

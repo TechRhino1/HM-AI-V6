@@ -32,7 +32,7 @@ export function Controls() {
   }).then(after);
 
   const setStyle = (trade_style: TradeStyle) => run(() => api.post<{ applied_to_orchestrator: boolean }>("/api/action/set_trade_style", { trade_style }), {
-    success: `Trade style set to ${trade_style.replace("_", " ").toLowerCase()}`,
+    success: `Trade style set to ${STYLES.find((s) => s.value === trade_style)?.label ?? trade_style}`,
   }).then(after);
 
   const toggleSafe = () => run(() => api.post("/api/action/toggle_safe_mode"), { success: telemetry.safe_mode ? "Safe mode off" : "Safe mode on" }).then(after);
@@ -59,6 +59,10 @@ export function Controls() {
           </Field>
           <Field label="Trade style">
             <Seg value={telemetry.trade_style as TradeStyle} onChange={setStyle} options={STYLES} full />
+            <div className="faint" style={{ fontSize: 12.5, marginTop: 6 }}>
+              {telemetry.trade_style === "AUTO" ? "Auto picks the best-earning style and strategy per symbol and checks the news first. See Signals › Auto picks."
+                : telemetry.trade_style === "ALL" ? "Every style can trade; the arbiter takes the best setup." : "Only this style can open trades."}
+            </div>
           </Field>
           <div className="row between">
             <div><b>Safe mode</b><div className="faint" style={{ fontSize: 12.5 }}>Stricter gates and smaller size while you watch the engine.</div></div>

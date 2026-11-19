@@ -9,6 +9,7 @@ import { Badge, Card, Empty, ErrorNote, Loading, Modal, Seg, sideTone } from "..
 import { ReasonList } from "../trade/EngineView";
 import { useDeployment } from "../analytics/useDeployment";
 import { MiniStat } from "../overview/Overview";
+import { AutoPicks } from "./AutoPicks";
 
 type Sort = "priority" | "win" | "rr" | "symbol";
 const ORDER = ["SCALP", "DAY_TRADING", "SWING", "H4_SWING", "D1_SWING"];
@@ -19,8 +20,8 @@ export default function Signals({ sub, go }: { sub: string; go: (r: string) => v
   const [tab, inspectSym] = sub.startsWith("inspect/") ? ["scanner", sub.slice(8)] : [sub || "scanner", ""];
   return (
     <>
-      <Seg value={tab} onChange={(v) => go(`signals/${v}`)} options={[{ value: "scanner", label: "Scanner" }, { value: "consensus", label: "AI consensus" }]} />
-      {tab === "consensus" ? <Consensus go={go} /> : <Scanner inspectSym={inspectSym} go={go} />}
+      <Seg value={tab} onChange={(v) => go(`signals/${v}`)} options={[{ value: "scanner", label: "Scanner" }, { value: "consensus", label: "AI consensus" }, { value: "auto", label: "Auto picks" }]} />
+      {tab === "consensus" ? <Consensus go={go} /> : tab === "auto" ? <AutoPicks go={go} /> : <Scanner inspectSym={inspectSym} go={go} />}
     </>
   );
 }

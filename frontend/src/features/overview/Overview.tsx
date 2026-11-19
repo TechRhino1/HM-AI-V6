@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { useStore } from "../../state/store";
-import { usePoll } from "../../lib/hooks";
-import { cleanSymbol, isNum, money, num, pct, signedMoney, tone } from "../../lib/format";
+import { useLocalStorage, usePoll } from "../../lib/hooks";
+import { cleanSymbol, isNum, money, num, parseTime, pct, signedMoney, tone } from "../../lib/format";
 import type { ClosedTrade } from "../../lib/types";
-import { Badge, Card, CardMenuCtx, Empty, ErrorNote, Loading, Meter, Stat } from "../../components/ui";
+import { Badge, Card, CardMenuCtx, Empty, ErrorNote, Loading, Stat } from "../../components/ui";
+import { CentredBar, Gauge, pushSample, Waterfall, waterfallSteps } from "../../components/viz";
 import { Icon } from "../../components/Icon";
 import { Explain } from "../../components/Explain";
 import { Today } from "./Today";
+import { Attention } from "./Attention";
 import { loadLayout, move, moveTo, resetLayout, saveLayout, setHidden, toggleSpan, WIDGETS, type WidgetId, type WidgetState } from "./layout";
-import { EquityDrill, MarketPulse, PositionsDrill, PositionsWidget, SinceLastLooked, TimelineWidget, TodayTradesDrill, WatchlistWidget } from "./Widgets";
+import { EquityDrill, MarketPulse, Sparkline, PositionsDrill, PositionsWidget, SinceLastLooked, TimelineWidget, TodayTradesDrill, WatchlistWidget } from "./Widgets";
 
 // The server has no definitions for the account guardrails; these are shown when it says so.
 const RISK_DEFS = {
@@ -18,6 +20,9 @@ const RISK_DEFS = {
   size_multiplier: "Factor applied to every new position size from the drawdown and heat rules; below 1 means positions are being scaled down.",
 };
 
+// Real equity readings seen this browser session (kept across page switches, lost on reload).
+const sessionEquity: { t: number; v: number }[] = [];
+
 export const pnlOf = (t: ClosedTrade) => (isNum(t.realized_pnl) ? t.realized_pnl : isNum(t.profit) ? t.profit : 0);
 /** /api/history also lists journal rows of still-open trades; only rows with an exit are closed. */
 export const isClosed = (t: ClosedTrade) => !!(t.closed_at || t.exit_time || t.exit_price);
@@ -26,7 +31,7 @@ export const isMeasured = (t: ClosedTrade) => isClosed(t) && (isNum(t.realized_p
 
 /** Home: customisable widgets (order, visibility, width saved per browser) over the account, risk, activity and markets. */
 export default function Overview({ go }: { sub: string; go: (r: string) => void }) {
-  const { telemetry, risk, setSymbol } = useStore();
+  const { telemetry, risk, setSymbol, askAI } = useStore();
   const acc = telemetry?.account;
   const ccy = acc?.currency || "USD";
   const today = usePoll<ClosedTrade[]>("/api/history?days=1&limit=500", 60000);
@@ -34,6 +39,12 @@ export default function Overview({ go }: { sub: string; go: (r: string) => void 
   const setLayout = (l: WidgetState[]) => { setLayoutState(l); saveLayout(l); };
   const [drill, setDrill] = useState<"equity" | "pnl" | "today" | null>(null);
   const [dragging, setDragging] = useState<WidgetId | null>(null);
+  const [dense, setDense] = useLocalStorage("hm.overview.dense", false);
+  const eqTs = telemetry?.timestamp, eqVal = acc?.equity;
+  const eqSeries = useMemo(() => {
+    if (isNum(eqVal)) pushSample(sessionEquity, Date.parse(eqTs || "") || Date.now(), eqVal);
+    return sessionEquity.map((p) => p.v);
+  }, [eqTs, eqVal]);
 
   const dayPnl = acc && risk?.daily_start_equity ? acc.equity - risk.daily_start_equity : undefined;
   const marginUsedPct = acc && acc.equity > 0 ? (acc.margin / acc.equity) * 100 : undefined;
@@ -41,14 +52,17 @@ export default function Overview({ go }: { sub: string; go: (r: string) => void 
 
   const body = (id: WidgetId) => {
     if (id === "today") return <Today go={go} />;
-    if (!telemetry && id !== "since" && id !== "timeline" && id !== "pulse" && id !== "kpis") return <Card title={WIDGETS[id]}><Loading rows={4} /></Card>;
+    if (!telemetry && id !== "since" && id !== "timeline" && id !== "pulse" && id !== "kpis" && id !== "attention") return <Card title={WIDGETS[id]}><Loading rows={4} /></Card>;
     switch (id) {
       case "kpis": return !telemetry ? <Loading rows={2} /> : (
         <div className="stack" style={{ gap: 10 }}>
           {!acc && <div className="alert warn">No broker account is synced yet. Check the MT5 connection in System.</div>}
           <div className="grid cols-4">
             <Stat label="Equity" icon="activity" value={money(acc?.equity, ccy)} hint={`Balance ${money(acc?.balance, ccy)} · curve ›`}
-              onClick={() => setDrill("equity")} title="Show the equity curve" />
+              onClick={() => setDrill("equity")} title="Show the equity curve">
+              {eqSeries.length >= 2 ? <Sparkline values={eqSeries} height={26} label={`Equity this session: ${eqSeries.length} readings since the page opened`} />
+                : <span className="faint spark-none">Equity trend starts after the next update</span>}
+            </Stat>
             <Stat label="Open P&L" value={signedMoney(acc?.profit, ccy)} tone={tone(acc?.profit)} onClick={() => setDrill("pnl")} title="Show open positions"
               hint={`${nPos} open position${nPos === 1 ? "" : "s"} ›`} />
             <Stat label="Today" value={signedMoney(dayPnl, ccy)} tone={tone(dayPnl)} onClick={() => setDrill("today")} title="Show today's trades"
@@ -57,12 +71,13 @@ export default function Overview({ go }: { sub: string; go: (r: string) => void 
               hint={isNum(marginUsedPct) ? `${pct(marginUsedPct, 2)} of equity used as margin · 1:${acc?.leverage || "—"}` : "—"} />
           </div>
         </div>);
+      case "attention": return <Attention go={go} />;
       case "since": return <SinceLastLooked />;
       case "positions": return <PositionsWidget go={go} />;
       case "timeline": return <TimelineWidget go={go} />;
       case "guardrails": return <Guardrails ccy={ccy} />;
       case "exposure": return <Exposure ccy={ccy} go={go} onSymbol={(s) => { setSymbol(s); go("trade"); }} />;
-      case "trades": return <TodayActivity trades={today.data} loading={today.loading} error={today.error} ccy={ccy} go={go} />;
+      case "trades": return <TodayActivity trades={today.data} loading={today.loading} error={today.error} ccy={ccy} go={go} onDrill={() => setDrill("today")} />;
       case "pulse": return <MarketPulse go={go} />;
       case "watchlist": return <WatchlistWidget go={go} />;
       case "hours": return <MarketHours />;
@@ -83,12 +98,14 @@ export default function Overview({ go }: { sub: string; go: (r: string) => void 
                 : hidden.map((w) => <button key={w.id} role="menuitem" onClick={(e) => { closeMenu(e); setLayout(setHidden(layout, w.id, false)); }}>{WIDGETS[w.id]}</button>)}
             </div>
           </details>
+          <button className="btn sm" aria-pressed={dense} onClick={() => setDense(!dense)}>{dense ? "Comfortable" : "Compact"}</button>
           <button className="btn sm" onClick={() => setLayoutState(resetLayout())}>Reset layout</button>
         </span>
       </div>
-      <div className="widget-grid">
+      <div className={`widget-grid ${dense ? "dense" : ""}`}>
         {visible.map((w, i) => {
-          const menu = <WidgetMenu w={w} first={i === 0} last={i === visible.length - 1} layout={layout} setLayout={setLayout} onDrag={setDragging} />;
+          const menu = <WidgetMenu w={w} first={i === 0} last={i === visible.length - 1} layout={layout} setLayout={setLayout} onDrag={setDragging}
+            onAsk={() => askAI(`Explain what my "${WIDGETS[w.id]}" widget on the Overview shows right now and anything I should notice.`)} />;
           return (
             <div key={w.id} className={`widget span-${w.span} ${dragging === w.id ? "dragging" : ""}`} data-widget={w.id}
               onDragOver={(e) => { if (dragging && dragging !== w.id) e.preventDefault(); }}
@@ -112,8 +129,8 @@ const closeOnEsc = (e: React.KeyboardEvent<HTMLDetailsElement>) => {
 };
 
 /** Per-widget controls: drag handle plus a keyboard-reachable menu (move, width, hide). */
-function WidgetMenu({ w, first, last, layout, setLayout, onDrag }: {
-  w: WidgetState; first: boolean; last: boolean; layout: WidgetState[]; setLayout: (l: WidgetState[]) => void; onDrag: (id: WidgetId | null) => void;
+function WidgetMenu({ w, first, last, layout, setLayout, onDrag, onAsk }: {
+  w: WidgetState; first: boolean; last: boolean; layout: WidgetState[]; setLayout: (l: WidgetState[]) => void; onDrag: (id: WidgetId | null) => void; onAsk: () => void;
 }) {
   const act = (fn: () => WidgetState[]) => (e: React.MouseEvent<HTMLButtonElement>) => { closeMenu(e); setLayout(fn()); };
   return (
@@ -134,6 +151,7 @@ function WidgetMenu({ w, first, last, layout, setLayout, onDrag }: {
           <button role="menuitem" disabled={last} onClick={act(() => move(layout, w.id, 1))}>Move down</button>
           <button role="menuitem" onClick={act(() => toggleSpan(layout, w.id))}>{w.span === 2 ? "Half width" : "Full width"}</button>
           <button role="menuitem" onClick={act(() => setHidden(layout, w.id, true))}>Hide</button>
+          <button role="menuitem" onClick={(e) => { closeMenu(e); onAsk(); }}>Ask AI about this</button>
         </div>
       </details>
     </span>
@@ -144,7 +162,6 @@ function Guardrails({ ccy }: { ccy: string }) {
   const { risk, riskError, reloadRisk } = useStore();
   if (!risk) return <Card title="Risk guardrails">{riskError ? <ErrorNote error={`Risk status unavailable: ${riskError}`} onRetry={reloadRisk} /> : <Loading />}</Card>;
   const dl = Math.max(0, risk.daily_loss_pct), dd = Math.max(0, risk.total_dd_pct);
-  const level = (v: number, max: number) => (v >= max * 0.8 ? "danger" : v >= max * 0.5 ? "warn" : "good");
   return (
     <Card title="Risk guardrails" sub="Limits the engine enforces before any new entry"
       actions={risk.allow_new_risk ? <Badge tone="up" dot>Accepting new risk</Badge> : <Badge tone="down" dot>New risk blocked</Badge>}>
@@ -153,17 +170,22 @@ function Guardrails({ ccy }: { ccy: string }) {
           <div className="alert down"><b>Circuit breaker active.</b> {risk.circuit_breaker_reason}
             {risk.circuit_breaker_cooldown_sec > 0 && ` · resumes in ${Math.ceil(risk.circuit_breaker_cooldown_sec / 60)} min`}</div>
         )}
-        <div className="stack" style={{ gap: 6 }}>
-          <div className="row between"><span>Daily loss<Explain metric="daily_loss" value={dl} fallback={RISK_DEFS.daily_loss} /></span><span className="mono">{pct(dl, 2)} / {pct(risk.max_daily_loss_pct, 0)}</span></div>
-          <Meter value={dl} max={risk.max_daily_loss_pct} tone={level(dl, risk.max_daily_loss_pct)} />
-        </div>
-        <div className="stack" style={{ gap: 6 }}>
-          <div className="row between"><span>Drawdown from peak {money(risk.peak_equity, ccy)}<Explain metric="drawdown" value={dd} fallback={RISK_DEFS.drawdown} /></span><span className="mono">{pct(dd, 2)} / {pct(risk.max_drawdown_pct, 0)}</span></div>
-          <Meter value={dd} max={risk.max_drawdown_pct} tone={level(dd, risk.max_drawdown_pct)} />
-        </div>
-        <div className="stack" style={{ gap: 6 }}>
-          <div className="row between"><span>Portfolio heat · {risk.portfolio_heat_zone}<Explain metric="portfolio_heat" value={risk.portfolio_heat_score} fallback={RISK_DEFS.portfolio_heat} /></span><span className="mono">{num(risk.portfolio_heat_score, 1)} / 100</span></div>
-          <Meter value={risk.portfolio_heat_score} tone={level(risk.portfolio_heat_score, 100)} />
+        <div className="grid cols-3 gauges" style={{ gap: 10 }}>
+          <div className="gauge-cell">
+            <Gauge value={dl} max={risk.max_daily_loss_pct} display={pct(dl, 2)} label="Daily loss" />
+            <span>Daily loss<Explain metric="daily_loss" value={dl} fallback={RISK_DEFS.daily_loss} /></span>
+            <span className="faint mono">limit {pct(risk.max_daily_loss_pct, 0)}</span>
+          </div>
+          <div className="gauge-cell">
+            <Gauge value={dd} max={risk.max_drawdown_pct} display={pct(dd, 2)} label="Drawdown from peak" />
+            <span>Drawdown<Explain metric="drawdown" value={dd} fallback={RISK_DEFS.drawdown} /></span>
+            <span className="faint mono" title={`Peak equity ${money(risk.peak_equity, ccy)}`}>limit {pct(risk.max_drawdown_pct, 0)}</span>
+          </div>
+          <div className="gauge-cell">
+            <Gauge value={risk.portfolio_heat_score} max={100} display={num(risk.portfolio_heat_score, 0)} label="Portfolio heat" />
+            <span>Heat · {risk.portfolio_heat_zone}<Explain metric="portfolio_heat" value={risk.portfolio_heat_score} fallback={RISK_DEFS.portfolio_heat} /></span>
+            <span className="faint mono">of 100</span>
+          </div>
         </div>
         <div className="grid cols-3" style={{ gap: 10 }}>
           <MiniStat label={<>Size multiplier<Explain metric="size_multiplier" value={risk.drawdown_multiplier * risk.heat_risk_multiplier} fallback={RISK_DEFS.size_multiplier} /></>} value={`${num(risk.drawdown_multiplier * risk.heat_risk_multiplier, 2)}×`} />
@@ -218,7 +240,7 @@ function Exposure({ ccy, go, onSymbol }: { ccy: string; go: (r: string) => void;
                     <Badge tone={net > 0 ? "up" : net < 0 ? "down" : "flat"}>{net > 0 ? "Net long" : net < 0 ? "Net short" : "Hedged"}</Badge>
                     <span className="faint">{num(r.long, 2)} long · {num(r.short, 2)} short · {r.n} trade{r.n > 1 ? "s" : ""}</span>
                   </div>
-                  <div className="meter"><i style={{ width: `${(Math.abs(net) / maxLots) * 100}%`, background: net >= 0 ? "var(--up)" : "var(--down)" }} /></div>
+                  <CentredBar frac={net / maxLots} tone={net >= 0 ? "up" : "down"} />
                 </div>
                 <span className={`mono ${tone(r.pnl)}`} style={{ width: 90, textAlign: "right" }}>{signedMoney(r.pnl, ccy)}</span>
               </div>
@@ -230,23 +252,28 @@ function Exposure({ ccy, go, onSymbol }: { ccy: string; go: (r: string) => void;
   );
 }
 
-function TodayActivity({ trades, loading, error, ccy, go }: { trades?: ClosedTrade[]; loading: boolean; error: string | null; ccy: string; go: (r: string) => void }) {
+function TodayActivity({ trades, loading, error, ccy, go, onDrill }: { trades?: ClosedTrade[]; loading: boolean; error: string | null; ccy: string; go: (r: string) => void; onDrill: () => void }) {
   const s = useMemo(() => {
-    const list = (Array.isArray(trades) ? trades : []).filter(isMeasured);
+    const closedAt = (t: ClosedTrade) => parseTime(t.closed_at || t.exit_time || t.timestamp)?.getTime() ?? 0;
+    const list = (Array.isArray(trades) ? trades : []).filter(isMeasured).sort((a, b) => closedAt(a) - closedAt(b));
     const pnls = list.map(pnlOf);
     const wins = pnls.filter((p) => p > 0).length;
     const net = pnls.reduce((a, b) => a + b, 0);
-    return { n: list.length, wins, net, best: pnls.length ? Math.max(...pnls) : undefined, worst: pnls.length ? Math.min(...pnls) : undefined };
+    const steps = waterfallSteps(list.map((t) => ({ label: `${cleanSymbol(t.symbol)} #${t.ticket}`, pnl: pnlOf(t) })));
+    return { n: list.length, wins, net, steps, best: pnls.length ? Math.max(...pnls) : undefined, worst: pnls.length ? Math.min(...pnls) : undefined };
   }, [trades]);
   return (
     <Card title="Today's closed trades" sub="Last 24 hours, from the trade journal"
       actions={<button className="btn sm" onClick={() => go("portfolio/history")}>Open journal</button>}>
       {error && !trades ? <ErrorNote error={error} /> : loading && !trades ? <Loading /> : !s.n ? <Empty title="No trades closed today" icon="clock" /> : (
+        <div className="stack" style={{ gap: 10 }}>
+        <Waterfall steps={s.steps} fmt={(v) => signedMoney(v, ccy)} onPick={onDrill} />
         <div className="grid cols-2" style={{ gap: 10 }}>
           <MiniStat label="Trades" value={`${s.n} (${s.wins} won)`} />
           <MiniStat label="Win rate" value={pct((s.wins / s.n) * 100, 0)} />
           <MiniStat label="Net realised" value={signedMoney(s.net, ccy)} valueClass={tone(s.net)} />
           <MiniStat label="Best / worst" value={`${signedMoney(s.best, ccy)} / ${signedMoney(s.worst, ccy)}`} />
+        </div>
         </div>
       )}
     </Card>

@@ -24,10 +24,13 @@ def test_swing_blocked_by_day():
     assert faster_style_conflict({"DAY_TRADING": ("SELL", NOW - 60)}, "SWING", "BUY", NOW)
 
 
-def test_btcusd_trend_following_banned():
+def test_btcusd_trend_following_allowed_breakout_banned():
+    # c3ac298 (2026-11-19) unbanned TREND_FOLLOWING on BTCUSD on purpose; the timeframe
+    # backstop above, not a strategy ban, is what guards against #995648912 now.
     cfg = get_symbol_profile_config("BTCUSD")
-    assert "TREND_FOLLOWING" in cfg.banned_strategies
-    assert cfg.strategy_weights["TREND_FOLLOWING"] == 0.0
+    assert "TREND_FOLLOWING" not in cfg.banned_strategies
+    assert cfg.strategy_weights["TREND_FOLLOWING"] > 0.0
+    assert "BREAKOUT_EXPANSION" in cfg.banned_strategies
 
 
 def test_htf_consensus_overrides_scalp_pullback_read():
@@ -49,3 +52,14 @@ def test_counter_trend_entry_against_htf_consensus_blocked():
     why = faster_style_conflict(votes, "SCALP", "BUY", NOW)
     assert "higher timeframes" in why
     assert not faster_style_conflict(votes, "SCALP", "SELL", NOW)
+
+
+def test_faster_wait_read_does_not_block_slower_entry():
+    # XAUUSD 2026-11-19: a SCALP BUY that was only a WAIT vetoed 108 authorized H4 SELLs.
+    assert not faster_style_conflict({"SCALP": ("BUY", NOW - 20, False)}, "H4_SWING", "SELL", NOW)
+    assert faster_style_conflict({"SCALP": ("BUY", NOW - 20, True)}, "H4_SWING", "SELL", NOW)
+
+
+def test_wait_reads_still_count_toward_htf_consensus():
+    votes = {"SWING": ("SELL", NOW - 30, False), "H4_SWING": ("SELL", NOW - 30, False)}
+    assert "higher timeframes" in faster_style_conflict(votes, "SCALP", "BUY", NOW)

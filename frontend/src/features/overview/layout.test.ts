@@ -44,8 +44,8 @@ describe("overview layout", () => {
   });
 
   it("moves skip hidden widgets and stop at the ends", () => {
-    let l = setHidden(DEFAULT_LAYOUT, "kpis", true);
-    l = move(l, "since", -1);                       // jumps over hidden kpis to before today
+    let l = setHidden(setHidden(DEFAULT_LAYOUT, "kpis", true), "attention", true);
+    l = move(l, "since", -1);                       // jumps over hidden attention + kpis to before today
     expect(ids(l).slice(0, 3)).toEqual(["since", "today", "kpis"]);
     expect(move(l, "since", -1)).toBe(l);
     const last = ids(l)[l.length - 1] as any;

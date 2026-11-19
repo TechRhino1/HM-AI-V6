@@ -26,6 +26,11 @@ class TestTradeStyleAPI(unittest.TestCase):
         snap = self.state_mgr.get_state_snapshot()
         self.assertEqual(snap["trade_style"], "SWING")
 
+    def test_state_manager_keeps_all_and_auto(self):
+        for style in ("ALL", "AUTO"):
+            self.state_mgr.set_trade_style(style)
+            self.assertEqual(self.state_mgr.get_state_snapshot()["trade_style"], style)
+
     def test_mtf_data_feed_styles(self):
         feed = DataFeedEngine()
         

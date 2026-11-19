@@ -99,10 +99,11 @@ def get_current_stored_state(db_full_path: str):
     return None
 
 
-def append_flat_audit_log(record: str):
-    """Appends audit string to data/drawdown_audit.log as secondary flat-file redundancy."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    audit_file = os.path.join(DATA_DIR, "drawdown_audit.log")
+def append_flat_audit_log(record: str, directory: str = DATA_DIR):
+    """Appends audit string to drawdown_audit.log beside the re-anchored DB (data/ for the live
+    one), so a test re-anchoring a temp DB no longer writes into the real audit trail."""
+    os.makedirs(directory, exist_ok=True)
+    audit_file = os.path.join(directory, "drawdown_audit.log")
     with open(audit_file, "a", encoding="utf-8") as f:
         f.write(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}] {record}\n")
 
@@ -199,7 +200,8 @@ def reanchor_drawdown_baseline(
     append_flat_audit_log(
         f"REANCHOR_DRAWDOWN: AuditId=#{audit_row_id}, Token={confirmation_token}, Operator='{operator}', "
         f"Account=#{login} ({server}), PrevPeak=${stored_peak:.2f}, "
-        f"NewPeak=${target_equity:.2f}, PrevDD={current_dd_pct:.2f}%, Reason='{reason}'"
+        f"NewPeak=${target_equity:.2f}, PrevDD={current_dd_pct:.2f}%, Reason='{reason}'",
+        directory=os.path.dirname(os.path.abspath(db_path)),
     )
 
     guard = DrawdownGuard(db_path=db_path)

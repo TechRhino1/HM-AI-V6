@@ -334,6 +334,32 @@ def test_startup_reconciliation_leaves_unknown_rows_unresolved(monkeypatch):
     orch._on_trade_closed.assert_not_called()
 
 
+def test_startup_reconciliation_resolves_order_ticket_rows(monkeypatch):
+    # Legacy rows hold the ORDER ticket; the position id comes from the order history.
+    import sys
+
+    deal = SimpleNamespace(profit=-3.0, swap=0.0, commission=0.0, entry=1, price=1.08, symbol="EURUSD")
+    fake_mt5 = SimpleNamespace(
+        history_deals_get=lambda position=None: [deal] if position == 900 else [],
+        history_orders_get=lambda ticket=None: [SimpleNamespace(position_id=900)] if ticket == 44 else [],
+    )
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+    orch = object.__new__(JarvisOrchestrator)
+    orch.mode = "demo"
+    orch.mt5_client = SimpleNamespace(
+        get_open_positions=lambda: [],
+        get_account_snapshot=lambda: SimpleNamespace(equity=500.0, balance=500.0),
+    )
+    orch.state_synchronizer = SimpleNamespace(_last_position_tickets=None, _last_position_volumes=None)
+    orch.trade_memory = MagicMock()
+    orch.trade_memory.fetch_all_trades.return_value = [
+        {"ticket": 44, "symbol": "EURUSD", "type": "BUY", "exit_price": None, "pnl": None},
+    ]
+    orch._on_trade_closed = MagicMock()
+    orch._reconcile_positions_closed_while_down()
+    assert orch._on_trade_closed.call_args.args[0]["pnl"] == -3.0
+
+
 # ── manual-order gate ──────────────────────────────────────────────────────
 
 def test_manual_order_ceiling_rejects_oversized_stop():

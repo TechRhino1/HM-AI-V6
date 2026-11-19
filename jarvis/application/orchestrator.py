@@ -20,9 +20,11 @@ from jarvis.data.broker_symbols import terminal_live
 from jarvis.market.market_context import MarketContextEngine
 from jarvis.intelligence.regime_engine import MarketRegimeClassifier
 from jarvis.intelligence.opportunity_arbiter import UniversalOpportunityArbiter
+from jarvis.intelligence.auto_style import auto_style_live
 from jarvis.analysts.parallel_runner import ParallelAnalystCluster
 from jarvis.intelligence.decision_engine import DecisionEngine
 from jarvis.risk.risk_engine import RiskEngine
+from jarvis.risk.exposure import is_forward_test
 from jarvis.execution.mt5_client import MT5Client
 from jarvis.execution.state_synchronizer import MT5StateSynchronizer
 from jarvis.execution.execution_engine import ExecutionEngine
@@ -74,14 +76,22 @@ def faster_style_conflict(biases: Dict[str, tuple], style: str, bias: Optional[s
     rank = STYLE_SPEED.get((style or "").upper())
     if rank is None or bias not in ("BUY", "SELL"):
         return ""
-    fresh = {o: b for o, (b, ts) in biases.items()
-             if o in STYLE_SPEED and o != style and b in ("BUY", "SELL") and now - ts <= STYLE_CONFLICT_WINDOW_SEC}
+    # A vote is (bias, ts) or (bias, ts, actionable). Only an actionable (EXECUTE) read of a
+    # faster style can block: a faster WAIT is not a trade and re-votes every ~12s, which
+    # deadlocked XAUUSD (2026-11-19: 108 authorized H4 SELLs vetoed by a SCALP BUY WAIT).
+    fresh, actionable = {}, set()
+    for o, vote in biases.items():
+        b, ts = vote[0], vote[1]
+        if o in STYLE_SPEED and o != style and b in ("BUY", "SELL") and now - ts <= STYLE_CONFLICT_WINDOW_SEC:
+            fresh[o] = b
+            if len(vote) < 3 or vote[2]:
+                actionable.add(o)
     slower_with = [o for o, b in fresh.items() if STYLE_SPEED[o] > rank and b == bias]
     slower_against = [o for o, b in fresh.items() if STYLE_SPEED[o] > rank and b != bias]
     if len(slower_against) >= HTF_CONSENSUS_MIN and len(slower_against) > len(slower_with):
         return f"higher timeframes {','.join(sorted(slower_against))} resolved against {bias}; {style} {bias} blocked"
     for other, b in fresh.items():
-        if STYLE_SPEED[other] < rank and b != bias:
+        if STYLE_SPEED[other] < rank and b != bias and other in actionable:
             backing = [o for o, ob in fresh.items() if STYLE_SPEED[o] > STYLE_SPEED[other] and ob == bias]
             if len(backing) < HTF_CONSENSUS_MIN:
                 return f"{other} engine resolved {b} {int(now - biases[other][1])}s ago; {style} {bias} blocked"
@@ -141,6 +151,7 @@ class JarvisOrchestrator:
 
         self.state_manager = GLOBAL_STATE
         self.state_manager.set_execution_mode(ExecutionMode(self.mode.upper()))
+        self.state_manager.set_trade_style(self.trade_style)  # UI shows the style the engine actually runs
         self.event_bus = GLOBAL_EVENT_BUS
 
         # Learning governance (2026-11-16): live trading uses the FROZEN active
@@ -225,6 +236,9 @@ class JarvisOrchestrator:
         # Demo-only trend router: the 11 components that passed the edge tests (forward_tests/trend_router.py).
         from jarvis.forward_tests.trend_router import build as _build_trend_router
         self.research_leads += _build_trend_router(self)
+        # Demo-only session leads (ORB / anchored VWAP); empty until research clears them (session_leads.py).
+        from jarvis.forward_tests.session_leads import build as _build_session_leads
+        self.research_leads += _build_session_leads(self)
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()
@@ -237,6 +251,10 @@ class JarvisOrchestrator:
         self.order_manager = OrderManager(self.mt5_client)
         self.execution_engine = ExecutionEngine(self.mt5_client, self.state_manager)
         self.trade_memory = TradeMemory()
+        # Trade Style AUTO: per-symbol style/strategy pick + news verdict, refreshed each sweep.
+        from jarvis.intelligence.auto_style import AutoStyleSelector
+        self.auto_selector = AutoStyleSelector(self.trade_memory)
+        self._auto_decisions: Dict[str, Dict[str, Any]] = {}
         self.llm_controller = AutonomousLLMSystemController(state_manager=self.state_manager)
 
         self.state_synchronizer = MT5StateSynchronizer(self.mt5_client, self.state_manager, self.event_bus)
@@ -468,20 +486,40 @@ class JarvisOrchestrator:
         equity = float(getattr(account, "equity", 0.0) or 0.0)
         balance = float(getattr(account, "balance", equity) or equity)
 
+        def _deals_for(ticket: int, row: dict) -> list:
+            # Legacy rows store the ORDER ticket, not the position id; resolve it
+            # through the order history before giving up.
+            ids = [ticket]
+            try:
+                if row.get("position_id"):
+                    ids.insert(0, int(row["position_id"]))
+            except (TypeError, ValueError):
+                pass
+            for pid in dict.fromkeys(ids):
+                deals = mt5.history_deals_get(position=pid) or []
+                if deals:
+                    return list(deals)
+            orders_get = getattr(mt5, "history_orders_get", None)
+            for o in (orders_get(ticket=ticket) if orders_get else None) or []:
+                pid = int(getattr(o, "position_id", 0) or 0)
+                if pid and pid not in ids:
+                    deals = mt5.history_deals_get(position=pid) or []
+                    if deals:
+                        return list(deals)
+            return []
+
         reconciled = 0
+        unresolved = []
         for ticket, row in stale:
             try:
                 lock = getattr(client, "_shared_lock", None)
                 if lock is not None:
                     with lock:
-                        deals = mt5.history_deals_get(position=ticket) or []
+                        deals = _deals_for(ticket, row)
                 else:
-                    deals = mt5.history_deals_get(position=ticket) or []
+                    deals = _deals_for(ticket, row)
                 if not deals:
-                    logger.warning(
-                        "Startup reconciliation: journal row #%s is not open at the "
-                        "broker and has no deal history; leaving it unresolved.", ticket,
-                    )
+                    unresolved.append(ticket)
                     continue
                 total_pnl = sum(
                     float(getattr(d, "profit", 0.0) or 0.0)
@@ -511,6 +549,14 @@ class JarvisOrchestrator:
 
         if reconciled:
             logger.warning("Startup reconciliation recovered %d trade(s) closed during downtime.", reconciled)
+        if unresolved:
+            # One line, not one per row: these tickets are outside this account's deal
+            # history (other account, or pre-history) and repeat on every start.
+            logger.warning(
+                "Startup reconciliation: %d journal row(s) not open at the broker and with no "
+                "deal history; left unresolved (e.g. #%s).", len(unresolved),
+                ", #".join(str(t) for t in unresolved[:5]),
+            )
 
     def start(self):
         """Starts the full HM Algo 2.0 engine, background workers, and watchdog supervisor."""
@@ -531,6 +577,12 @@ class JarvisOrchestrator:
             self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="jarvis_watchdog")
             self._watchdog_thread.start()
             logger.info("HM Algo 2.0 Orchestrator and Watchdog started.")
+
+    @staticmethod
+    def _journal_skip(symbol: str, style: str, reason: str) -> None:
+        from jarvis.observability import decision_journal
+        decision_journal.record({"symbol": symbol, "trade_style": style, "decision": None,
+                                 "authorized": False, "auth_reason": reason})
 
     def _release_stale_execution_locks(self, now: float) -> list:
         """Free execution locks CLAIMED more than 60 s ago (a hung dispatch)."""
@@ -1261,8 +1313,9 @@ class JarvisOrchestrator:
         """This symbol's calibrated profile, or None when none applies."""
         if not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
-        if self._wr_profiles is None:
-            self._wr_profiles = load_profiles()
+        first = self._wr_profiles is None
+        self._wr_profiles = load_profiles()  # mtime-cached: recalibrations apply without a restart
+        if first:
             logger.info(
                 "calibrated entry policy ACTIVE: %d symbol profiles loaded",
                 len(self._wr_profiles),
@@ -1576,6 +1629,7 @@ class JarvisOrchestrator:
                             auth_msg = f"PROFILE_SESSION_WINDOW: {symbol} trades {_w_start:02d}:00-{_w_end:02d}:00 UTC only; session window closed"
                             hold_dec = self._make_hold_decision(symbol, auth_msg, strategy="SESSION_WINDOW")
                             self.state_manager.record_decision(symbol, hold_dec)
+                            self._journal_skip(symbol, active_trade_style, auth_msg)  # else these skips are invisible
                             return {
                                 "symbol": symbol,
                                 "trade_style": active_trade_style,
@@ -1614,6 +1668,7 @@ class JarvisOrchestrator:
                     DECISION_EVALUATIONS.inc(style=active_trade_style, outcome="refused")
                     hold_dec = self._make_hold_decision(symbol, auth_msg, strategy="DAILY_ENTRY_CAP")
                     self.state_manager.record_decision(symbol, hold_dec)
+                    self._journal_skip(symbol, active_trade_style, auth_msg)  # else these skips are invisible
                     return {
                         "symbol": symbol,
                         "trade_style": active_trade_style,
@@ -1751,8 +1806,15 @@ class JarvisOrchestrator:
             prev_reg = prev.get("prev")
             prev_persist = prev.get("persist", 0)
 
+        # AUTO live: last sweep's news BLOCK marks the regime EVENT_RISK, which the decision
+        # engine's existing hard gates already refuse.
+        _auto_news_block = (
+            (self.trade_style or "").upper() == "AUTO" and auto_style_live()
+            and ((getattr(self, "_auto_decisions", {}).get(symbol) or {}).get("news") or {}).get("state") == "BLOCK"
+        )
         regime = self.regime_classifier.classify_regime(
             context,
+            macro_news_risk=_auto_news_block,
             previous_regime=prev_reg,
             previous_persistence=prev_persist
         )
@@ -1880,7 +1942,7 @@ class JarvisOrchestrator:
             return s
 
         orch_style = (self.trade_style or "ALL").upper()
-        is_exec_style_match = (orch_style == "ALL") or (_normalize_style(active_trade_style) == _normalize_style(orch_style))
+        is_exec_style_match = (orch_style in ("ALL", "AUTO")) or (_normalize_style(active_trade_style) == _normalize_style(orch_style))
 
         positions = self.state_manager.positions
         _spec = _resolve_sym(symbol)
@@ -1970,11 +2032,11 @@ class JarvisOrchestrator:
         # Anti-Clustering Rule: Prevent stacking multiple simultaneous orders on same asset
         active_sym_positions = [
             p for p in positions if (p.symbol == symbol or (symbol == "XAUUSD" and "GOLD" in p.symbol)
-                                      or canonical_sym in p.symbol.upper())
+                                      or canonical_sym in p.symbol.upper()) and not is_forward_test(p)
         ]
         all_pending_orders = self.mt5_client.get_pending_orders() if hasattr(self.mt5_client, "get_pending_orders") else []
         active_sym_pending = [
-            o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == symbol) or (symbol == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper())
+            o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == symbol) or (symbol == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper()) and not is_forward_test(o)
         ]
 
         # Asian Pre-Market Blackout Rule (00:00 to 06:00 UTC) & Rollover Spread Window (21:00 to 23:00 UTC)
@@ -2212,7 +2274,7 @@ class JarvisOrchestrator:
         # Only a read that passed the quality bar votes; a NO_TRADE read clears this style's vote.
         _votes = self._style_bias.setdefault(canonical_sym, {})
         if getattr(decision, "bias", None) in ("BUY", "SELL") and decision.decision in ("EXECUTE", "WAIT"):
-            _votes[active_trade_style] = (decision.bias, time.time())
+            _votes[active_trade_style] = (decision.bias, time.time(), decision.decision == "EXECUTE")
         else:
             _votes.pop(active_trade_style, None)
 
@@ -2424,6 +2486,50 @@ class JarvisOrchestrator:
         best_opportunity, ranked_candidates = self.opportunity_arbiter.rank_and_select_best(candidates)
         return best_opportunity, ranked_candidates, raw_results
 
+    def _apply_auto_style(self, ranked: List[Any]) -> List[Any]:
+        """Trade Style AUTO over one sweep: per symbol, pick the style/strategy with the best
+        utility x earned score and read the news verdict. Shadow (default) only records the
+        verdicts and returns `ranked` untouched; live keeps the picks the news doesn't veto and
+        scales their risk by the news size multiplier (which can only reduce it)."""
+        from jarvis.intelligence import news_risk
+        from jarvis.observability import decision_journal as _dj
+        live = auto_style_live()
+        keep: List[Any] = []
+        decisions: Dict[str, Dict[str, Any]] = {}
+        for sym in dict.fromkeys(c.symbol for c in ranked):
+            try:
+                sel = self.auto_selector.choose(sym, ranked)
+            except Exception as exc:
+                logger.warning("AUTO style selection failed for %s: %s", sym, exc)
+                sel = {"pick": None, "detail": {"reason": f"selection error: {exc}"}}
+            try:
+                news = news_risk.verdict(sym)
+            except Exception as exc:  # fail closed, like the news blackout
+                news = {"symbol": sym, "state": "BLOCK", "size_mult": 0.0, "blocked_directions": ["BUY", "SELL"],
+                        "ai_used": False, "reasons": [f"News check failed ({type(exc).__name__}); blocking"]}
+            pick = sel["pick"]
+            vetoed = pick is not None and pick.bias in news.get("blocked_directions", [])
+            action = "SKIP" if pick is None else "VETO" if vetoed else "TRADE"
+            decisions[sym] = {"symbol": sym, "action": action, "live": live, "pick": sel["detail"],
+                              "news": news, "updated": time.time()}
+            _dj.record_auto({"symbol": sym, "action": action, "live": live,
+                             "style": getattr(pick, "trade_style", None), "strategy": sel["detail"].get("strategy"),
+                             "bias": getattr(pick, "bias", None), "score": sel["detail"].get("score"),
+                             "news_state": news.get("state"), "size_mult": news.get("size_mult"),
+                             "blocked": news.get("blocked_directions"), "event": (news.get("event") or {}).get("event"),
+                             "ai_bias": (news.get("ai") or {}).get("bias")})
+            if live and action == "TRADE":
+                d = pick.decision_obj
+                if d is not None:
+                    d.governor_risk_mult = min(1.0, float(getattr(d, "governor_risk_mult", 1.0) or 1.0)
+                                               * float(news.get("size_mult", 1.0)))
+                keep.append(pick)
+        self._auto_decisions = decisions
+        if not live:
+            return ranked
+        kept = {id(c) for c in keep}
+        return [c for c in ranked if id(c) in kept]
+
     def _orchestration_loop_single_pass(self, dry_run: bool = False) -> List[Dict[str, Any]]:
         """Executes a single multi-style radar sweep across SWING, DAY_TRADING, and SCALP with Universal Opportunity Arbitration."""
         try:
@@ -2446,9 +2552,13 @@ class JarvisOrchestrator:
                 f"WinP={best_opportunity.win_prob:.0f}% | EV={best_opportunity.expected_value:.2f}R | Confluence={best_opportunity.confluence_score:.1f}"
             )
 
+        dispatch_candidates = ranked_candidates
+        if (self.trade_style or "").upper() == "AUTO" and ranked_candidates:
+            dispatch_candidates = self._apply_auto_style(ranked_candidates)
+
         # Autonomous Multi-Style Execution Dispatch over actionable ranked candidates
-        if ranked_candidates and not dry_run:
-            for candidate in ranked_candidates:
+        if dispatch_candidates and not dry_run:
+            for candidate in dispatch_candidates:
                 d_action = getattr(candidate.decision_obj, "decision", "") if candidate.decision_obj else ""
                 qg = getattr(candidate.decision_obj, "quality_gate", None) if candidate.decision_obj else None
                 raw_fails = getattr(qg, "failing_reasons", []) or []
@@ -2487,7 +2597,7 @@ class JarvisOrchestrator:
                 )
 
                 if not is_exec_ready:
-                    if candidate == ranked_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
+                    if candidate == dispatch_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
                         logger.info(
                             f"Arbiter selection {candidate.symbol} ({candidate.trade_style}) not exec-ready: "
                             f"action={d_action}, actionable={candidate.is_actionable}, grade={candidate.setup_grade}, "
@@ -2625,11 +2735,11 @@ class JarvisOrchestrator:
 
                 active_sym_positions = [
                     p for p in positions if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol)
-                                              or canonical_sym in p.symbol.upper())
+                                              or canonical_sym in p.symbol.upper()) and not is_forward_test(p)
                 ]
                 all_pending_orders = self.mt5_client.get_pending_orders() if hasattr(self.mt5_client, "get_pending_orders") else []
                 active_sym_pending = [
-                    o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == sym) or (sym == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper())
+                    o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == sym) or (sym == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper()) and not is_forward_test(o)
                 ]
 
                 def _sar_pre_authorize(sim_positions: List[Any]) -> bool:
@@ -2640,6 +2750,7 @@ class JarvisOrchestrator:
                     sim_sym_count = sum(
                         1 for p in sim_positions
                         if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol) or canonical_sym in p.symbol.upper())
+                        and not is_forward_test(p)
                     )
                     if (sim_sym_count + len(active_sym_pending)) >= 2:
                         return False

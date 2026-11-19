@@ -1122,7 +1122,7 @@ class DecisionEngine:
 
             if adx_val < min_crypto_adx and not has_choch and not has_sweep:
                 crypto_macro_trend_valid = False
-            elif confluence_count < 2 or ai_score < 75.0:
+            elif confluence_count < 1 or ai_score < 60.0:
                 crypto_macro_trend_valid = False
             # Premature Entry Guard (SMC/ICT §4.1): In ranges or scalps, allow entry on sweep, discount/equilibrium, choch, breakout expansion, or candlestick pattern
             elif "SCALP" in t_style_check or "DAY" in t_style_check:
@@ -1231,7 +1231,7 @@ class DecisionEngine:
         # 12. High-Beta Crypto (SOLUSD) Confluence Guard
         sol_confluence_valid = True
         if "SOL" in sym_name:
-            if confluence_count < 2 or ai_score < 75.0:
+            if confluence_count < 1 or ai_score < 60.0:
                 sol_confluence_valid = False
 
         # 13. US30 Industrial Index Confluence Guard
@@ -1314,10 +1314,12 @@ class DecisionEngine:
         if honest_base_rate is not None and isinstance(honest_base_rate, HonestBaseRate):
             hbr = honest_base_rate
             if hbr.n >= 10:
-                min_wr = max(0.50, hbr.win_rate - 0.02)
+                # Dynamic floor based on breakeven hurdle for the target risk:reward
+                be_hurdle = 1.0 / (1.0 + max(1.0, rr_ratio))
+                min_wr = max(be_hurdle, hbr.win_rate - 0.05)
                 honest_base_rate_ok = final_win_p >= min_wr
                 if not honest_base_rate_ok:
-                    logger.warning(f"[{context.symbol}] Honest base rate gate FAILED: final_win_p={final_win_p:.2f} < min_honest_wr={min_wr:.2f} (honest wr={hbr.win_rate:.1%}, n={hbr.n})")
+                    logger.warning(f"[{context.symbol}] Honest base rate gate FAILED: final_win_p={final_win_p:.2f} < min_honest_wr={min_wr:.2f} (honest wr={hbr.win_rate:.1%}, n={hbr.n}, be_hurdle={be_hurdle:.2f})")
             else:
                 logger.debug(f"[{context.symbol}] Honest base rate n={hbr.n} < 10, gate skipped")
         else:
@@ -2223,17 +2225,25 @@ class DecisionEngine:
                         logger.info(
                             "Metals veto: out-of-killzone %02d:00 UTC", h_gate
                         )
-            # 2. Pure Discount/Premium for Metals:
-            if tentative_bias == "BUY" and st.discount_premium_zone not in ("DISCOUNT", "EQUILIBRIUM") and not has_choch_rev:
+            # 2. Pure Discount/Premium for Metals (with trend expansion exception):
+            is_bull_expansion = (
+                regime.primary_regime in (MarketRegime.BREAKOUT, MarketRegime.STRONG_TREND_BULL)
+                or (best_strategy == "TREND_FOLLOWING" and ai_score >= 65.0)
+            )
+            is_bear_expansion = (
+                regime.primary_regime in (MarketRegime.BREAKOUT, MarketRegime.STRONG_TREND_BEAR)
+                or (best_strategy == "TREND_FOLLOWING" and ai_score >= 65.0)
+            )
+            if tentative_bias == "BUY" and st.discount_premium_zone not in ("DISCOUNT", "EQUILIBRIUM") and not has_choch_rev and not is_bull_expansion:
                 gate_passed = False
                 gate_policy_decision = "BLOCK"
                 failing_reasons.append("Metals Premium/Discount Discipline")
-                logger.info("Metals veto: BUY requires deep DISCOUNT")
-            elif tentative_bias == "SELL" and st.discount_premium_zone not in ("PREMIUM", "EQUILIBRIUM") and not has_choch_rev:
+                logger.info("Metals veto: BUY requires deep DISCOUNT or strong expansion")
+            elif tentative_bias == "SELL" and st.discount_premium_zone not in ("PREMIUM", "EQUILIBRIUM") and not has_choch_rev and not is_bear_expansion:
                 gate_passed = False
                 gate_policy_decision = "BLOCK"
                 failing_reasons.append("Metals Premium/Discount Discipline")
-                logger.info("Metals veto: SELL requires deep PREMIUM")
+                logger.info("Metals veto: SELL requires deep PREMIUM or strong expansion")
             # 3. Pullback OTE Proximity:
             if best_strategy == "TREND_PULLBACK":
                 atr_v = getattr(context.volatility, "atr", 1.0) or 1.0

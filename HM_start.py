@@ -21,6 +21,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from jarvis.common.envfile import load_env
+load_env()  # .env before any module reads the environment
 from jarvis.application.orchestrator import JarvisOrchestrator
 from jarvis.api.server import run_web_server, start_server
 # Admin credentials are resolved from environment at runtime (see jarvis.api.remote_auth)

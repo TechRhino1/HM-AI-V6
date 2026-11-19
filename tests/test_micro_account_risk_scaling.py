@@ -81,3 +81,23 @@ def test_forward_test_positions_do_not_fill_main_slots():
     assert not any("Max Concurrent" in b for b in exp.check_exposure("XAUUSD", ft, acct)["breaches"])
     main = [pos(i, "") for i in range(4)]
     assert any("Max Concurrent" in b for b in exp.check_exposure("XAUUSD", main, acct)["breaches"])
+
+
+def test_forward_test_positions_do_not_use_symbol_slots():
+    # 2026-11-19: two FT_ positions on EURUSD/USDJPY left the engine at HARD_SYMBOL_LIMIT all day.
+    from jarvis.risk.exposure import is_forward_test
+    exp = ExposureManager(max_open_positions=3, max_portfolio_risk_pct=2.5)
+    acct = AccountSnapshot(login=1, server="demo", balance=520.0, equity=520.0, margin=5.0,
+                           free_margin=515.0, margin_level=10000.0, leverage=500)
+
+    def pos(t, comment):
+        return PositionSnapshot(ticket=t, symbol="EURUSD", type="SELL", volume=0.01, open_price=1.0970,
+                                current_price=1.0970, sl=1.1040, tp=1.0900, profit=0.0, swap=0.0,
+                                commission=0.0, open_time=datetime.now(), magic=888999, comment=comment)
+
+    ft = [pos(1, "FT_TR_EURUSD_D1_T3"), pos(2, "FT_TR_EURUSD_H4_T1")]
+    assert not any("EURUSD" in b and "Exposure" in b for b in exp.check_exposure("EURUSD", ft, acct)["breaches"])
+    assert exp.get_active_risk_positions_for_symbol("EURUSD", ft) == 0
+    main = [pos(1, ""), pos(2, "")]
+    assert any("Hard Max Exposure" in b for b in exp.check_exposure("EURUSD", main, acct)["breaches"])
+    assert is_forward_test({"comment": "FT_X"}) and not is_forward_test({"comment": "JARVIS"})

@@ -1,8 +1,23 @@
 import logging
 import math
+import time
 from typing import Dict, Any
 
 logger = logging.getLogger("JARVIS_PositionSizer")
+
+# The same min-lot rejection repeats every scan (~12 s) while the stop is too wide for
+# the account; log it once per symbol per window, then at DEBUG.
+_REJECTION_LOG_WINDOW_S = 900.0
+_last_rejection_log: Dict[str, float] = {}
+
+
+def _log_rejection(sym_key: str):
+    now = time.monotonic()
+    if now - _last_rejection_log.get(sym_key, -1e18) >= _REJECTION_LOG_WINDOW_S:
+        _last_rejection_log[sym_key] = now
+        return logger.warning
+    return logger.debug
+
 
 class PositionSizer:
     """Calculates risk-controlled lot sizes adjusted for symbol contract specifications and account balance."""
@@ -170,16 +185,23 @@ class PositionSizer:
             actual_risk_dollars = min_vol * dollar_risk_per_lot
             actual_risk_pct = (actual_risk_dollars / (account_balance + 1e-9)) * 100.0
 
+            # Symbol-specific min-lot headroom: Gold contract specifications (100 oz)
+            # require up to 3.5% min-lot risk on standard/micro retail accounts ($250-$1,000)
+            from jarvis.risk.account_tier import min_lot_risk_cap
+            eff_max_dollars, eff_max_pct = min_lot_risk_cap(account_balance, sym_key)
+            if eff_max_pct <= max_pct:  # keep the caller's cap when it is not widened
+                eff_max_dollars, eff_max_pct = max_dollars, max_pct
+
             # The broker minimum may exceed the target; allow it only up to the
             # policy's min-lot ceiling, for every account size.
             min_lot_ok = (
-                actual_risk_dollars <= max_dollars + 1e-9
-                and actual_risk_pct <= max_pct + 1e-9
+                actual_risk_dollars <= eff_max_dollars + 1e-9
+                and actual_risk_pct <= eff_max_pct + 1e-9
             )
-            cap_text = f"${max_dollars:.2f} / {max_pct:.2f}%"
+            cap_text = f"${eff_max_dollars:.2f} / {eff_max_pct:.2f}%"
 
             if not min_lot_ok:
-                logger.error(
+                _log_rejection(sym_key)(
                     f"REJECTED [{sym_key}]: Minimum lot size ({min_vol}) would force "
                     f"{actual_risk_pct:.2f}% / ${actual_risk_dollars:.2f} risk "
                     f"(target was {effective_risk_pct:.2f}%, cap was {cap_text}). "

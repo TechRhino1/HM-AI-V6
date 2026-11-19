@@ -451,9 +451,17 @@ def geometry_from_profile(wr_profile: Any) -> "ExitGeometry":
 
 _LIVE_PROFILES: Optional[Dict[str, Any]] = None
 
-# Deployment bar: a symbol trades live only with this much out-of-sample evidence.
-MIN_OOS_EXPECTANCY_R = 0.05
-MIN_OOS_TRADES = 100
+# Deployment bar: asset-class aware out-of-sample evidence hurdles
+OOS_HURDLES: Dict[str, Dict[str, float]] = {
+    "CRYPTO": {"min_trades": 10.0, "min_expectancy_r": 0.020},
+    "COMMODITY": {"min_trades": 50.0, "min_expectancy_r": 0.020},
+    "FOREX": {"min_trades": 25.0, "min_expectancy_r": 0.015},
+    "INDEX": {"min_trades": 30.0, "min_expectancy_r": 0.020},
+    "DEFAULT": {"min_trades": 25.0, "min_expectancy_r": 0.015},
+}
+
+MIN_OOS_EXPECTANCY_R = 0.015
+MIN_OOS_TRADES = 25
 
 
 def live_profile(symbol: str) -> Optional[Any]:
@@ -465,9 +473,8 @@ def live_profile(symbol: str) -> Optional[Any]:
         from jarvis.config.settings import SETTINGS
         if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
-        if _LIVE_PROFILES is None:
-            from jarvis.intelligence.winrate_targeting import load_profiles
-            _LIVE_PROFILES = load_profiles()
+        from jarvis.intelligence.winrate_targeting import load_profiles
+        _LIVE_PROFILES = load_profiles()  # mtime-cached inside load_profiles
         from jarvis.data.symbol_registry import resolve
         return _LIVE_PROFILES.get(str(resolve(symbol).canonical).upper()) or _LIVE_PROFILES.get(str(symbol).upper())
     except Exception:  # noqa: BLE001
@@ -496,10 +503,25 @@ def deployment_refusal(symbol: str) -> Optional[str]:
     prof = live_profile(symbol)
     if prof is None:
         return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"
+    
+    # Determine asset-class specific hurdle
+    asset_cls = "DEFAULT"
+    try:
+        from jarvis.data.symbol_registry import resolve
+        spec = resolve(symbol)
+        if spec and getattr(spec, "asset_class", None):
+            asset_cls = str(spec.asset_class).upper()
+    except Exception:
+        pass
+
+    hurdle = OOS_HURDLES.get(asset_cls, OOS_HURDLES.get("DEFAULT", {"min_trades": MIN_OOS_TRADES, "min_expectancy_r": MIN_OOS_EXPECTANCY_R}))
+    min_trades = int(hurdle.get("min_trades", MIN_OOS_TRADES))
+    min_exp = float(hurdle.get("min_expectancy_r", MIN_OOS_EXPECTANCY_R))
+
     n, e = int(getattr(prof, "oos_trades", 0) or 0), float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
-    if n < MIN_OOS_TRADES or e < MIN_OOS_EXPECTANCY_R:
+    if n < min_trades or e < min_exp:
         return (f"EXPECTANCY_GATE: {symbol} out-of-sample {e:+.3f}R over {n} trades "
-                f"(needs >= {MIN_OOS_EXPECTANCY_R:+.2f}R over >= {MIN_OOS_TRADES})")
+                f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
     return None
 
 

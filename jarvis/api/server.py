@@ -1470,7 +1470,10 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 is_safe = self.state_manager.toggle_safe_mode()
                 self._send_json({"safe_mode": is_safe})
             elif path == "/api/action/set_trade_style":
-                style = data.get("trade_style", "SWING").upper()
+                style = str(data.get("trade_style", "SWING")).strip().upper()
+                if style not in ("ALL", "AUTO", "SCALP", "DAY_TRADING", "SWING", "H4_SWING", "D1_SWING"):
+                    self._send_json({"status": "ERROR", "error": f"Unknown trade style {style!r}"}, 400)
+                    return
                 self.state_manager.set_trade_style(style)
                 # Propagate to the LIVE orchestrator. This is the fix for a real
                 # bug: the old check was `hasattr(self, "orchestrator")` against
@@ -2052,6 +2055,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/ai/review":
                 from jarvis.ai import review
                 self._send_json(review.weekly_review())
+            elif path == "/api/ai/insights":
+                from jarvis.ai import insights
+                self._send_json(insights.overview())
             else:
                 self.send_error(404, f"AI API {path} not found")
         except Exception as exc:

@@ -840,7 +840,9 @@ class SQLiteTradeDB:
                 # than judged against a number we do not have.
                 if entry_deal is not None:
                     if not _bracket_side_ok(side, entry_p, sl_val, is_stop=True):
-                        logger.warning(
+                        # An exit-deal `[sl X]` past entry is a stop trailed into profit:
+                        # expected, and still not the initial risk, so it is dropped quietly.
+                        (logger.debug if exit_deal is not None else logger.warning)(
                             "Refusing a parsed stop for position %s: sl=%s is on the "
                             "wrong side of entry=%s for a %s order (comment=%r).",
                             pid, sl_val, entry_p, side, raw_comment,
