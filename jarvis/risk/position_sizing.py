@@ -170,13 +170,21 @@ class PositionSizer:
             actual_risk_dollars = min_vol * dollar_risk_per_lot
             actual_risk_pct = (actual_risk_dollars / (account_balance + 1e-9)) * 100.0
 
+            # Symbol-specific min-lot headroom: Gold contract specifications (100 oz)
+            # require up to 3.5% min-lot risk on standard/micro retail accounts ($250-$1,000)
+            eff_max_pct = max_pct
+            eff_max_dollars = max_dollars
+            if ("XAU" in sym_key or "GOLD" in sym_key) and account_balance >= 250.0:
+                eff_max_pct = max(max_pct, 3.50)
+                eff_max_dollars = account_balance * eff_max_pct / 100.0
+
             # The broker minimum may exceed the target; allow it only up to the
             # policy's min-lot ceiling, for every account size.
             min_lot_ok = (
-                actual_risk_dollars <= max_dollars + 1e-9
-                and actual_risk_pct <= max_pct + 1e-9
+                actual_risk_dollars <= eff_max_dollars + 1e-9
+                and actual_risk_pct <= eff_max_pct + 1e-9
             )
-            cap_text = f"${max_dollars:.2f} / {max_pct:.2f}%"
+            cap_text = f"${eff_max_dollars:.2f} / {eff_max_pct:.2f}%"
 
             if not min_lot_ok:
                 logger.error(

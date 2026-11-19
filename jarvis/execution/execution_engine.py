@@ -402,6 +402,9 @@ class ExecutionEngine:
             from jarvis.risk.account_tier import get_nano_risk_cap
             min_lot_risk_usd = vol_min * executable_sl_dist * dollar_risk_per_price_unit
             min_lot_cap_usd, min_lot_cap_pct = get_nano_risk_cap(account_equity, decision.symbol)
+            if ("XAU" in decision.symbol or "GOLD" in decision.symbol) and account_equity >= 250.0:
+                min_lot_cap_pct = max(min_lot_cap_pct, 3.50)
+                min_lot_cap_usd = account_equity * min_lot_cap_pct / 100.0
             if min_lot_risk_usd > min_lot_cap_usd + 1e-9:
                 logger.error(
                     f"🛑 EXECUTION BLOCKED for {decision.symbol}: Minimum lot {vol_min} would risk "
@@ -464,6 +467,9 @@ class ExecutionEngine:
             _risk_usd = executable_sl_dist * dollar_risk_per_price_unit * float(lots)
             from jarvis.risk.account_tier import get_nano_risk_cap
             _max_allowed_usd, _max_allowed_pct = get_nano_risk_cap(_equity, decision.symbol)
+            if ("XAU" in decision.symbol or "GOLD" in decision.symbol) and _equity >= 250.0:
+                _max_allowed_pct = max(_max_allowed_pct, 3.50)
+                _max_allowed_usd = _equity * (_max_allowed_pct / 100.0)
             # Risk policy: a broker-minimum lot may use the min-lot ceiling; any
             # larger size must fit the per-trade target.
             if float(lots) <= _vol_min + 1e-9:
@@ -546,6 +552,24 @@ class ExecutionEngine:
         order_kind = getattr(decision, "order_type", "MARKET").upper()
 
         use_limit = "LIMIT" in order_kind or "PENDING" in order_kind
+
+        # Dynamic Order Routing: In explosive breakout or strong trending momentum, convert LIMIT to MARKET
+        # to guarantee execution instead of suffering unfilled order expiration
+        if use_limit:
+            ctx_regime = getattr(decision, "regime", None)
+            regime_val = str(getattr(ctx_regime, "primary_regime", "")).upper()
+            strat_val = str(getattr(decision, "best_strategy", "")).upper()
+            is_breakout_or_strong_trend = (
+                "BREAKOUT" in regime_val
+                or "STRONG_TREND" in regime_val
+                or "BREAKOUT" in strat_val
+            )
+            if is_breakout_or_strong_trend:
+                logger.info(
+                    f"🚀 DYNAMIC ORDER ROUTING [{decision.symbol}]: Routing {decision.bias} order as MARKET "
+                    f"instead of {order_kind} due to explosive momentum regime ({regime_val} / {strat_val})."
+                )
+                use_limit = False
 
 
 
