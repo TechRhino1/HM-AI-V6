@@ -68,6 +68,12 @@ BROKER_ALIASES: Dict[str, List[str]] = {
     "US500":  ["US500Cash#", "SPXUSD", "US500"],
     "GOLD.I#": ["GOLD.i#"],
     "SILVER.I#": ["SILVER.i#"],
+    # Uppercased broker names reach resolution from position/order symbols; map them exactly so
+    # the indices added to the universe on 2026-11-23 don't fall through to the fuzzy match.
+    "US30CASH#": ["US30Cash#"],
+    "GER40CASH#": ["GER40Cash#"],
+    "UK100CASH#": ["UK100Cash#"],
+    "US100CASH#": ["US100Cash#"],
     "BTCUSD": ["BTCUSD#", "BTCUSD"],
     "ETHUSD": ["ETHUSD#", "ETHUSD"],
     "SOLUSD": ["SOLUSD#", "SOLUSD"],
