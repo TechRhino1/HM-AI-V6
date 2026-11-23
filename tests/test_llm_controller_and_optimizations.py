@@ -99,7 +99,8 @@ def test_llm_governor_is_reduce_only():
     d = controller.get_latest_directives(force_refresh=True)
     assert provider.calls == 1
     assert d.source == "LLM"
-    assert d.risk_multiplier == 1.0
+    rules = controller._heuristic_governor(controller._gather_system_context())
+    assert d.risk_multiplier == min(1.0, rules.risk_multiplier)   # never above 1.0 nor above the rules
     assert d.risk_posture == "NORMAL"
     if "BTCUSD" in d.symbol_directives:
         # Only the rule-based governor hard-pauses; an AI pause is shown as advisory THROTTLED.
@@ -236,3 +237,24 @@ def test_trading_loop_never_waits_on_the_model():
         threading.Event().wait(0.05)
     assert provider.calls == 1
     assert c._cached_directives.source == "LLM" and c._cached_directives.risk_multiplier == 0.5
+
+
+def test_ai_cannot_undo_a_rules_risk_cut():
+    """The AI only tightens: a 0.5x rules cut (drawdown) survives an AI asking for 1.0x."""
+    from jarvis.intelligence.llm_controller import GovernorDirectives
+    rules = GovernorDirectives(risk_posture="DEFENSIVE", risk_multiplier=0.5, max_concurrent_trades=2)
+    ai = GovernorDirectives(risk_posture="NORMAL", risk_multiplier=1.0, max_concurrent_trades=3, source="LLM")
+    m = AutonomousLLMSystemController._merge(rules, ai)
+    assert m.risk_multiplier == 0.5 and m.risk_posture == "DEFENSIVE" and m.max_concurrent_trades == 2
+    assert m.source == "LLM"
+
+
+def test_ai_is_asked_at_most_once_per_interval(monkeypatch):
+    """Rules refresh every evaluation; the AI is called once per GOVERNOR_AI_INTERVAL_S and its read reused."""
+    provider = _FakeProvider({"risk_posture": "DEFENSIVE", "risk_multiplier": 0.6, "max_concurrent_trades": 2,
+                              "macro_reasoning": "careful", "symbol_directives": {}})
+    c = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider)
+    for _ in range(4):
+        d = c.get_latest_directives(True)
+    assert provider.calls == 1
+    assert d.source == "LLM" and d.risk_multiplier <= 0.6

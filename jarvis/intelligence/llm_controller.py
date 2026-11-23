@@ -37,6 +37,9 @@ MIN_RISK_MULT, MAX_RISK_MULT = 0.35, 1.0
 # 3-minute cache expiry fired one Gemini call per scan thread: 78 failures in minutes, each retried
 # across 6 models inside the trading loop.
 AI_FAILURE_BACKOFF_SEC = 600.0
+# The AI is asked at most this often (default 15 min = 96 calls/day on the free lite models); the
+# rules still run every refresh and the last AI read is merged into them while it is this fresh.
+GOVERNOR_AI_INTERVAL_S = float(os.environ.get("JARVIS_GOVERNOR_AI_INTERVAL_S", "900") or 900)
 
 _GOVERNOR_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -68,7 +71,7 @@ def _default_provider():
         return None  # tests never reach a real model, even with a key in the shell
     try:
         from jarvis.ai.client import get_provider
-        return get_provider()
+        return get_provider("background")  # free lite/Gemma models; flash quota is for the Copilot
     except Exception as exc:
         logger.debug("Governor AI provider unavailable: %s", exc)
         return None
@@ -167,6 +170,8 @@ class AutonomousLLMSystemController:
         # One background AI refresh at a time; the trading loop never waits on the model.
         self._refreshing = False
         self._ai_backoff_until = 0.0
+        self._last_ai: Optional[GovernorDirectives] = None
+        self._last_ai_at = 0.0
         self.ai_stats: Dict[str, Any] = {"calls": 0, "failures": 0, "last_ok_at": None,
                                          "last_error": None, "last_error_at": None,
                                          "last_latency_ms": None}
@@ -321,17 +326,21 @@ class AutonomousLLMSystemController:
         Tries LLM reasoning if available; otherwise seamlessly falls back to institutional heuristic.
         """
         ctx = self._gather_system_context()
+        rules = self._heuristic_governor(ctx)
+        now = time.time()
 
-        if self.provider is not None and not is_offline() and time.time() >= self._ai_backoff_until:
+        if (self.provider is not None and not is_offline() and now >= self._ai_backoff_until
+                and now - self._last_ai_at >= GOVERNOR_AI_INTERVAL_S):
             t0 = time.time()
             try:
                 if self.provider.available():
                     self.ai_stats["calls"] += 1
+                    self._last_ai_at = now  # budget the attempt, not only the success
                     llm_directives = self._call_llm_governor(ctx)
                     self.ai_stats["last_latency_ms"] = int((time.time() - t0) * 1000)
                     if llm_directives is not None:
                         self.ai_stats["last_ok_at"] = datetime.now(timezone.utc).isoformat()
-                        return llm_directives
+                        self._last_ai = llm_directives
             except Exception as e:
                 from jarvis.ai.providers.base import redact
                 self.ai_stats["failures"] += 1
@@ -341,8 +350,31 @@ class AutonomousLLMSystemController:
                 logger.warning(f"LLM Governor API call failed, rule-based for {AI_FAILURE_BACKOFF_SEC:.0f}s: "
                                f"{self.ai_stats['last_error']}")
 
+        if self._last_ai is not None and now - self._last_ai_at <= GOVERNOR_AI_INTERVAL_S:
+            return self._merge(rules, self._last_ai)
         # Institutional Bayesian / Rule-Based Offline Governor
-        return self._heuristic_governor(ctx)
+        return rules
+
+    @staticmethod
+    def _merge(rules: "GovernorDirectives", ai: "GovernorDirectives") -> "GovernorDirectives":
+        """The stricter of the current rules and the last AI read: the AI can only tighten.
+        Its multiplier used to be capped at 1.0 only, so an AI 1.0x could undo a rules drawdown cut."""
+        rank = {"ENABLED": 0, "THROTTLED": 1, "PAUSED": 2}
+        syms = dict(rules.symbol_directives)
+        for sym, d in ai.symbol_directives.items():
+            base = syms.get(sym)
+            if base is None or rank.get(d.status, 0) > rank.get(base.status, 0):
+                syms[sym] = d
+        defensive = "DEFENSIVE" in (rules.risk_posture, ai.risk_posture)
+        return GovernorDirectives(
+            risk_posture="DEFENSIVE" if defensive else rules.risk_posture,
+            risk_multiplier=round(min(rules.risk_multiplier, ai.risk_multiplier), 2),
+            max_concurrent_trades=min(rules.max_concurrent_trades, ai.max_concurrent_trades),
+            symbol_directives=syms,
+            macro_reasoning=ai.macro_reasoning,
+            confidence=ai.confidence,
+            source="LLM",
+        )
 
     def _build_llm_prompt(self, ctx: Dict[str, Any]) -> str:
         return f"""You are the Chief Risk Officer and Master Algorithmic Governor for HM Algo 2.0.

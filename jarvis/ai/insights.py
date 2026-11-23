@@ -91,7 +91,7 @@ def overview(provider: Optional[Provider] = None, use_provider: bool = True) -> 
         if hit:
             headline, used = hit
         else:
-            p = (provider or client.get_provider()) if use_provider else None
+            p = (provider or client.get_provider("background")) if use_provider else None
             if p:
                 try:
                     res = p.chat([p.user(json.dumps([{k: i[k] for k in ("level", "title", "detail")} for i in items]))], [], PROMPT, effort="low")
