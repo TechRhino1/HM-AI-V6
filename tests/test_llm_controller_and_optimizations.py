@@ -75,6 +75,73 @@ def test_llm_controller_spread_spike_pauses_symbol():
         assert gold_dir.status == "PAUSED"
 
 
+class _FakeProvider:
+    def __init__(self, payload=None, exc=None):
+        self.payload, self.exc, self.calls = payload, exc, 0
+
+    def available(self):
+        return True
+
+    def structured(self, prompt, json_schema, system=""):
+        self.calls += 1
+        if self.exc:
+            raise self.exc
+        return self.payload
+
+
+def test_llm_governor_is_reduce_only():
+    """An LLM asking for 1.25x risk is honoured as LLM-sourced but capped at 1.0x."""
+    provider = _FakeProvider({"risk_posture": "AGGRESSIVE", "risk_multiplier": 1.25,
+                              "max_concurrent_trades": 2, "macro_reasoning": "go big",
+                              "symbol_directives": {"BTCUSD": {"status": "PAUSED", "preferred_strategy": "NONE",
+                                                               "reason": "news"}}})
+    controller = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider)
+    d = controller.get_latest_directives(force_refresh=True)
+    assert provider.calls == 1
+    assert d.source == "LLM"
+    assert d.risk_multiplier == 1.0
+    assert d.risk_posture == "NORMAL"
+    if "BTCUSD" in d.symbol_directives:
+        assert d.symbol_directives["BTCUSD"].status == "PAUSED"
+
+
+def test_llm_governor_cannot_unpause_heuristic_pause():
+    state_mgr = StateManager()
+    mock_ctx = MagicMock()
+    mock_ctx.live_spread_pips = 100.0  # far beyond any typical spread -> heuristic PAUSED
+    state_mgr.market_contexts["XAUUSD"] = mock_ctx
+    provider = _FakeProvider({"risk_posture": "NORMAL", "risk_multiplier": 1.0, "max_concurrent_trades": 2,
+                              "macro_reasoning": "", "symbol_directives": {
+                                  "XAUUSD": {"status": "ENABLED", "preferred_strategy": "TREND_FOLLOWING",
+                                             "reason": "fine"}}})
+    d = AutonomousLLMSystemController(state_manager=state_mgr, provider=provider).get_latest_directives(True)
+    if "XAUUSD" in d.symbol_directives:
+        assert d.symbol_directives["XAUUSD"].status == "PAUSED"
+
+
+def test_llm_governor_error_falls_back_to_heuristic():
+    provider = _FakeProvider(exc=RuntimeError("boom"))
+    d = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider).get_latest_directives(True)
+    assert provider.calls == 1
+    assert d.source == "OFFLINE_HEURISTIC"
+
+
+def test_llm_governor_skipped_offline_and_without_provider():
+    from jarvis.config.runtime import offline_mode
+
+    assert AutonomousLLMSystemController(state_manager=StateManager(), provider=None) \
+        .get_latest_directives(True).source == "OFFLINE_HEURISTIC"
+    provider = _FakeProvider({"risk_multiplier": 0.5})
+    with offline_mode():
+        d = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider).get_latest_directives(True)
+    assert provider.calls == 0 and d.source == "OFFLINE_HEURISTIC"
+
+
+def test_llm_governor_default_provider_disabled_under_pytest(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key-should-never-be-used")
+    assert AutonomousLLMSystemController(state_manager=StateManager()).provider is None
+
+
 def test_forex_profiles_session_and_sl_calibration():
     """Verify EURUSD and GBPUSD have session restrictions and calibrated intraday SL multipliers."""
     eur = get_symbol_profile_config("EURUSD")

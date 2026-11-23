@@ -3,14 +3,14 @@ HM Algo 2.0 — Autonomous LLM Master Controller & Market Governor.
 
 Provides dynamic, macro-aware governance over the algorithmic trading system:
 1. Gathers real-time account state, symbol spreads, market regimes, and recent trade outcomes.
-2. Uses an advanced LLM (via CopilotProvider) or an institutional Bayesian heuristic fallback
+2. Uses an LLM (jarvis.ai provider, e.g. Gemini; reduce-only) or an institutional heuristic fallback
    to determine:
    - Dynamic Risk Posture: DEFENSIVE (0.50x-0.75x), NORMAL (1.00x), or AGGRESSIVE (1.15x-1.25x).
    - Dynamic Symbol Directives: ENABLED, THROTTLED, or PAUSED per symbol.
    - Dynamic Strategy Prioritization: symbol-specific preferred strategies based on session and regime.
    - Max Concurrent Position limits for low-balance account protection.
 3. Thread-safe caching with TTL prevents latency impact on the high-frequency execution hot path.
-4. Hard institutional bounds guarantee safety: risk multipliers never exceed [0.35, 1.25]
+4. Hard institutional bounds guarantee safety: LLM risk multipliers are clamped to [0.35, 1.0]
    and micro-account single-trade loss caps are never compromised.
 """
 
@@ -23,11 +23,51 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field, asdict
 
-from jarvis.api.copilot_provider import CopilotProvider
 from jarvis.application.state_manager import StateManager, GLOBAL_STATE
+from jarvis.config.runtime import is_offline
 from jarvis.data.schemas import MarketRegime
 
 logger = logging.getLogger("JARVIS_LLMController")
+
+_DEFAULT_PROVIDER = object()  # sentinel: explicit provider=None still means "heuristic only"
+
+# The governor may only cut risk; the engine never trades above its base risk.
+MIN_RISK_MULT, MAX_RISK_MULT = 0.35, 1.0
+
+_GOVERNOR_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "risk_posture": {"type": "string", "enum": ["DEFENSIVE", "NORMAL"]},
+        "risk_multiplier": {"type": "number"},
+        "max_concurrent_trades": {"type": "integer"},
+        "macro_reasoning": {"type": "string"},
+        "confidence": {"type": "number"},
+        "symbol_directives": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["ENABLED", "THROTTLED", "PAUSED"]},
+                    "preferred_strategy": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["status", "preferred_strategy", "reason"],
+            },
+        },
+    },
+    "required": ["risk_posture", "risk_multiplier", "max_concurrent_trades", "macro_reasoning", "symbol_directives"],
+}
+
+
+def _default_provider():
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None  # tests never reach a real model, even with a key in the shell
+    try:
+        from jarvis.ai.client import get_provider
+        return get_provider()
+    except Exception as exc:
+        logger.debug("Governor AI provider unavailable: %s", exc)
+        return None
 
 
 @dataclass
@@ -65,11 +105,11 @@ class AutonomousLLMSystemController:
     def __init__(
         self,
         state_manager: StateManager = GLOBAL_STATE,
-        provider: Optional[CopilotProvider] = None,
+        provider: Any = _DEFAULT_PROVIDER,
         cache_ttl_sec: float = 180.0,  # 3 minutes default evaluation cache
     ):
         self.state_manager = state_manager or GLOBAL_STATE
-        self.provider = provider or CopilotProvider.from_env()
+        self.provider = _default_provider() if provider is _DEFAULT_PROVIDER else provider
         self.cache_ttl_sec = cache_ttl_sec
 
         self._lock = threading.Lock()
@@ -193,11 +233,12 @@ class AutonomousLLMSystemController:
         """
         ctx = self._gather_system_context()
 
-        if self.provider and self.provider.available:
+        if self.provider is not None and not is_offline():
             try:
-                llm_directives = self._call_llm_governor(ctx)
-                if llm_directives is not None:
-                    return llm_directives
+                if self.provider.available():
+                    llm_directives = self._call_llm_governor(ctx)
+                    if llm_directives is not None:
+                        return llm_directives
             except Exception as e:
                 logger.warning(f"LLM Governor API call failed, falling back to heuristic: {e}")
 
@@ -218,61 +259,46 @@ Institutional Rules:
 2. If Drawdown > 3.0% or multiple open losses, enforce DEFENSIVE posture (risk_multiplier 0.50x to 0.75x).
 3. Asian session (00:00-06:00 UTC) & Rollover (21:00-23:00 UTC): PAUSE or THROTTLE Gold and Forex majors.
 4. Weekends: PAUSE all FX and Gold; set Crypto to THROTTLED with preferred_strategy="RANGE_MEAN_REVERSION".
-5. Prime London/NY sessions with normal spreads: Set NORMAL or AGGRESSIVE (risk_multiplier 1.0x to 1.25x).
-6. Crypto high momentum: Prefer "TREND_FOLLOWING" or "BREAKOUT_EXPANSION" on weekdays.
-7. Gold prime hours: Prefer "LIQUIDITY_SWEEP_REVERSAL" or "CHOCH_STRUCTURAL_REVERSAL".
+5. Prime London/NY sessions with normal spreads: NORMAL posture, risk_multiplier 1.0x.
+6. You may only REDUCE risk or pause/throttle symbols. risk_multiplier must be between 0.35 and 1.0; never above 1.0.
+7. Crypto high momentum: Prefer "TREND_FOLLOWING" or "BREAKOUT_EXPANSION" on weekdays.
+8. Gold prime hours: Prefer "LIQUIDITY_SWEEP_REVERSAL" or "CHOCH_STRUCTURAL_REVERSAL".
 
-Respond ONLY with a valid JSON object matching this schema:
-{{
-  "risk_posture": "DEFENSIVE" | "NORMAL" | "AGGRESSIVE",
-  "risk_multiplier": float between 0.50 and 1.25,
-  "max_concurrent_trades": int between 1 and 2,
-  "macro_reasoning": "Brief explanation of current market conditions and risk dial adjustments",
-  "confidence": float between 0.60 and 0.95,
-  "symbol_directives": {{
-    "<SYMBOL>": {{
-      "status": "ENABLED" | "THROTTLED" | "PAUSED",
-      "preferred_strategy": "LIQUIDITY_SWEEP_REVERSAL" | "TREND_FOLLOWING" | "TREND_PULLBACK" | "RANGE_MEAN_REVERSION" | "CHOCH_STRUCTURAL_REVERSAL",
-      "reason": "short explanation"
-    }}
-  }}
-}}"""
+Return one directive per active symbol. status is ENABLED, THROTTLED or PAUSED; preferred_strategy is one of
+LIQUIDITY_SWEEP_REVERSAL, TREND_FOLLOWING, TREND_PULLBACK, RANGE_MEAN_REVERSION, CHOCH_STRUCTURAL_REVERSAL,
+BREAKOUT_EXPANSION. max_concurrent_trades is 1 or 2; confidence is 0.60 to 0.95."""
 
     def _call_llm_governor(self, ctx: Dict[str, Any]) -> Optional[GovernorDirectives]:
-        """Calls the LLM provider and parses structured JSON directives."""
-        prompt = self._build_llm_prompt(ctx)
-        messages = [
-            {"role": "system", "content": "You are an institutional algorithmic risk governor. Output valid JSON only."},
-            {"role": "user", "content": prompt},
-        ]
-        response_text = self.provider.chat(messages)
-        if not response_text:
+        """Asks the provider for schema-constrained directives; reduce-only by construction."""
+        data = self.provider.structured(
+            self._build_llm_prompt(ctx),
+            json_schema=_GOVERNOR_SCHEMA,
+            system="You are an institutional algorithmic risk governor. You may only reduce risk, never raise it.",
+        )
+        if not isinstance(data, dict) or not data:
             return None
 
-        # Parse JSON from response
-        clean_json = response_text.strip()
-        if "```json" in clean_json:
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean_json:
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
-
-        data = json.loads(clean_json)
-
         posture = str(data.get("risk_posture", "NORMAL")).upper()
-        if posture not in ("DEFENSIVE", "NORMAL", "AGGRESSIVE"):
+        if posture not in ("DEFENSIVE", "NORMAL"):
             posture = "NORMAL"
 
         raw_mult = float(data.get("risk_multiplier", 1.0))
-        risk_mult = max(0.35, min(1.25, raw_mult))
+        risk_mult = max(MIN_RISK_MULT, min(MAX_RISK_MULT, raw_mult))
 
         max_conc = int(data.get("max_concurrent_trades", 2))
         max_conc = max(1, min(2 if ctx["equity"] < 500.0 else 3, max_conc))
 
-        sym_dirs = {}
-        for sym, d in data.get("symbol_directives", {}).items():
+        # The LLM may tighten a symbol but never loosen what the rule-based governor paused/throttled.
+        rank = {"ENABLED": 0, "THROTTLED": 1, "PAUSED": 2}
+        sym_dirs = dict(self._heuristic_governor(ctx).symbol_directives)
+        for sym, d in (data.get("symbol_directives") or {}).items():
+            status = str(d.get("status", "ENABLED")).upper()
+            base = sym_dirs.get(sym)
+            if status not in rank or (base is not None and rank.get(base.status, 0) >= rank[status]):
+                continue
             sym_dirs[sym] = SymbolDirective(
                 symbol=sym,
-                status=str(d.get("status", "ENABLED")).upper(),
+                status=status,
                 preferred_strategy=str(d.get("preferred_strategy", "TREND_PULLBACK")),
                 reason=str(d.get("reason", "LLM directive")),
             )
