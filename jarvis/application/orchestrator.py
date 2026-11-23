@@ -44,6 +44,8 @@ from jarvis.config.paths import mode_scoped_db_path
 from jarvis.market.sessions import SessionEngine
 from jarvis.execution.entry_policy import evaluate_entry
 from jarvis.intelligence.gate_policy import canonical_gate
+from jarvis.intelligence.opportunity_arbiter import (is_exec_ready as _is_exec_ready,
+                                                     unsoftened_failure_count as _unsoftened_failure_count)
 from jarvis.intelligence.winrate_targeting import load_profiles
 from jarvis.intelligence.llm_controller import AutonomousLLMSystemController
 from jarvis.observability import log_event
@@ -57,6 +59,10 @@ UNKNOWN_ORDER_HOLD_SEC = 600.0
 
 # Styles fastest -> slowest. A faster style's bias younger than the window vetoes a slower
 # style entering the other way.
+# profile.score_col -> the decision attribute signal_scan recorded under that column
+_NEVER_FILLED_SQL = " AND NOT (closed_at IS NOT NULL AND exit_price IS NULL AND realized_pnl IS NULL)"
+_CALIBRATED_SCORE_ATTR = {"score": "model_confidence", "master_score": "master_confluence_score",
+                          "dissection_score": "dissection_score"}
 STYLE_SPEED = {"SCALP": 0, "DAY_TRADING": 1, "INTRADAY": 1, "DAY": 1, "SWING": 2, "H4_SWING": 3, "D1_SWING": 4}
 STYLE_CONFLICT_WINDOW_SEC = 600.0
 
@@ -1251,6 +1257,8 @@ class JarvisOrchestrator:
     @staticmethod
     def _count_entries_today(symbol: str, mode: Optional[str] = None) -> int:
         """Rows written for this symbol since 00:00 UTC today, mode-scoped ledger basis.
+        An order the broker never filled (closed with no exit price and no P&L, the shape
+        sync_mt5_history stamps on cancelled/expired orders) is not an entry.
 
         Used by the daily entry cap. Read-only on the canonical trade DB; any
         failure returns 0 (fails open — a counting outage must never freeze
@@ -1275,14 +1283,16 @@ class JarvisOrchestrator:
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
                         "AND timestamp LIKE ? AND lower(execution_mode) = ? "
-                        "AND COALESCE(regime, '') != 'FORWARD_TEST'",
+                        "AND COALESCE(regime, '') != 'FORWARD_TEST' "
+                        + _NEVER_FILLED_SQL,
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0], str(mode).lower().strip()),
                     ).fetchone()
                 else:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
-                        "AND timestamp LIKE ? AND COALESCE(regime, '') != 'FORWARD_TEST'",
+                        "AND timestamp LIKE ? AND COALESCE(regime, '') != 'FORWARD_TEST' "
+                        + _NEVER_FILLED_SQL,
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0]),
                     ).fetchone()
                 return int(row[0]) if row else 0
@@ -1308,6 +1318,26 @@ class JarvisOrchestrator:
     # defaults to OFF. Enabling it is a trading decision, not a bug fix: 11 of
     # the 16 profiles on disk carry a NEGATIVE out-of-sample expectancy, so the
     # policy refuses most of the universe.
+
+    def _calibrated_route_allows(self, candidate) -> bool:
+        """True when trading.calibrated_policy_trader is on and the calibrated policy allows this
+        SWING candidate (the style its profile was calibrated on). Never raises into the dispatch loop."""
+        try:
+            if not bool(getattr(SETTINGS.trading, "calibrated_policy_trader", False)):
+                return False
+            if str(getattr(candidate, "trade_style", "")).upper() != "SWING":
+                return False
+            dobj = getattr(candidate, "decision_obj", None)
+            if dobj is None or getattr(dobj, "bias", "") not in ("BUY", "SELL"):
+                return False
+            regime = getattr(dobj, "regime", None)
+            if regime is None:
+                return False
+            entry = self._calibrated_entry_decision(_resolve_sym(candidate.symbol).canonical, dobj, regime)
+            return bool(entry is not None and entry.allowed)
+        except Exception as exc:
+            logger.debug(f"calibrated route check failed for {getattr(candidate, 'symbol', '?')}: {exc}")
+            return False
 
     def _calibrated_profile(self, symbol: str):
         """This symbol's calibrated profile, or None when none applies."""
@@ -1341,10 +1371,10 @@ class JarvisOrchestrator:
             if hasattr(regime.primary_regime, "value")
             else str(regime.primary_regime)
         )
-        score_val = max(
-            float(getattr(decision, "model_confidence", 0.0) or 0.0),
-            float(getattr(decision, "ai_score", 0.0) or 0.0) / 100.0,
-        )
+        # The same score the profile was calibrated on (signal_scan writes "score" from
+        # model_confidence). max(confidence, ai_score/100) was looser than anything validated.
+        attr = _CALIBRATED_SCORE_ATTR.get(getattr(profile, "score_col", "score"), "model_confidence")
+        score_val = float(getattr(decision, attr, 0.0) or 0.0)
         return evaluate_entry(
             quality_gate=getattr(decision, "quality_gate", None),
             score=score_val,
@@ -2562,41 +2592,17 @@ class JarvisOrchestrator:
         if dispatch_candidates and not dry_run:
             for candidate in dispatch_candidates:
                 d_action = getattr(candidate.decision_obj, "decision", "") if candidate.decision_obj else ""
-                qg = getattr(candidate.decision_obj, "quality_gate", None) if candidate.decision_obj else None
-                raw_fails = getattr(qg, "failing_reasons", []) or []
-                softened_set = {canonical_gate(g) for g in (getattr(qg, "softened_gates", []) or [])}
-                unsoftened_fails = [r for r in raw_fails if canonical_gate(r) not in softened_set]
-                failing_cnt = len(unsoftened_fails) if qg else 99
+                failing_cnt = _unsoftened_failure_count(candidate.decision_obj)
 
-                is_exec_ready = (
-                    candidate.is_actionable
-                    and candidate.setup_grade in ("GRADE A+", "GRADE A", "GRADE B")
-                    and candidate.decision_obj
-                    and candidate.bias in ("BUY", "SELL")
-                    and getattr(candidate.decision_obj, "bias", "") in ("BUY", "SELL")
-                    and (
-                        getattr(candidate.decision_obj, "order_type", "MARKET") in ("MARKET", "LIMIT")
-                        or not isinstance(getattr(candidate.decision_obj, "order_type", None), str)
-                    )
-                    and d_action not in ("HOLD", "NO_TRADE")
-                    and (
-                        d_action == "EXECUTE"
-                        or (
-                            d_action == "WAIT"
-                            and candidate.setup_grade in ("GRADE A+", "GRADE A")
-                            and candidate.expected_value >= 0.40
-                            and candidate.risk_reward_ratio >= 1.4
-                            and failing_cnt <= 1
-                        )
-                        or (
-                            d_action == "WAIT"
-                            and candidate.setup_grade == "GRADE B"
-                            and candidate.expected_value >= 0.40
-                            and candidate.risk_reward_ratio >= 1.4
-                            and failing_cnt == 0
-                        )
-                    )
-                )
+                is_exec_ready = _is_exec_ready(candidate, d_action, failing_cnt)
+                if not is_exec_ready and self._calibrated_route_allows(candidate):
+                    # The calibrated policy is its own entry route: validated at a next-bar market
+                    # fill with the legacy gates ignored, so it dispatches at MARKET. Everything
+                    # below (vetoes, slots, cooldown, RiskEngine, news) still applies.
+                    is_exec_ready = True
+                    candidate.decision_obj.order_type = "MARKET"
+                    logger.info(f"CALIBRATED_ROUTE: {candidate.symbol} {candidate.trade_style} "
+                                f"{candidate.bias} allowed by the calibrated policy (legacy said {d_action}).")
 
                 if not is_exec_ready:
                     if candidate == dispatch_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):

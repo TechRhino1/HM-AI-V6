@@ -126,7 +126,8 @@ class TrendRouter(_LeadBase):
 
     def step(self) -> None:
         """Act once per newly completed bar per (symbol, timeframe). Never raises into the loop."""
-        if str(getattr(self.orch, "mode", "")).lower() not in ("demo",):
+        from jarvis.forward_tests.research_leads import forward_test_enabled
+        if not forward_test_enabled(self.orch):
             return
         for sym, tf in dict.fromkeys((s, t) for s, _, t in COMPONENTS):
             try:

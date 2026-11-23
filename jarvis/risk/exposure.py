@@ -127,6 +127,13 @@ class ExposureManager:
             "USDCAD": ("USD", "CAD"),
             "XAUUSD": ("XAU", "USD"),
             "BTCUSD": ("BTC", "USD"),
+            "XAGUSD": ("XAG", "USD"),
+            "ETHUSD": ("ETH", "USD"),
+            "SOLUSD": ("SOL", "USD"),
+            "US30": ("US30", "USD"),
+            "NAS100": ("NAS100", "USD"),
+            "GER40": ("GER40", "EUR"),
+            "UK100": ("UK100", "GBP"),
         }
 
         # Net directional tallies: currency -> count (positive = Long, negative = Short)
@@ -144,6 +151,8 @@ class ExposureManager:
                     net_dir[quote] = net_dir.get(quote, 0) + 1
 
         for p in positions:
+            if is_forward_test(p):  # FT_ research positions are not engine exposure (ADAPTIVE_GATE_12)
+                continue
             p_bias = getattr(p, "side", getattr(p, "type", "BUY"))
             _add_exposure(p.symbol, p_bias)
 

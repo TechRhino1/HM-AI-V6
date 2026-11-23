@@ -118,7 +118,10 @@ def test_donchian_trails_3atr_and_never_loosens_tsmom_keeps_fixed_stop():
     o3.mt5_client.modify_position.assert_not_called()
 
 
-def test_live_mode_never_runs_and_regime_label_is_known():
+def test_live_mode_never_runs_and_regime_label_is_known(monkeypatch):
+    # A mode outside trading.forward_test_modes never runs.
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(SETTINGS.trading, "forward_test_modes", ["demo"])
     r, o = _router()
     o.mode = "live"
     r.step()

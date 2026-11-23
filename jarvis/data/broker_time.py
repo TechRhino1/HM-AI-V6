@@ -136,6 +136,22 @@ def _derive_offset(mt5_module, symbols: Iterable[str], clock: float) -> Optional
     return int(snapped)
 
 
+def pending_order_age(setup_time: float, now: float, server_now: float,
+                      raw_setup: Optional[float] = None) -> float:
+    """Seconds since a pending order was placed: the smallest non-negative reading.
+
+    ``setup_time`` is the UTC-converted stamp, ``raw_setup`` the broker's own ``time_setup``.
+    Comparing ``raw_setup`` with the broker tick clock (``server_now``) needs no derived offset,
+    so a wrong offset can no longer age a fresh order (2026-11-23: three EURUSD limits read
+    exactly 120.0m old and were cancelled 1 s after placement).
+    shortcut: an order older than the broker offset reads younger by that offset; TTLs are <= 40 min."""
+    if not setup_time or setup_time <= 0:
+        return 0.0
+    ages = [now - setup_time, server_now - (raw_setup or setup_time)]
+    ages = [a for a in ages if a >= 0]
+    return min(ages) if ages else 0.0
+
+
 # The broker's wall clock for BAR timestamps. Measured on XMGlobal-MT5 (2026-11-14):
 # weekly opens sit at a fixed broker hour except in the week between the EU and US
 # DST changes, i.e. the server follows the EU calendar (UTC+3 summer / UTC+2 winter).

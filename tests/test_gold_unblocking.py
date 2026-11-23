@@ -123,8 +123,10 @@ class TestGoldMicroAccountSizing:
 
 
 class TestCalibratedEntryScoreResolution:
-    def test_calibrated_decision_uses_max_ai_score(self):
-        """When model_confidence is 0.43 (after penalties) but ai_score is 85.7, score_val is 0.857."""
+    def test_calibrated_decision_uses_the_calibrated_score(self):
+        """The profile's threshold was fitted on model_confidence (signal_scan "score"), so that is
+        the score judged. ai_score 85.7 no longer lifts a 0.43 confidence over a 0.52 threshold:
+        that max() admitted reads looser than anything the calibration validated (2026-11-23)."""
         from jarvis.application.orchestrator import JarvisOrchestrator
 
         orch = MagicMock(spec=JarvisOrchestrator)
@@ -156,8 +158,8 @@ class TestCalibratedEntryScoreResolution:
         # Call real unbound _calibrated_entry_decision
         entry_dec = JarvisOrchestrator._calibrated_entry_decision(orch, "XAUUSD", decision, regime)
         assert entry_dec is not None
-        assert entry_dec.allowed is True
-        assert entry_dec.score >= 0.85
+        assert entry_dec.allowed is False
+        assert entry_dec.score == pytest.approx(0.43)
 
 
 class TestTradeGuardAndRiskEngineGoldAuthorization:

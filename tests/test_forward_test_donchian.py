@@ -40,7 +40,11 @@ def _orch(mode="demo", positions=()):
     return o
 
 
-def test_only_runs_in_demo():
+def test_only_runs_in_demo(monkeypatch):
+    # A mode outside trading.forward_test_modes never trades (config may add live; see
+    # tests/test_calibrated_route_and_modes.py).
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(SETTINGS.trading, "forward_test_modes", ["demo"])
     o = _orch(mode="live")
     DonchianForwardTest(o).step()
     o.data_feed.fetch_rates.assert_not_called()

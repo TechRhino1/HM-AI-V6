@@ -80,6 +80,14 @@ class TradingSettings:
     # universe off. That is a trading decision, not a bug fix, and it must be
     # taken knowingly rather than shipped as a default.
     use_calibrated_entry_policy: bool = False
+    # Calibrated policy as its own entry route (2026-11-23): a SWING candidate the calibrated
+    # policy allows is dispatched at market even when the legacy gates said WAIT/NO_TRADE, through
+    # the full dispatch path (vetoes, slots, cooldowns, RiskEngine sizing/heat/correlation/circuit
+    # breaker, news). Off by default for a fresh install; config/settings.json turns it on.
+    calibrated_policy_trader: bool = False
+    # Modes in which the FT_ forward tests (trend_router, donchian_eth_h4, research_leads) trade.
+    # Demo only by default; config/settings.json can extend it to paper/live.
+    forward_test_modes: List[str] = field(default_factory=lambda: ["demo"])
     # AdaptiveGatePolicy knobs. The SOFTEN pathway historically never fired
     # because the decision engine always passed recent_win_rate=None; with the
     # pathway now live, these two knobs decide how permissive it is.
@@ -182,6 +190,13 @@ class JarvisConfig:
                         cfg.trading.use_calibrated_entry_policy = str(raw).strip().lower() in {
                             "1", "true", "yes", "on",
                         }
+                if "calibrated_policy_trader" in t_data:
+                    raw = t_data["calibrated_policy_trader"]
+                    cfg.trading.calibrated_policy_trader = (
+                        raw if isinstance(raw, bool) else str(raw).strip().lower() in {"1", "true", "yes", "on"}
+                    )
+                if "forward_test_modes" in t_data and isinstance(t_data["forward_test_modes"], list):
+                    cfg.trading.forward_test_modes = [str(m).strip().lower() for m in t_data["forward_test_modes"]]
                 if "gate_policy_max_soft_fail" in t_data:
                     try:
                         cfg.trading.gate_policy_max_soft_fail = int(t_data["gate_policy_max_soft_fail"])

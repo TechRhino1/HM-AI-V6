@@ -144,10 +144,25 @@ class TradeGuard:
         actual_tp_dist = abs(decision.take_profit - decision.entry_price)
         actual_rr = (actual_tp_dist / actual_risk_dist) if actual_risk_dist > 1e-6 else 0.0
 
+        # Judge the R:R the order will actually carry: execution_engine rewrites the TP to the
+        # calibrated live target at dispatch, so the scan's TP is stale (2026-11-23: 844 ETH/SOL
+        # refusals against a target never sent). A deployable calibrated geometry was validated
+        # out of sample, so it is not held to the generic floor.
+        skip_floor = False
+        try:
+            from jarvis.backtesting.exit_geometry import deployment_refusal, live_target_r
+            fixed_r = live_target_r(decision.symbol)
+            if fixed_r:
+                actual_rr = float(fixed_r)
+                actual_tp_dist = actual_rr * actual_risk_dist
+                skip_floor = deployment_refusal(decision.symbol) is None
+        except Exception:
+            pass
+
         trade_style = str(getattr(decision, "trade_style", "") or "").upper()
         default_min = 1.30 if "SCALP" in trade_style else 1.50
         min_rr_threshold = float(getattr(decision, "min_allowed_rr", None) or default_min)
-        if actual_rr < (min_rr_threshold - 0.05):
+        if not skip_floor and actual_rr < (min_rr_threshold - 0.05):
             reasons.append(
                 f"Sub-minimum Risk:Reward ratio {actual_rr:.2f}:1 "
                 f"(risk={actual_risk_dist:.2f}, reward={actual_tp_dist:.2f}, minimum {min_rr_threshold:.2f} required)."

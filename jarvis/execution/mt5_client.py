@@ -1062,7 +1062,8 @@ class MT5Client:
                 "sl": o.sl,
                 "tp": o.tp,
                 "comment": o.comment,
-                "time_setup": utc_setup
+                "time_setup": utc_setup,
+                "time_setup_raw": raw_setup,  # broker clock; age it against the broker tick, not the offset
             })
         if symbol is None:
             self._pending_orders_cache = (now_ts, list(res))
