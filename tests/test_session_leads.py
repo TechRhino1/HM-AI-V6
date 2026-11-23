@@ -59,3 +59,12 @@ def test_promotion_needs_live_sample_backtest_hurdle_and_dsr():
 def test_nothing_is_shadow_traded_without_evidence():
     # 2026-11-19 research: no symbol cleared the shadow bar, so the router builds no leads.
     assert sl.build(object()) == []
+
+
+def test_a_route_must_beat_the_legacy_engine():
+    hurdle = {"min_trades": 10, "min_expectancy_r": 0.02}
+    good_bt = {"trades": 300, "expectancy_r": 0.10, "dsr": 0.95}
+    route = [0.2] * sl.MIN_LIVE_TRADES
+    assert sl.beats_live_verdict(route, [0.1] * 40, good_bt, hurdle) is None
+    assert "does not beat" in sl.beats_live_verdict(route, [0.3] * 40, good_bt, hurdle)
+    assert "closed demo trades" in sl.beats_live_verdict(route[:5], [], good_bt, hurdle)

@@ -149,6 +149,19 @@ def promotion_verdict(live_r: List[float], backtest: Dict[str, Any], hurdle: Dic
     return None
 
 
+def beats_live_verdict(route_r: List[float], live_r: List[float], backtest: Dict[str, Any],
+                       hurdle: Dict[str, float]) -> Optional[str]:
+    """None when an entry route (e.g. CALIBRATED_POLICY) has earned its place on a symbol, else why
+    not: the promotion rule above, and its mean R must beat the legacy engine's on that symbol over
+    the same window."""
+    why = promotion_verdict(route_r, backtest, hurdle)
+    if why is not None:
+        return why
+    if live_r and float(np.mean(route_r)) <= float(np.mean(live_r)):
+        return f"route mean {np.mean(route_r):+.3f}R does not beat the legacy engine's {np.mean(live_r):+.3f}R"
+    return None
+
+
 class SessionLeadForwardTest(_LeadBase):
     """Shadow-trades one pre-registered signal on the symbols it is registered for."""
     TF = "H1"
