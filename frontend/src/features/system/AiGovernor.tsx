@@ -71,7 +71,7 @@ export function AiGovernor() {
         )}
       </Card>
 
-      <Card title="Gemini models" sub="Free tier: flash models allow 20 requests a day each and are kept for the Copilot; the governor and widgets use the free lite and Gemma models. A spent or busy model is skipped until it recovers." flush>
+      <Card title="AI models" sub="All free tier. Gemini first: flash models allow 20 requests a day each and are kept for the Copilot; the governor and widgets use the free lite and Gemma models. When every Gemini model is capped or busy, OpenRouter's free models (openrouter/…, 50 requests a day) take over. A spent or busy model is skipped until it recovers." flush>
         {!st.data?.models?.length ? <Empty title="No model called yet in this engine session" /> : (
           <div className="table-wrap">
             <table className="table">

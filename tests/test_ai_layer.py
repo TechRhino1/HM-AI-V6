@@ -9,7 +9,7 @@ import types
 import pytest
 
 from jarvis.ai import briefs, client, copilot, explain, nl_alerts, review, tools
-from jarvis.ai.providers import base as ai_base, gemini as gemini_mod
+from jarvis.ai.providers import base as ai_base, gemini as gemini_mod, openrouter as openrouter_mod
 from jarvis.ai.providers.base import ChatResult, Provider, ProviderBusy, ProviderError, ToolCall
 from jarvis.ai.providers.claude import ClaudeProvider
 from jarvis.ai.providers.gemini import GeminiProvider
@@ -22,12 +22,14 @@ PROV = {"source": "nse:option-chain@test", "kind": "live", "as_of": 1.0, "age_se
 
 @pytest.fixture(autouse=True)
 def isolate(monkeypatch, tmp_path):
-    for v in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "JARVIS_AI_PROVIDER", "JARVIS_AI_MODEL"):
+    for v in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "JARVIS_AI_PROVIDER", "JARVIS_AI_MODEL",
+              "OPENROUTER_API_KEY", "JARVIS_OPENROUTER_MODEL"):
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setattr(store, "_path", lambda: str(tmp_path / "m.db"))
     copilot.MEMORY._d.clear()
     explain._cache.clear()
     gemini_mod._discovery.update(at=0.0, ttl=0.0, models=None)
+    openrouter_mod._health.clear()
     ai_base.note_call(None, False, [])
 
 
@@ -79,7 +81,7 @@ def fake_handler(monkeypatch):
 def test_no_key_means_no_provider():
     assert client.get_provider() is None
     assert client.status() == {"provider": None, "model": None, "available": False, "requested": "auto",
-                               "busy": False, "last_model_used": None, "fallbacks_tried": [], "models": []}
+                               "busy": False, "last_model_used": None, "fallbacks_tried": [], "providers": [], "models": []}
 
 
 def test_gemini_selected_with_its_key(monkeypatch):
@@ -610,3 +612,137 @@ def test_status_reports_model_health(monkeypatch):
     st = client.status()
     assert {"model": "gemini-3.8-flash", "state": "quota"}.items() <= next(
         m for m in st["models"] if m["model"] == "gemini-3.8-flash").items()
+
+
+
+# ---------------------------------------------------------------- OpenRouter free backup (2026-11-24)
+
+OR_KEY = "sk-or-v1-TESTKEY-0000"
+
+
+class ORResp(FakeResp):
+    def __init__(self, code, body, headers=None):
+        super().__init__(code, body)
+        self.headers = headers or {}
+
+
+def _or_ok(content=None, tool_calls=None, model="baidu/ernie-5.5-flash-preview:free"):
+    msg = {"role": "assistant", "content": content}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+    return ORResp(200, {"model": model, "choices": [{"message": msg, "finish_reason": "stop"}]})
+
+
+OR_DAILY = ORResp(429, {"error": {"message": "Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000."}},
+                  headers={"X-RateLimit-Reset": str(int((time.time() + 5 * 3600) * 1000))})
+
+
+def test_openrouter_wire_format_tools_and_structured(monkeypatch, fake_handler):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    s = FakeSession([
+        _or_ok(tool_calls=[{"id": "t1", "type": "function",
+                            "function": {"name": "fno_analytics", "arguments": '{"symbol": "NIFTY"}'}}]),
+        _or_ok("PCR 1.12 (live, 12 s)."),
+        _or_ok('{"rules": []}'),
+    ])
+    p = OpenRouterProvider(session=s)
+    out = copilot.ask("nifty pcr", provider=p)
+    assert out["answer"] == "PCR 1.12 (live, 12 s)."
+    assert p.structured("x", {"type": "object"}) == {"rules": []}
+    first, second, third = s.sent
+    assert first["url"].endswith("/api/v1/chat/completions") and first["headers"]["Authorization"] == f"Bearer {OR_KEY}"
+    assert first["json"]["model"] == "openrouter/free" and first["json"]["messages"][0]["role"] == "system"
+    assert first["json"]["tools"][0]["type"] == "function" and first["json"]["tools"][0]["function"]["name"]
+    msgs = second["json"]["messages"]
+    assert msgs[-2]["tool_calls"][0]["id"] == "t1" and msgs[-1]["role"] == "tool" and msgs[-1]["tool_call_id"] == "t1"
+    assert third["json"]["response_format"]["type"] == "json_schema"
+    assert OR_KEY not in json.dumps([x["json"] for x in s.sent])
+
+
+def test_openrouter_never_asks_a_paid_model(monkeypatch):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("JARVIS_OPENROUTER_MODEL", "anthropic/claude-paid")
+    assert OpenRouterProvider().model == "openrouter/free"
+    assert OpenRouterProvider(model="google/gemma-4-26b-a4b-it:free").model == "google/gemma-4-26b-a4b-it:free"
+
+
+def test_openrouter_daily_cap_is_remembered(monkeypatch):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    s = FakeSession([OR_DAILY])
+    with pytest.raises(ProviderBusy):
+        OpenRouterProvider(session=s).structured("x", {"type": "object"})
+    with pytest.raises(ProviderBusy) as e:
+        OpenRouterProvider(session=s).structured("x", {"type": "object"})
+    assert len(s.sent) == 1 and "free again at" in str(e.value)
+    row = next(r for r in openrouter_mod.model_health() if r["model"] == "openrouter/free")
+    assert row["state"] == "quota" and row["until"] - time.time() > 4 * 3600
+
+
+def test_no_openrouter_key_leaves_provider_choice_unchanged(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    p = client.get_provider()
+    assert isinstance(p, GeminiProvider)
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    fp = client.get_provider("background")
+    assert isinstance(fp, client.FallbackProvider) and [x.name for x in fp.providers] == ["gemini", "openrouter"]
+    assert fp.name == "gemini" and fp.providers[0].purpose == "background"
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert client.get_provider().name == "openrouter"
+
+
+def _gemini_all_capped():
+    for m in gemini_mod.FALLBACK_CHAIN + gemini_mod.LITE_CHAIN:
+        gemini_mod._mark(m, exhausted_until=time.time() + 3600, reason="quota")
+
+
+def test_fallback_structured_moves_to_openrouter_when_gemini_is_out(monkeypatch):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    _gemini_all_capped()
+    gs, ors = ListingSession([], LISTED), FakeSession([_or_ok('{"risk_multiplier": 0.9}')])
+    fp = client.FallbackProvider([GeminiProvider(session=gs, purpose="background"), OpenRouterProvider(session=ors)])
+    assert fp.structured("x", {"type": "object"}) == {"risk_multiplier": 0.9}
+    assert not gs.sent and len(ors.sent) == 1 and fp.name == "openrouter"
+
+
+def test_fallback_chat_before_any_turn_uses_openrouter_directly(monkeypatch, fake_handler):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    _gemini_all_capped()
+    ors = FakeSession([_or_ok("Gold is up on a weaker dollar.")])
+    fp = client.FallbackProvider([GeminiProvider(session=ListingSession([], LISTED)), OpenRouterProvider(session=ors)])
+    out = copilot.ask("why is gold up", provider=fp)
+    assert out["answer"] == "Gold is up on a weaker dollar." and not out.get("busy")
+    sent = ors.sent[0]["json"]["messages"]
+    assert sent[-1] == {"role": "user", "content": "why is gold up"}   # neutral marker translated
+
+
+def test_fallback_mid_tool_loop_restarts_the_turn_on_openrouter(monkeypatch, fake_handler):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    call = FakeResp(200, {"status": "requires_action", "steps": [
+        {"type": "function_call", "id": "c1", "name": "fno_analytics", "arguments": {"symbol": "NIFTY"}}]})
+    gs = ListingSession([call] + [DAILY_CAP] * 10, LISTED)
+    ors = FakeSession([_or_ok(tool_calls=[{"id": "t1", "type": "function", "function": {
+        "name": "fno_analytics", "arguments": '{"symbol": "NIFTY"}'}}]), _or_ok("PCR 1.12.")])
+    fp = client.FallbackProvider([GeminiProvider(session=gs, sleep=lambda d: None), OpenRouterProvider(session=ors)])
+    out = copilot.ask("nifty pcr", provider=fp)
+    assert out["answer"] == "PCR 1.12." and fp.name == "openrouter"
+    roles = [m["role"] for m in ors.sent[0]["json"]["messages"]]
+    assert roles == ["system", "user"]   # restarted clean: no Gemini steps sent to OpenRouter
+    assert len(fake_handler) == 2        # the tool ran on Gemini, then again on OpenRouter
+
+
+def test_openrouter_key_is_redacted(monkeypatch, caplog):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    caplog.set_level(logging.DEBUG)
+    s = FakeSession([ORResp(401, {"error": f"key {OR_KEY} invalid"})])
+    with pytest.raises(ProviderError) as e:
+        OpenRouterProvider(session=s).structured("x", {"type": "object"})
+    assert OR_KEY not in str(e.value) and "[REDACTED]" in str(e.value) and OR_KEY not in caplog.text
