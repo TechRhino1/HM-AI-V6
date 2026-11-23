@@ -81,8 +81,12 @@ def test_hard_gates_contain_critical_risk_checks():
     assert "Risk/Reward >= 1.5" in fails
 
 
-def test_trade_guard_geometric_rr_check():
-    """Verify TradeGuard calculates actual price geometry and blocks sub-minimum R:R even if declared R:R is high."""
+def test_trade_guard_geometric_rr_check(monkeypatch):
+    """Verify TradeGuard calculates actual price geometry and blocks sub-minimum R:R even if declared R:R is high.
+    Applies to symbols without a calibrated live target; one with a target has its TP rewritten at
+    dispatch (execution_engine), which tests/test_live_target_rr_and_ft_exposure.py covers."""
+    from jarvis.backtesting import exit_geometry
+    monkeypatch.setattr(exit_geometry, "live_target_r", lambda s: None)
     # Degenerate trade with 24 pts risk and 2.36 pts reward (~0.1:1 R:R)
     bad_decision = _make_dummy_decision(
         entry=4159.31,

@@ -191,8 +191,11 @@ class RiskEngine:
             breaches.append(f"ADAPTIVE_GATE_2: Expected Value (${decision.expected_value:.2f}) must be strictly positive.")
 
         # Condition 3: Risk / Reward Ratio >= 1.50
-        if decision.risk_reward_ratio < 1.50:
-            breaches.append(f"ADAPTIVE_GATE_3: Risk/Reward ratio (1:{decision.risk_reward_ratio:.2f}) below 1:1.50 minimum.")
+        # The TP is rewritten to the calibrated live target at dispatch; judge that one.
+        from jarvis.backtesting.exit_geometry import live_target_r
+        _rr = live_target_r(decision.symbol) or decision.risk_reward_ratio
+        if _rr < 1.50:
+            breaches.append(f"ADAPTIVE_GATE_3: Risk/Reward ratio (1:{_rr:.2f}) below 1:1.50 minimum.")
 
         # Condition 4: Market Regime Supports Setup
         regime = decision.regime

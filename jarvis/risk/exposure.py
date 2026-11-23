@@ -144,6 +144,8 @@ class ExposureManager:
                     net_dir[quote] = net_dir.get(quote, 0) + 1
 
         for p in positions:
+            if is_forward_test(p):  # FT_ research positions are not engine exposure (ADAPTIVE_GATE_12)
+                continue
             p_bias = getattr(p, "side", getattr(p, "type", "BUY"))
             _add_exposure(p.symbol, p_bias)
 
