@@ -44,6 +44,8 @@ from jarvis.config.paths import mode_scoped_db_path
 from jarvis.market.sessions import SessionEngine
 from jarvis.execution.entry_policy import evaluate_entry
 from jarvis.intelligence.gate_policy import canonical_gate
+from jarvis.intelligence.opportunity_arbiter import (is_exec_ready as _is_exec_ready,
+                                                     unsoftened_failure_count as _unsoftened_failure_count)
 from jarvis.intelligence.winrate_targeting import load_profiles
 from jarvis.intelligence.llm_controller import AutonomousLLMSystemController
 from jarvis.observability import log_event
@@ -2570,41 +2572,9 @@ class JarvisOrchestrator:
         if dispatch_candidates and not dry_run:
             for candidate in dispatch_candidates:
                 d_action = getattr(candidate.decision_obj, "decision", "") if candidate.decision_obj else ""
-                qg = getattr(candidate.decision_obj, "quality_gate", None) if candidate.decision_obj else None
-                raw_fails = getattr(qg, "failing_reasons", []) or []
-                softened_set = {canonical_gate(g) for g in (getattr(qg, "softened_gates", []) or [])}
-                unsoftened_fails = [r for r in raw_fails if canonical_gate(r) not in softened_set]
-                failing_cnt = len(unsoftened_fails) if qg else 99
+                failing_cnt = _unsoftened_failure_count(candidate.decision_obj)
 
-                is_exec_ready = (
-                    candidate.is_actionable
-                    and candidate.setup_grade in ("GRADE A+", "GRADE A", "GRADE B")
-                    and candidate.decision_obj
-                    and candidate.bias in ("BUY", "SELL")
-                    and getattr(candidate.decision_obj, "bias", "") in ("BUY", "SELL")
-                    and (
-                        getattr(candidate.decision_obj, "order_type", "MARKET") in ("MARKET", "LIMIT")
-                        or not isinstance(getattr(candidate.decision_obj, "order_type", None), str)
-                    )
-                    and d_action not in ("HOLD", "NO_TRADE")
-                    and (
-                        d_action == "EXECUTE"
-                        or (
-                            d_action == "WAIT"
-                            and candidate.setup_grade in ("GRADE A+", "GRADE A")
-                            and candidate.expected_value >= 0.40
-                            and candidate.risk_reward_ratio >= 1.4
-                            and failing_cnt <= 1
-                        )
-                        or (
-                            d_action == "WAIT"
-                            and candidate.setup_grade == "GRADE B"
-                            and candidate.expected_value >= 0.40
-                            and candidate.risk_reward_ratio >= 1.4
-                            and failing_cnt == 0
-                        )
-                    )
-                )
+                is_exec_ready = _is_exec_ready(candidate, d_action, failing_cnt)
 
                 if not is_exec_ready:
                     if candidate == dispatch_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):

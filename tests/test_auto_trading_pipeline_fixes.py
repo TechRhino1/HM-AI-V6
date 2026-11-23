@@ -120,35 +120,8 @@ class TestAutoTradingPipelineFixes:
         d_action = "WAIT"
         failing_cnt = 1
 
-        is_exec_ready = (
-            candidate.is_actionable
-            and candidate.setup_grade in ("GRADE A+", "GRADE A", "GRADE B")
-            and candidate.decision_obj
-            and candidate.bias in ("BUY", "SELL")
-            and getattr(candidate.decision_obj, "bias", "") in ("BUY", "SELL")
-            and (
-                getattr(candidate.decision_obj, "order_type", "MARKET") in ("MARKET", "LIMIT")
-                or not isinstance(getattr(candidate.decision_obj, "order_type", None), str)
-            )
-            and d_action not in ("HOLD", "NO_TRADE")
-            and (
-                d_action == "EXECUTE"
-                or (
-                    d_action == "WAIT"
-                    and candidate.setup_grade in ("GRADE A+", "GRADE A")
-                    and candidate.expected_value >= 0.40
-                    and candidate.risk_reward_ratio >= 1.4
-                    and failing_cnt <= 1
-                )
-                or (
-                    d_action == "WAIT"
-                    and candidate.setup_grade == "GRADE B"
-                    and candidate.expected_value >= 0.40
-                    and candidate.risk_reward_ratio >= 1.4
-                    and failing_cnt == 0
-                )
-            )
-        )
+        from jarvis.intelligence.opportunity_arbiter import is_exec_ready as _ready
+        is_exec_ready = _ready(candidate, d_action, failing_cnt)  # the rule live dispatch uses
 
         assert is_exec_ready is True, "Grade A+ candidate in WAIT status with 1 softened failure must be exec_ready"
 

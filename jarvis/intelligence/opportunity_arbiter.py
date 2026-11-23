@@ -154,6 +154,39 @@ class CandidateOpportunity:
         }
 
 
+def unsoftened_failure_count(decision_obj: Any) -> int:
+    """Failing quality-gate checks that were not softened; 99 when there is no gate result."""
+    qg = getattr(decision_obj, "quality_gate", None) if decision_obj is not None else None
+    if qg is None:
+        return 99
+    softened = {canonical_gate(g) for g in (getattr(qg, "softened_gates", []) or [])}
+    return len([r for r in (getattr(qg, "failing_reasons", []) or []) if canonical_gate(r) not in softened])
+
+
+def is_exec_ready(candidate: Any, d_action: str, failing_cnt: int) -> bool:
+    """Whether the arbiter may dispatch this candidate: an EXECUTE, or a WAIT good enough to promote.
+    One definition for live dispatch (orchestrator) and the live-takeable calibration (signal_scan)."""
+    dobj = getattr(candidate, "decision_obj", None)
+    order_type = getattr(dobj, "order_type", "MARKET")
+    grade = getattr(candidate, "setup_grade", "")
+    ev = float(getattr(candidate, "expected_value", 0.0) or 0.0)
+    rr = float(getattr(candidate, "risk_reward_ratio", 0.0) or 0.0)
+    return bool(
+        getattr(candidate, "is_actionable", False)
+        and grade in ("GRADE A+", "GRADE A", "GRADE B")
+        and dobj
+        and getattr(candidate, "bias", "") in ("BUY", "SELL")
+        and getattr(dobj, "bias", "") in ("BUY", "SELL")
+        and (order_type in ("MARKET", "LIMIT") or not isinstance(order_type, str))
+        and d_action not in ("HOLD", "NO_TRADE")
+        and (
+            d_action == "EXECUTE"
+            or (d_action == "WAIT" and grade in ("GRADE A+", "GRADE A") and ev >= 0.40 and rr >= 1.4 and failing_cnt <= 1)
+            or (d_action == "WAIT" and grade == "GRADE B" and ev >= 0.40 and rr >= 1.4 and failing_cnt == 0)
+        )
+    )
+
+
 class UniversalOpportunityArbiter:
     """
     Master Opportunity Arbiter.
@@ -412,7 +445,8 @@ class UniversalOpportunityArbiter:
         self,
         decision_obj: DecisionObject,
         context: Optional[MarketContext] = None,
-        trade_style: str = "SWING"
+        trade_style: str = "SWING",
+        as_of: Optional[Any] = None,
     ) -> CandidateOpportunity:
         """
         Evaluates a single decision object through the Universal Opportunity Arbiter.
@@ -549,7 +583,7 @@ class UniversalOpportunityArbiter:
         # Session Quality Filter: Prohibit new entries in OFF_HOURS on non-crypto assets
         from jarvis.market.sessions import SessionEngine
         try:
-            sess_info = SessionEngine.get_current_session()
+            sess_info = SessionEngine.get_current_session(as_of)  # as_of: offline replays; live = now
             is_crypto_asset = any(c in symbol.upper() for c in ("BTC", "ETH", "SOL", "CRYPTO"))
             from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
             sym_prof_cfg = get_symbol_profile_config(symbol)
