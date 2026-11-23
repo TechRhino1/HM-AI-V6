@@ -42,16 +42,10 @@ def _style_from_comment(comment) -> str:
     return "SWING"
 
 
-def _pending_order_age(setup_time: float, now: float, server_now: float) -> float:
-    """Seconds since a pending order was placed. ``time_setup`` may be on the UTC clock or on
-    the broker wall clock (offset from UTC by hours). The true age is the smaller non-negative
-    reading of the two clocks. The old rule switched to the broker clock once an order was 30 min
-    old, adding the 2-3h broker offset: every order then 'expired' at ~30 min (SWING TTL is 40).
-    shortcut: an order older than the broker offset reads younger by that offset; TTLs are <= 40 min."""
-    if not setup_time or setup_time <= 0:
-        return 0.0
-    ages = [a for a in (now - setup_time, server_now - setup_time) if a >= 0]
-    return min(ages) if ages else 0.0
+def _pending_order_age(setup_time: float, now: float, server_now: float, raw_setup=None) -> float:
+    """Seconds since a pending order was placed; see broker_time.pending_order_age."""
+    from jarvis.data.broker_time import pending_order_age
+    return pending_order_age(setup_time, now, server_now, raw_setup)
 
 
 def _can_split(volume: float, pct: float, vol_min: float, vol_step: float) -> bool:
@@ -796,7 +790,7 @@ class PositionMonitorEngine:
                         pass
                 setup_time = o.get("time_setup", 0)
                 # Compute age: use local clock if paper mode (abs diff < 1800s), otherwise synchronize to broker server clock
-                age = _pending_order_age(setup_time, now, server_now)
+                age = _pending_order_age(setup_time, now, server_now, o.get("time_setup_raw"))
 
                 sym = o.get("symbol", "UNKNOWN")
                 otype = str(o.get("type", "")).upper()
@@ -820,7 +814,8 @@ class PositionMonitorEngine:
 
                 cancel_reason = None
                 if age > allowed_age:
-                    cancel_reason = f"TTL expired ({age / 60.0:.1f}m > {allowed_age / 60.0:.1f}m)"
+                    cancel_reason = (f"TTL expired ({age / 60.0:.1f}m > {allowed_age / 60.0:.1f}m; "
+                                     f"setup={setup_time} raw={o.get('time_setup_raw')} server={server_now:.0f})")
 
                 ctx = self._get_context(sym)
                 if ctx and not cancel_reason and open_price > 0:

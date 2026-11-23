@@ -16,6 +16,7 @@ import time
 import logging
 import threading
 from typing import Dict, List, Any, Optional
+from jarvis.data.broker_time import pending_order_age
 from jarvis.data.schemas import PositionSnapshot, MarketContext
 from jarvis.execution.mt5_client import MT5Client
 from jarvis.execution.exit_policy import ExitPolicy, evaluate_exit
@@ -57,11 +58,16 @@ class OrderManager:
             return []
         
         now = self._now()
+        get_server = getattr(self.mt5_client, "get_broker_time", None)
+        try:
+            server_now = float(get_server()) if callable(get_server) else now
+        except Exception:
+            server_now = now
         cancelled = []
         for o in pending:
             ticket = o.get("ticket")
-            setup_time = o.get("time_setup", 0)
-            age = (now - setup_time) if setup_time > 0 else 0
+            setup_time = o.get("time_setup", 0) or 0
+            age = pending_order_age(setup_time, now, server_now, o.get("time_setup_raw"))
             sym = o.get("symbol", "UNKNOWN")
             otype = str(o.get("type", "")).upper()
             if otype in ("2", "0") or otype == "ORDER_TYPE_BUY_LIMIT":
@@ -86,7 +92,8 @@ class OrderManager:
 
             cancel_reason = None
             if age > allowed_age:
-                cancel_reason = f"TTL expired ({age / 60.0:.1f}m > {allowed_age / 60.0:.1f}m)"
+                cancel_reason = (f"TTL expired ({age / 60.0:.1f}m > {allowed_age / 60.0:.1f}m; "
+                                     f"setup={setup_time} raw={o.get('time_setup_raw')} server={server_now:.0f})")
 
             # Structural Invalidation & Runaway Protection using live context
             ctx = context_map.get(sym) if context_map else None
