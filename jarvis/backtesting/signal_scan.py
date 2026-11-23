@@ -39,6 +39,7 @@ from jarvis.data.symbol_registry import resolve as resolve_symbol
 from jarvis.intelligence.decision_engine import DecisionEngine
 from jarvis.intelligence.gate_policy import HARD_GATES
 from jarvis.intelligence.gate_registry import canonical_gate
+from jarvis.intelligence.opportunity_arbiter import is_exec_ready, unsoftened_failure_count
 from jarvis.intelligence.regime_engine import MarketRegimeClassifier
 from jarvis.market.market_context import MarketContextEngine
 
@@ -66,6 +67,10 @@ CANDIDATE_COLUMNS: List[str] = [
     # Devil's Advocate inputs for tools/calibrate_devil_gate.py. The critic judges the
     # TENTATIVE side, which can differ from the decision's side.
     "devil_side", "devil_flags", "devil_n_threats",
+    # What live dispatch would do with the row (2026-11-23): the calibrator used to treat every
+    # directional read as tradable, but live only trades an EXECUTE or a promotable WAIT that
+    # clears the arbiter and the hour-based dispatch vetoes. Tables scanned before this lack them.
+    "setup_grade", "is_actionable", "n_unsoftened_failed", "session_blackout", "live_takeable",
 ]
 
 # Selectivity variables calibration may threshold on, in preference order.
@@ -92,6 +97,96 @@ class ScanResult:
             "gate_pass": self.gate_pass,
             "hard_gate_fail": self.hard_gate_fail,
         }
+
+
+def live_hour_vetoes(symbol: str, hour: int) -> List[str]:
+    """The dispatch vetoes live applies by UTC hour, for an offline replay.
+    Mirrors orchestrator.run_cycle_for_symbol (Asian 00-06 / rollover 21-23 blackout) and
+    _dispatch_vetoes (PROFILE_SESSION_WINDOW). The gold premium-window exception is not
+    modelled, so this is the stricter reading."""
+    from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
+    prof = get_symbol_profile_config(symbol)
+    restricted = bool(getattr(prof, "session_restriction", True)) if prof is not None else True
+    crypto = bool(getattr(resolve_symbol(symbol), "is_crypto", False))  # = symbol_registry.is_crypto
+    out: List[str] = []
+    if restricted and not crypto:
+        asian_pair = any(c in str(symbol).upper() for c in ("JPY", "AUD", "NZD"))
+        if (0 <= hour < 6 and not asian_pair) or 21 <= hour <= 23:
+            out.append("SESSION_BLACKOUT")
+    window = getattr(prof, "allowed_utc_hours", None) if prof is not None else None
+    if (window and restricted and not getattr(prof, "premium_window_exception", False)
+            and not (window[0] <= hour < window[1])):
+        out.append("PROFILE_SESSION_WINDOW")
+    return out
+
+
+def apply_limit_fills(cands: pd.DataFrame, df: pd.DataFrame, spec: Any) -> pd.DataFrame:
+    """Re-price LIMIT candidates the way live executes them; drop the ones that never fill.
+
+    The scan fills every row at the next bar's open. Live routes most decisions as resting
+    limits (execution_engine ~546-760): breakout/strong-trend and limits inside the broker
+    distance or capture band go to market; a limit that drifted > 0.2 ATR the wrong way, or
+    whose market already covered 40% of the way to target, is rejected; otherwise it rests,
+    clamped to 1.3 ATR (SWING) from market, and expires within 40 min. With H1 bars it fills
+    only if bar i+1 trades through it - an upper bound on fill probability (shortcut: use the
+    real M5 bars for the timing when per-style profiles are built). The stop and target keep
+    their distances from the limit price, as live anchors them.
+    """
+    if cands is None or cands.empty or "order_type" not in cands.columns:
+        return cands
+    o, h, l = (df[k].to_numpy(float) for k in ("open", "high", "low"))
+    pip = float(getattr(spec, "pip_size", 0.0001) or 0.0001)
+    rows = []
+    for _, r in cands.iterrows():
+        row = r.to_dict()
+        j = int(row["bar_idx"]) + 1
+        is_limit = str(row.get("order_type", "MARKET")).upper() == "LIMIT"
+        breakout = (any(k in str(row.get("regime", "")).upper() for k in ("BREAKOUT", "STRONG_TREND"))
+                    or "BREAKOUT" in str(row.get("strategy", "")).upper())
+        if not is_limit or breakout or j >= len(o):
+            rows.append(row)
+            continue
+        atr = float(row.get("atr") or 0.0) or 1e-9
+        spread = float(row.get("spread_pips") or 0.0) * pip
+        bid, ask = o[j], o[j] + spread
+        lim, side = float(row["entry"]), row["side"]
+        tp_dist = abs(float(row["tp"]) - float(row["fill"]))
+        drift_max = max(0.20 * atr, 2.0 * spread)
+        capture = min(spread + max(2.0 * pip, 0.06 * atr), 0.15 * atr)
+        max_dist = max(min(1.30 * atr, bid * 0.030), 4.0 * spread)
+        if side == "BUY":
+            if lim >= bid:  # at/above market: routed to market unless it would chase
+                if lim - bid > drift_max:
+                    continue
+                rows.append(row)
+                continue
+            if ask - lim <= capture:
+                rows.append(row)
+                continue
+            if tp_dist > 0 and bid >= lim + 0.40 * tp_dist:
+                continue
+            lim = max(lim, bid - max_dist + spread)
+            if l[j] + spread > lim:  # the ask never reached the limit
+                continue
+        else:
+            if lim <= ask:
+                if ask - lim > drift_max:
+                    continue
+                rows.append(row)
+                continue
+            if lim - bid <= capture:
+                rows.append(row)
+                continue
+            if tp_dist > 0 and ask <= lim - 0.40 * tp_dist:
+                continue
+            lim = min(lim, ask + max_dist)
+            if h[j] < lim:  # the bid never reached the limit
+                continue
+        shift = lim - float(row["fill"])
+        row.update(fill=round(lim, 8), sl=round(float(row["sl"]) + shift, 8),
+                   tp=round(float(row["tp"]) + shift, 8))
+        rows.append(row)
+    return pd.DataFrame(rows, columns=cands.columns) if rows else cands.iloc[0:0]
 
 
 def _point_size(digits: int) -> float:
@@ -155,6 +250,8 @@ class SignalScanner:
         if hasattr(self.analyst_cluster, "macro_analyst"):
             self.analyst_cluster.macro_analyst.news_calendar = []
         self.decision_engine = DecisionEngine()
+        from jarvis.intelligence.opportunity_arbiter import UniversalOpportunityArbiter
+        self.arbiter = UniversalOpportunityArbiter()  # no ML/bandit/self-learning: deterministic offline
 
     # ── helpers ────────────────────────────────────────────────────────────
     @staticmethod
@@ -293,6 +390,19 @@ class SignalScanner:
                 continue
 
             regime_val = getattr(regime.primary_regime, "value", str(regime.primary_regime))
+            # The live verdict at dispatch time (the next bar's open, SWING like the scan).
+            as_of = pd.Timestamp(nxt["time"])
+            as_of = as_of.tz_localize("UTC") if as_of.tzinfo is None else as_of.tz_convert("UTC")
+            blackout = bool(live_hour_vetoes(symbol, as_of.hour))
+            n_unsoft = unsoftened_failure_count(decision)
+            try:
+                cand = self.arbiter.evaluate_opportunity(decision, context, trade_style="SWING",
+                                                         as_of=as_of.to_pydatetime())
+            except Exception as exc:
+                logger.debug(f"[{symbol}] bar {i} arbiter error: {exc}")
+                cand = None
+            d_action = str(getattr(decision, "decision", "NO_TRADE"))
+            takeable = bool(cand is not None and not blackout and is_exec_ready(cand, d_action, n_unsoft))
             confluence_count = 0
             if bool(getattr(context.structure, "bos", False)):
                 confluence_count += 1
@@ -347,6 +457,11 @@ class SignalScanner:
                 "devil_side": tentative,
                 "devil_flags": "|".join(getattr(devil, "threat_flags", []) or []),
                 "devil_n_threats": len(getattr(devil, "threats_detected", []) or []),
+                "setup_grade": str(getattr(cand, "setup_grade", "")) if cand is not None else "",
+                "is_actionable": bool(getattr(cand, "is_actionable", False)) if cand is not None else False,
+                "n_unsoftened_failed": int(n_unsoft),
+                "session_blackout": blackout,
+                "live_takeable": takeable,
             })
 
         frame = pd.DataFrame(rows, columns=CANDIDATE_COLUMNS) if rows else pd.DataFrame(columns=CANDIDATE_COLUMNS)
@@ -361,4 +476,5 @@ class SignalScanner:
         )
 
 
-__all__ = ["SignalScanner", "ScanResult", "CANDIDATE_COLUMNS", "compute_atr"]
+__all__ = ["SignalScanner", "ScanResult", "CANDIDATE_COLUMNS", "compute_atr", "apply_limit_fills",
+           "live_hour_vetoes"]

@@ -30,7 +30,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from jarvis.backtesting.signal_scan import apply_limit_fills  # noqa: E402
 from jarvis.config.paths import DATA_DIR  # noqa: E402
+from jarvis.data.symbol_registry import resolve as resolve_symbol  # noqa: E402
 from jarvis.intelligence.winrate_targeting import (  # noqa: E402
     WRTargetCalibrator,
     WRProfileStore,
@@ -132,6 +134,10 @@ def main() -> int:
     ap.add_argument("--no-regime-geometry", action="store_true")
     ap.add_argument("--days", type=int, default=95,
                     help="history window, matching the *_H1_<days>d.parquet cache")
+    ap.add_argument("--live-takeable", action="store_true",
+                    help="calibrate only on rows live dispatch would trade (EXECUTE or a promotable "
+                         "WAIT, outside the hour vetoes) with LIMIT orders filled as live fills them. "
+                         "Needs candidate tables scanned with the live_takeable column.")
     ap.add_argument("--merge", action="store_true",
                     help="upsert into the existing profile store instead of replacing it "
                          "(required when calibrating a subset, otherwise the other symbols "
@@ -185,6 +191,13 @@ def main() -> int:
             continue
         df = pd.read_parquet(dpath).reset_index(drop=True)
         cands = pd.read_parquet(cpath)
+        if args.live_takeable:
+            if "live_takeable" not in cands.columns:
+                print(f"  {sym:8s} SKIP ({cpath.name} predates live_takeable; rescan with tools/scan_signals.py)")
+                continue
+            n_all = len(cands)
+            cands = apply_limit_fills(cands[cands["live_takeable"].astype(bool)], df, resolve_symbol(sym))
+            print(f"  {sym:8s} live-takeable {len(cands)}/{n_all} candidates after limit fills")
         t1 = time.time()
         profile = calibrator.calibrate_symbol(df=df, candidates=cands, symbol=sym)
         profiles[sym] = profile
@@ -225,6 +238,7 @@ def main() -> int:
         "folds": args.folds,
         "grid": "fine" if args.fine else "coarse",
         "days": args.days,
+        "candidate_set": "live_takeable" if args.live_takeable else "all_directional",
         # Provenance for the reachability guard. Without these two fields a
         # deployed file cannot be traced back to the setting that produced it,
         # and the guard's whole point is that the same target calibrates very
