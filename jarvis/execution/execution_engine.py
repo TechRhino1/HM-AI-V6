@@ -401,7 +401,7 @@ class ExecutionEngine:
             # policy's min-lot ceiling (it was a hard-coded $12 under $500).
             from jarvis.risk.account_tier import min_lot_risk_cap
             min_lot_risk_usd = vol_min * executable_sl_dist * dollar_risk_per_price_unit
-            min_lot_cap_usd, min_lot_cap_pct = min_lot_risk_cap(account_equity, decision.symbol)
+            min_lot_cap_usd, min_lot_cap_pct = min_lot_risk_cap(account_equity, decision.symbol, ts_str)
             if min_lot_risk_usd > min_lot_cap_usd + 1e-9:
                 logger.error(
                     f"🛑 EXECUTION BLOCKED for {decision.symbol}: Minimum lot {vol_min} would risk "
@@ -463,7 +463,7 @@ class ExecutionEngine:
             _vol_step = float(sym_spec.get("volume_step", 0.01) or 0.01)
             _risk_usd = executable_sl_dist * dollar_risk_per_price_unit * float(lots)
             from jarvis.risk.account_tier import min_lot_risk_cap
-            _max_allowed_usd, _max_allowed_pct = min_lot_risk_cap(_equity, decision.symbol)
+            _max_allowed_usd, _max_allowed_pct = min_lot_risk_cap(_equity, decision.symbol, ts_str)
             # Risk policy: a broker-minimum lot may use the min-lot ceiling; any
             # larger size must fit the per-trade target.
             if float(lots) <= _vol_min + 1e-9:
