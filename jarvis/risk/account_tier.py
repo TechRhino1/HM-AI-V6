@@ -57,14 +57,28 @@ def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
 GOLD_MIN_LOT_RISK_PCT = 3.5
 
 
-def min_lot_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
+# Below $250, gold may still trade, but only SCALP setups, whose stops are tight enough (median 12
+# points = $12 at 0.01 lot) to fit; a minimum lot may then risk up to this much (user decision
+# 2026-11-24). Wider gold styles keep the policy cap, so they wait until the account can afford them.
+GOLD_MICRO_SCALP_RISK_PCT = 5.0
+
+
+def min_lot_risk_cap(equity: float, symbol: str = "", trade_style: str = "") -> tuple[float, float]:
     """(max_risk_usd, max_risk_pct) for a broker-minimum lot as the executor enforces it:
-    the policy cap, with gold's headroom on $250+ accounts. One place for both sizer and executor."""
+    the policy cap, with gold's headroom (3.5% on $250+ accounts; scalp-only 5% below $250).
+    One place for both sizer and executor."""
     usd, pct = get_nano_risk_cap(equity, symbol)
     sym = (symbol or "").upper()
-    if ("XAU" in sym or "GOLD" in sym) and float(equity) >= 250.0 and pct < GOLD_MIN_LOT_RISK_PCT:
-        pct = GOLD_MIN_LOT_RISK_PCT
-        usd = float(equity) * pct / 100.0
+    if "XAU" in sym or "GOLD" in sym:
+        if float(equity) >= 250.0:
+            gold_pct = GOLD_MIN_LOT_RISK_PCT
+        elif "SCALP" in str(trade_style or "").upper():
+            gold_pct = GOLD_MICRO_SCALP_RISK_PCT
+        else:
+            gold_pct = pct
+        if pct < gold_pct:
+            pct = gold_pct
+            usd = float(equity) * pct / 100.0
     return usd, pct
 
 

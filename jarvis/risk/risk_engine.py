@@ -660,7 +660,8 @@ class RiskEngine:
                 portfolio_heat_multiplier=combined_multiplier,
                 is_second_trade=is_second_trade,
                 target_rr=decision.risk_reward_ratio,
-                atr_ratio=atr_ratio
+                atr_ratio=atr_ratio,
+                trade_style=str(getattr(decision, "trade_style", "") or ""),
             )
 
             if recovery_mode:

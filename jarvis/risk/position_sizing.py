@@ -42,7 +42,8 @@ class PositionSizer:
         pattern_sample_size: int = 0,
         portfolio_heat_multiplier: float = 1.0,
         is_second_trade: bool = False,
-        target_rr: float = 2.0
+        target_rr: float = 2.0,
+        trade_style: str = "",
     ) -> float:
         risk_distance = abs(entry_price - sl_price)
         if risk_distance <= 0 or account_balance <= 0:
@@ -188,7 +189,7 @@ class PositionSizer:
             # Symbol-specific min-lot headroom: Gold contract specifications (100 oz)
             # require up to 3.5% min-lot risk on standard/micro retail accounts ($250-$1,000)
             from jarvis.risk.account_tier import min_lot_risk_cap
-            eff_max_dollars, eff_max_pct = min_lot_risk_cap(account_balance, sym_key)
+            eff_max_dollars, eff_max_pct = min_lot_risk_cap(account_balance, sym_key, trade_style)
             if eff_max_pct <= max_pct:  # keep the caller's cap when it is not widened
                 eff_max_dollars, eff_max_pct = max_dollars, max_pct
 

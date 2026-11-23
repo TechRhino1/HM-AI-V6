@@ -59,6 +59,20 @@ UNKNOWN_ORDER_HOLD_SEC = 600.0
 
 # Styles fastest -> slowest. A faster style's bias younger than the window vetoes a slower
 # style entering the other way.
+def unsplit_rr_block(symbol: str, decision_rr: float) -> Optional[float]:
+    """The R:R an all-or-nothing (single min-lot) book is judged on when it is below the 2R floor,
+    else None. Judged on the target the order will carry (dispatch rewrites the TP to the calibrated
+    live target). A deployable calibrated geometry was validated out of sample, so it is not held to
+    the generic floor, as in TradeGuard. Before 2026-11-24 this printed the decision's RR (e.g. 4.99)
+    while comparing gold's 1.5R target, and silently skipped every gold dispatch."""
+    from jarvis.backtesting.exit_geometry import deployment_refusal, live_target_r
+    fixed = live_target_r(symbol)
+    if fixed and deployment_refusal(symbol) is None:
+        return None
+    judged = float(fixed or decision_rr or 0.0)
+    return judged if judged < 2.00 else None
+
+
 # profile.score_col -> the decision attribute signal_scan recorded under that column
 _NEVER_FILLED_SQL = " AND NOT (closed_at IS NOT NULL AND exit_price IS NULL AND realized_pnl IS NULL)"
 _CALIBRATED_SCORE_ATTR = {"score": "model_confidence", "master_score": "master_confluence_score",
@@ -2695,12 +2709,11 @@ class JarvisOrchestrator:
                         # Judge the RR the trade will actually carry: fixed-target
                         # symbols (gold 2.5R) get their TP rewritten at dispatch
                         # (execution_engine), so the decision's planned RR is stale.
-                        from jarvis.backtesting.exit_geometry import live_target_r
-                        _fixed_r = live_target_r(sym)
-                        if (_fixed_r or decision.risk_reward_ratio) < 2.00:
+                        _judged_rr = unsplit_rr_block(sym, decision.risk_reward_ratio)
+                        if _judged_rr is not None:
                             logger.info(
                                 f"🚫 UNSPLIT_RR_GATE: {sym} {candidate.trade_style} {candidate.bias} "
-                                f"RR={decision.risk_reward_ratio:.2f} < 2.00 — all-or-nothing book; "
+                                f"RR={_judged_rr:.2f} < 2.00 — all-or-nothing book; "
                                 f"sub-2R uncompoundable. Skipping."
                             )
                             continue
