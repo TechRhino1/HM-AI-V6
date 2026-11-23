@@ -11,7 +11,13 @@
       "SOLUSD",
       "USDCAD",
       "USDJPY",
-      "XAUUSD"
+      "XAUUSD",
+      "GER40",
+      "UK100",
+      "US30",
+      "USDCHF",
+      "NZDUSD",
+      "XAGUSD"
     ],
     "use_calibrated_entry_policy": true,
     "max_daily_entries_per_symbol": 4

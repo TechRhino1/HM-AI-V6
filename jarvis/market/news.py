@@ -62,9 +62,10 @@ logger = logging.getLogger("HM_LiveNewsEngine")
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
-# Every allowed/registry symbol that moves on US data (was missing USDCAD, ETHUSD, SOLUSD).
+# Every allowed/registry symbol that moves on US data (was missing USDCAD, ETHUSD, SOLUSD;
+# the US indices were missing too, so no US release ever blacked out US30/NAS100).
 USD_AFFECTED = ("XAUUSD", "XAGUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF",
-                "AUDUSD", "NZDUSD", "BTCUSD", "ETHUSD", "SOLUSD")
+                "AUDUSD", "NZDUSD", "BTCUSD", "ETHUSD", "SOLUSD", "US30", "NAS100")
 
 
 # Entry blackout around HIGH-impact releases. Widened from -10/+15 after
@@ -1652,11 +1653,11 @@ class LiveNewsEngine:
 
             elif currency == "EUR":
 
-                affected = ["EURUSD", "EURGBP", "EURJPY"]
+                affected = ["EURUSD", "EURGBP", "EURJPY", "GER40"]
 
             elif currency == "GBP":
 
-                affected = ["GBPUSD", "EURGBP", "GBPJPY"]
+                affected = ["GBPUSD", "EURGBP", "GBPJPY", "UK100"]
 
             elif currency == "JPY":
 
@@ -2194,11 +2195,11 @@ class LiveNewsEngine:
 
         elif currency == "EUR":
 
-            affected = ["EURUSD", "EURGBP", "EURJPY"]
+            affected = ["EURUSD", "EURGBP", "EURJPY", "GER40"]
 
         elif currency == "GBP":
 
-            affected = ["GBPUSD", "EURGBP", "GBPJPY"]
+            affected = ["GBPUSD", "EURGBP", "GBPJPY", "UK100"]
 
         elif currency == "JPY":
 

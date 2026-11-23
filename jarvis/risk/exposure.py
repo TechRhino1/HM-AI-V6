@@ -127,6 +127,13 @@ class ExposureManager:
             "USDCAD": ("USD", "CAD"),
             "XAUUSD": ("XAU", "USD"),
             "BTCUSD": ("BTC", "USD"),
+            "XAGUSD": ("XAG", "USD"),
+            "ETHUSD": ("ETH", "USD"),
+            "SOLUSD": ("SOL", "USD"),
+            "US30": ("US30", "USD"),
+            "NAS100": ("NAS100", "USD"),
+            "GER40": ("GER40", "EUR"),
+            "UK100": ("UK100", "GBP"),
         }
 
         # Net directional tallies: currency -> count (positive = Long, negative = Short)
