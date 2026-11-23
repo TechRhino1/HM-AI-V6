@@ -109,7 +109,9 @@ class GeminiProvider(Provider):
         default = LITE_CHAIN[0] if self.purpose == "background" else DEFAULT_MODEL
         self.model = model or (os.environ.get("JARVIS_AI_MODEL") if self.purpose == "interactive" else "") or default
         self._http = session or requests.Session()
-        self.timeout = timeout
+        # A free lite model under "high demand" can hang a request for 60 s (measured 2026-11-24);
+        # unattended calls give up sooner so a stuck model is skipped instead of stalling a refresh.
+        self.timeout = min(timeout, 20.0) if self.purpose == "background" else timeout
         self._sleep = sleep
         self._steps_model: Optional[str] = None  # model whose native steps are in the current history
         self.retried = 0

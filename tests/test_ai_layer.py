@@ -657,6 +657,9 @@ def test_openrouter_wire_format_tools_and_structured(monkeypatch, fake_handler):
     msgs = second["json"]["messages"]
     assert msgs[-2]["tool_calls"][0]["id"] == "t1" and msgs[-1]["role"] == "tool" and msgs[-1]["tool_call_id"] == "t1"
     assert third["json"]["response_format"]["type"] == "json_schema"
+    # calibrated: reasoning models otherwise spend the budget thinking and return empty content
+    assert all(x["json"]["reasoning"] == {"effort": "low", "exclude": True} for x in s.sent)
+    assert [x["json"]["max_tokens"] for x in s.sent] == [4096, 4096, 8192]
     assert OR_KEY not in json.dumps([x["json"] for x in s.sent])
 
 
@@ -746,3 +749,26 @@ def test_openrouter_key_is_redacted(monkeypatch, caplog):
     with pytest.raises(ProviderError) as e:
         OpenRouterProvider(session=s).structured("x", {"type": "object"})
     assert OR_KEY not in str(e.value) and "[REDACTED]" in str(e.value) and OR_KEY not in caplog.text
+
+
+
+def test_openrouter_empty_reply_is_retried_then_busy(monkeypatch):
+    """Reasoning models can spend the whole budget and return no content (finish=length)."""
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    s = FakeSession([_or_ok(""), _or_ok('{"ok": 1}')])
+    assert OpenRouterProvider(session=s).structured("x", {"type": "object"}) == {"ok": 1} and len(s.sent) == 2
+    s2 = FakeSession([_or_ok(""), _or_ok("")])
+    with pytest.raises(ProviderBusy):
+        OpenRouterProvider(session=s2).structured("x", {"type": "object"})
+
+
+
+def test_openrouter_prose_wrapped_json_is_parsed_and_junk_is_busy(monkeypatch):
+    from jarvis.ai.providers.openrouter import OpenRouterProvider
+    monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
+    s = FakeSession([_or_ok('Here is the result: {"ok": 2} Hope this helps.')])
+    assert OpenRouterProvider(session=s).structured("x", {"type": "object"}) == {"ok": 2}
+    s2 = FakeSession([_or_ok("I cannot help"), _or_ok('{"broken": ')])
+    with pytest.raises(ProviderBusy):
+        OpenRouterProvider(session=s2).structured("x", {"type": "object"})

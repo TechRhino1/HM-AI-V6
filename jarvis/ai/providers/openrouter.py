@@ -20,6 +20,17 @@ from .base import ChatResult, Provider, ProviderBusy, ProviderError, ToolCall, n
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openrouter/free"
 BUSY_COOLDOWN_S = 60.0
+# The free models are reasoning models: unbounded, they spent the whole token budget thinking and
+# returned empty content (ERNIE 5.5: finish=length at 2048 tokens). Calibrated 2026-11-24 on the
+# governor's request: low effort, reasoning excluded from the reply, 4096 tokens -> 4/4 valid JSON
+# (ernie, openrouter/free, dots-3, nemotron-3.5). Turning reasoning off is rejected (400) by some.
+REASONING = {"effort": "low", "exclude": True}
+MAX_TOKENS = 4096
+# Structured replies on long prompts (the governor's ~3k-char state) still ran some models out of
+# budget (ERNIE 5.5, Nemotron 3.5 Super: finish=length, empty content, 2 of 4 runs): give them more
+# room, and since `openrouter/free` picks a model per request, an empty reply is retried once.
+STRUCTURED_MAX_TOKENS = 8192
+EMPTY_RETRIES = 1
 
 _health: Dict[str, Dict[str, Any]] = {}
 _health_lock = threading.Lock()
@@ -118,7 +129,8 @@ class OpenRouterProvider(Provider):
         return ((data.get("choices") or [{}])[0] or {}).get("message") or {}
 
     def chat(self, messages, tools, system, effort="medium") -> ChatResult:
-        body: Dict[str, Any] = {"messages": [{"role": "system", "content": system}, *messages], "max_tokens": 4096}
+        body: Dict[str, Any] = {"messages": [{"role": "system", "content": system}, *messages],
+                                "max_tokens": MAX_TOKENS, "reasoning": REASONING}
         if tools:
             body["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                                "parameters": t["parameters"]}} for t in tools]
@@ -139,17 +151,24 @@ class OpenRouterProvider(Provider):
 
     def structured(self, prompt, json_schema, system="") -> Dict[str, Any]:
         msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
-        data = self._post({"messages": msgs, "max_tokens": 2048,
-                           "response_format": {"type": "json_schema",
-                                               "json_schema": {"name": "result", "strict": True, "schema": json_schema}}})
-        text = (self._message(data).get("content") or "").strip()
-        if text.startswith("```"):
-            text = text.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
-        try:
-            return json.loads(text)
-        except ValueError:
-            # e.g. a reasoning model that left `content` empty: not an answer
-            raise ProviderError("openrouter structured output was not valid JSON")
+        body = {"messages": msgs, "max_tokens": STRUCTURED_MAX_TOKENS, "reasoning": REASONING,
+                "response_format": {"type": "json_schema",
+                                    "json_schema": {"name": "result", "strict": True, "schema": json_schema}}}
+        for _ in range(EMPTY_RETRIES + 1):
+            text = (self._message(self._post(body)).get("content") or "").strip()
+            if text.startswith("```"):
+                text = text.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
+            # Some free models wrap the object in prose; take the outermost {...}.
+            i, j = text.find("{"), text.rfind("}")
+            try:
+                if i >= 0 and j > i:
+                    return json.loads(text[i:j + 1])
+            except ValueError:
+                pass
+            # Empty (out of reasoning budget) or unusable: the router may pick another model.
+            self.retried += 1
+        # No usable answer from a free model: not a fault. Busy lets callers fall back to rules quietly.
+        raise ProviderBusy("AI busy at OpenRouter (free models returned no usable answer)")
 
     def user(self, text):
         return {"role": "user", "content": text}
