@@ -518,3 +518,25 @@ def test_candles_route_refuses_fallback_frames(monkeypatch):
     h.do_GET()
     body = json.loads(h.wfile.getvalue().decode())
     assert len(body["candles"]) == 1 and body["prov"]["kind"] == "live"
+
+
+def test_ai_status_reports_the_governor_without_creating_an_orchestrator(monkeypatch):
+    """The dashboard's Gemini card: provider status plus the governor's directive, AI telemetry and
+    recent decisions. A status poll must never build an orchestrator."""
+    from types import SimpleNamespace
+    from jarvis.api import server
+    from jarvis.intelligence.llm_controller import AutonomousLLMSystemController
+    from jarvis.application.state_manager import StateManager
+
+    ctl = AutonomousLLMSystemController(state_manager=StateManager(), provider=None)
+    ctl.get_latest_directives(True)
+    monkeypatch.setattr(server.JarvisRequestHandler, "orchestrator", SimpleNamespace(llm_controller=ctl))
+    monkeypatch.setattr(server.JarvisRequestHandler, "get_orchestrator",
+                        classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("built an orchestrator"))))
+    h = _handler(server)
+    h._ai_get("/api/ai/status", {})
+    body = json.loads(h.wfile.getvalue().decode().split("\r\n\r\n", 1)[-1])
+    gov = body["governor"]
+    assert gov["source"] == "OFFLINE_HEURISTIC"
+    assert set(gov) >= {"risk_posture", "risk_multiplier", "paused", "throttled", "ai", "activity"}
+    assert gov["ai"]["enabled"] is False and gov["ai"]["calls"] == 0

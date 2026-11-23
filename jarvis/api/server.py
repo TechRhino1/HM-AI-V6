@@ -2037,7 +2037,11 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/ai/status":
                 from jarvis.ai import client as ai_client
-                self._send_json(ai_client.status())
+                from jarvis.intelligence.llm_controller import governor_status
+                # Only an already-attached orchestrator: get_orchestrator() would create one.
+                orch = JarvisRequestHandler.orchestrator
+                self._send_json({**ai_client.status(), "governor": governor_status(
+                    getattr(orch, "llm_controller", None), GLOBAL_STATE.llm_governor_state)})
             elif path == "/api/ai/brief":
                 from jarvis.ai import briefs
                 kind = q("kind", "pre")

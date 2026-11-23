@@ -24,7 +24,7 @@ export function CommandPalette({ onClose, go, theme, setTheme }: {
       ["portfolio/open", "Open positions", "briefcase"], ["portfolio/pending", "Pending orders", "briefcase"],
       ["portfolio/history", "Trade journal", "briefcase"], ["analytics/performance", "Performance", "analytics"],
       ["analytics/calibration", "Calibration & deployment", "shield"], ["analytics/lab", "Backtest lab", "flask"],
-      ["analytics/research", "Research (missed trades, profiles)", "analytics"], ["system/symbols", "Symbol universe", "settings"],
+      ["analytics/research", "Research (missed trades, profiles)", "analytics"], ["system/symbols", "Symbol universe", "settings"], ["system/ai", "AI governor (Gemini activity)", "settings"],
       ["markets/fno", "India F&O adviser", "layers"], ["markets/inst", "Institutional (FII/DII, futures, deals, events)", "users"], ["markets/india", "India equities", "globe"],
       ["markets/us", "US stocks", "globe"], ["markets/sources", "Market data sources", "activity"],
       ["system/users", "User management", "users"], ["system/account", "Account settings", "settings"],
