@@ -20,7 +20,13 @@
       "XAGUSD"
     ],
     "use_calibrated_entry_policy": true,
-    "max_daily_entries_per_symbol": 4
+    "max_daily_entries_per_symbol": 4,
+    "calibrated_policy_trader": true,
+    "forward_test_modes": [
+      "paper",
+      "demo",
+      "live"
+    ]
   },
   "risk": {
     "max_risk_per_trade_pct": 1.0,

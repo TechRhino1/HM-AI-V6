@@ -66,7 +66,10 @@ def _orch(mode="demo"):
     return o
 
 
-def test_live_mode_never_trades():
+def test_live_mode_never_trades(monkeypatch):
+    # A mode outside trading.forward_test_modes never trades.
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(SETTINGS.trading, "forward_test_modes", ["demo"])
     o = _orch("live")
     for lead in rl.build_all(o):
         lead.step()

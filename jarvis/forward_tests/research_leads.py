@@ -44,7 +44,17 @@ import pandas as pd
 
 logger = logging.getLogger("JARVIS_ForwardTest")
 
-ENABLED_MODES = ("demo",)
+ENABLED_MODES = ("demo",)  # fallback only; trading.forward_test_modes decides
+
+
+def forward_test_enabled(orchestrator) -> bool:
+    """Whether FT_ forward tests trade in the orchestrator's mode (trading.forward_test_modes)."""
+    try:
+        from jarvis.config.settings import SETTINGS
+        modes = tuple(getattr(SETTINGS.trading, "forward_test_modes", None) or ENABLED_MODES)
+    except Exception:
+        modes = ENABLED_MODES
+    return str(getattr(orchestrator, "mode", "")).lower() in modes
 RISK_SPLIT = 3            # each test risks 1/3 of the per-trade risk budget, like the Donchian test
 K, SWEEP_WIN, EQ_ATR = 3, 10, 0.1
 BODY, RANGE_ATR = 0.7, 1.5
@@ -168,7 +178,7 @@ class _LeadBase:
 
     def step(self) -> None:
         """Act once per newly completed bar per symbol. Never raises into the trading loop."""
-        if str(getattr(self.orch, "mode", "")).lower() not in ENABLED_MODES:
+        if not forward_test_enabled(self.orch):
             return
         for sym in self.SYMBOLS:
             try:
@@ -230,7 +240,8 @@ class _LeadBase:
             database.TRADE_DB.log_trade(
                 ticket=res.get("ticket"), position_id=res.get("position_id"), symbol=sym, action=order,
                 entry=float(res.get("price") or ref), sl=stop, tp=tp, volume=lots, score=0.0,
-                regime="FORWARD_TEST", ev=None, origin="broker", execution_mode="demo",
+                regime="FORWARD_TEST", ev=None, origin="broker",
+                execution_mode=str(getattr(self.orch, "mode", "demo")).lower(),
                 account_login=getattr(acct, "login", None), server=getattr(acct, "server", None),
                 strategy=self.STRATEGY, trade_style=self.STYLE, planned_rr=tp_r,
             )

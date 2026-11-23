@@ -64,7 +64,8 @@ class DonchianForwardTest:
     def step(self) -> None:
         """Act once per newly completed H4 bar. Never raises into the trading loop."""
         try:
-            if str(getattr(self.orch, "mode", "")).lower() not in ENABLED_MODES:
+            from jarvis.forward_tests.research_leads import forward_test_enabled
+            if not forward_test_enabled(self.orch):
                 return
             df = self.orch.data_feed.fetch_rates(SYMBOL, timeframe="H4", num_bars=300, include_current_bar=False)
             if df is None or len(df) < 150 or "SYNTHETIC" in str(getattr(df, "attrs", {}).get("data_source", "")).upper():
@@ -142,7 +143,8 @@ class DonchianForwardTest:
             database.TRADE_DB.log_trade(
                 ticket=res.get("ticket"), position_id=res.get("position_id"), symbol=SYMBOL, action=order,
                 entry=float(res.get("price") or close), sl=stop, tp=0.0, volume=lots, score=0.0,
-                regime="FORWARD_TEST", ev=None, origin="broker", execution_mode="demo",
+                regime="FORWARD_TEST", ev=None, origin="broker",
+                execution_mode=str(getattr(self.orch, "mode", "demo")).lower(),
                 account_login=getattr(acct, "login", None), server=getattr(acct, "server", None),
                 strategy=STRATEGY, trade_style=STYLE, planned_rr=None,
             )

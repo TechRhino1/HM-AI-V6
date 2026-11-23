@@ -20,8 +20,9 @@ _CACHE_TTL = 60.0
 
 
 def auto_style_live() -> bool:
-    """AUTO trades on its own picks only when JARVIS_AUTO_STYLE_LIVE is set; otherwise it is shadow-only."""
-    return os.environ.get("JARVIS_AUTO_STYLE_LIVE", "").strip().lower() in ("1", "true", "yes", "on")
+    """AUTO trades on its own picks (news/AI checks enforced) unless JARVIS_AUTO_STYLE_LIVE is set to
+    0/false/no/off, which makes it shadow-only. On by default since 2026-11-23 (user: every feature live)."""
+    return os.environ.get("JARVIS_AUTO_STYLE_LIVE", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def strat_name(x: Any) -> str:

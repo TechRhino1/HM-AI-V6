@@ -1319,6 +1319,26 @@ class JarvisOrchestrator:
     # the 16 profiles on disk carry a NEGATIVE out-of-sample expectancy, so the
     # policy refuses most of the universe.
 
+    def _calibrated_route_allows(self, candidate) -> bool:
+        """True when trading.calibrated_policy_trader is on and the calibrated policy allows this
+        SWING candidate (the style its profile was calibrated on). Never raises into the dispatch loop."""
+        try:
+            if not bool(getattr(SETTINGS.trading, "calibrated_policy_trader", False)):
+                return False
+            if str(getattr(candidate, "trade_style", "")).upper() != "SWING":
+                return False
+            dobj = getattr(candidate, "decision_obj", None)
+            if dobj is None or getattr(dobj, "bias", "") not in ("BUY", "SELL"):
+                return False
+            regime = getattr(dobj, "regime", None)
+            if regime is None:
+                return False
+            entry = self._calibrated_entry_decision(_resolve_sym(candidate.symbol).canonical, dobj, regime)
+            return bool(entry is not None and entry.allowed)
+        except Exception as exc:
+            logger.debug(f"calibrated route check failed for {getattr(candidate, 'symbol', '?')}: {exc}")
+            return False
+
     def _calibrated_profile(self, symbol: str):
         """This symbol's calibrated profile, or None when none applies."""
         if not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
@@ -2575,6 +2595,14 @@ class JarvisOrchestrator:
                 failing_cnt = _unsoftened_failure_count(candidate.decision_obj)
 
                 is_exec_ready = _is_exec_ready(candidate, d_action, failing_cnt)
+                if not is_exec_ready and self._calibrated_route_allows(candidate):
+                    # The calibrated policy is its own entry route: validated at a next-bar market
+                    # fill with the legacy gates ignored, so it dispatches at MARKET. Everything
+                    # below (vetoes, slots, cooldown, RiskEngine, news) still applies.
+                    is_exec_ready = True
+                    candidate.decision_obj.order_type = "MARKET"
+                    logger.info(f"CALIBRATED_ROUTE: {candidate.symbol} {candidate.trade_style} "
+                                f"{candidate.bias} allowed by the calibrated policy (legacy said {d_action}).")
 
                 if not is_exec_ready:
                     if candidate == dispatch_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
