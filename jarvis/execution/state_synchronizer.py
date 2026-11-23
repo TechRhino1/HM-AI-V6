@@ -155,6 +155,12 @@ class MT5StateSynchronizer:
             # with a lag; the old code dropped the ticket on an empty/entry-only history,
             # so the close never reached the journal, learners or circuit breaker.
             for t in list(self._pending_closes):
+                if t in current_tickets:
+                    # It dropped out of one snapshot and came back: still open, not closed
+                    # (2026-11-18: four open FT positions were journaled closed this way).
+                    logger.warning(f"Position #{t} reappeared on the broker terminal; cancelling its pending close.")
+                    self._pending_closes.pop(t, None)
+                    continue
                 try:
                     if self._emit_trade_closed(t, account):
                         self._pending_closes.pop(t, None)

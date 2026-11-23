@@ -2274,7 +2274,9 @@ class JarvisOrchestrator:
         # Only a read that passed the quality bar votes; a NO_TRADE read clears this style's vote.
         _votes = self._style_bias.setdefault(canonical_sym, {})
         if getattr(decision, "bias", None) in ("BUY", "SELL") and decision.decision in ("EXECUTE", "WAIT"):
-            _votes[active_trade_style] = (decision.bias, time.time(), decision.decision == "EXECUTE")
+            # Actionable = could be traded: EXECUTE, or an authorized WAIT the arbiter may promote.
+            _votes[active_trade_style] = (decision.bias, time.time(), decision.decision == "EXECUTE"
+                                          or bool(getattr(decision, "execution_authorized", False)))
         else:
             _votes.pop(active_trade_style, None)
 
