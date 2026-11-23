@@ -283,6 +283,17 @@ def _start_background_tunnel(port: int = 8501):
     t_cf = threading.Thread(target=_cloudflare_worker, args=(port,), daemon=True, name="hm_tunnel_cf")
     t_cf.start()
 
+def _keep_awake(on: bool) -> bool:
+    """Stop Windows idle-sleep while the engine runs. Per-thread: call from the main thread."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    # ES_CONTINUOUS | ES_SYSTEM_REQUIRED to hold, ES_CONTINUOUS alone to release.
+    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | (0x00000001 if on else 0))
+    logger.info("keep-awake %s", "on" if on else "off")
+    return True
+
+
 def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trade_style: str = "ALL"):
     # Rotating JSON log under data/logs (production was console-only). Called at
     # run time, not import time, so importing this module (tests) writes nothing.
@@ -382,30 +393,36 @@ def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trad
     except Exception as exc:
         logger.debug(f"Secondary port {secondary_port} not bound: {exc}")
 
-    while True:
-        try:
-            run_web_server(port=port, host=host, mt5_client=orchestrator.mt5_client,
-                           orchestrator=orchestrator)
-        except KeyboardInterrupt:
-            logger.info("Shutting down HM-AI-V6 trading platform...")
-            orchestrator.stop()
-            if sec_server:
-                try:
-                    sec_server.shutdown()
-                except Exception:
-                    pass
-            for proc_key in ("serveo_proc", "cloudflare_proc"):
-                proc = _TUNNEL_STATE.get(proc_key)
-                if proc:
+    _keep_awake(True)
+    try:
+        while True:
+            try:
+                run_web_server(port=port, host=host, mt5_client=orchestrator.mt5_client,
+                               orchestrator=orchestrator)
+            except KeyboardInterrupt:
+                logger.info("Shutting down HM-AI-V6 trading platform...")
+                orchestrator.stop()
+                if sec_server:
                     try:
-                        proc.terminate()
+                        sec_server.shutdown()
                     except Exception:
                         pass
-            print("\n[SHUTDOWN] HM-AI-V6 stopped cleanly.", flush=True)
-            break
-        except Exception as e:
-            logger.error(f"Web server encountered error: {e}. Auto-restarting in 3s...", exc_info=True)
-            time.sleep(3)
+                for proc_key in ("serveo_proc", "cloudflare_proc"):
+                    proc = _TUNNEL_STATE.get(proc_key)
+                    if proc:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                print("\n[SHUTDOWN] HM-AI-V6 stopped cleanly.", flush=True)
+                # Normal exit path: main() returns, process exits 0 (supervisor stops).
+                logger.info("HM engine clean shutdown")
+                break
+            except Exception as e:
+                logger.error(f"Web server encountered error: {e}. Auto-restarting in 3s...", exc_info=True)
+                time.sleep(3)
+    finally:
+        _keep_awake(False)
 
 def main():
     # Execution mode resolution with broker account auto-detection and port selection
