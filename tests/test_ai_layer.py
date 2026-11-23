@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import sys
+import time
 import types
 
 import pytest
@@ -78,7 +79,7 @@ def fake_handler(monkeypatch):
 def test_no_key_means_no_provider():
     assert client.get_provider() is None
     assert client.status() == {"provider": None, "model": None, "available": False, "requested": "auto",
-                               "busy": False, "last_model_used": None, "fallbacks_tried": []}
+                               "busy": False, "last_model_used": None, "fallbacks_tried": [], "models": []}
 
 
 def test_gemini_selected_with_its_key(monkeypatch):
@@ -259,6 +260,14 @@ def test_weekly_review_template(monkeypatch):
 
 # ---------------------------------------------------------------- provider wire formats (mocked transport)
 
+@pytest.fixture(autouse=True)
+def _fresh_model_health():
+    """Model health is process-wide by design (a spent daily quota must stay skipped); tests start clean."""
+    gemini_mod._health.clear()
+    yield
+    gemini_mod._health.clear()
+
+
 class FakeResp:
     def __init__(self, code, body):
         self.status_code, self._b = code, body
@@ -318,14 +327,14 @@ LISTED = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-fl
 
 def test_gemini_503_retries_then_falls_back(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
-    s = ListingSession([BUSY] * 6 + [OK], LISTED)
+    s = ListingSession([BUSY] * 4 + [OK], LISTED)
     slept = []
     p = GeminiProvider(session=s, sleep=slept.append)
     out = copilot.ask("why is gold up", provider=p)
-    assert out["answer"] == "fine" and out["model"] == "gemini-3.5-flash" and out["retried"] >= 4
+    assert out["answer"] == "fine" and out["model"] == "gemini-3.5-flash" and out["retried"] >= 2
     used = [x["json"]["model"] for x in s.sent]
-    # 3 tries each on 3.8 and 3.7; 3.6 is not listed for this key so it is skipped
-    assert used == ["gemini-3.8-flash"] * 3 + ["gemini-3.7-flash"] * 3 + ["gemini-3.5-flash"]
+    # 2 tries each on 3.8 and 3.7; 3.6 is not listed for this key so it is skipped
+    assert used == ["gemini-3.8-flash"] * 2 + ["gemini-3.7-flash"] * 2 + ["gemini-3.5-flash"]
     assert slept and all(0 < d <= 8 for d in slept) and sum(slept) <= 2 * gemini_mod.MODEL_BUDGET_S
     st = client.status()
     assert st["busy"] is False and st["last_model_used"] == "gemini-3.5-flash"
@@ -339,7 +348,7 @@ def test_gemini_all_busy_is_reported(monkeypatch, caplog):
     out = copilot.ask("why is gold up", provider=GeminiProvider(session=s, sleep=lambda d: None))
     assert out["busy"] is True and out["answer"] == "AI busy at Google (503) — retried 4 models"
     assert {x["json"]["model"] for x in s.sent} == {"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-flash-latest"}
-    assert len(s.sent) == 12  # 3 tries x 4 listed models, bounded
+    assert len(s.sent) == 8  # 2 tries x 4 listed models, bounded
     assert client.status()["busy"] is True
     assert FAKE_KEY not in caplog.text and FAKE_KEY not in json.dumps(out)
 
@@ -459,7 +468,7 @@ def test_key_never_in_logs_responses_or_files(monkeypatch, caplog, tmp_path):
     out = copilot.ask("nifty pcr", provider=p)
     with pytest.raises(ProviderError) as e:
         p.structured("x", {"type": "object"})
-    b = briefs.generate("pre", provider=GeminiProvider(session=FakeSession([FakeResp(500, {"error": FAKE_KEY})] * 18),
+    b = briefs.generate("pre", provider=GeminiProvider(session=FakeSession([FakeResp(500, {"error": FAKE_KEY})] * 22),
                                                         sleep=lambda d: None), facts=FACTS)
     from jarvis.api import server
     h = _handler(server)
@@ -540,3 +549,64 @@ def test_ai_status_reports_the_governor_without_creating_an_orchestrator(monkeyp
     assert gov["source"] == "OFFLINE_HEURISTIC"
     assert set(gov) >= {"risk_posture", "risk_multiplier", "paused", "throttled", "ai", "activity"}
     assert gov["ai"]["enabled"] is False and gov["ai"]["calls"] == 0
+
+
+
+# ---------------------------------------------------------------- free-tier quota (2026-11-24)
+
+DAILY_CAP = FakeResp(429, {"error": {"message": "Rate limit exceeded for model gemini-3.8-flash (limit: 20 requests "
+                                                "per day on Free Tier). Please retry in 11h59m49s or upgrade your tier."}})
+RETIRED = FakeResp(404, {"error": {"message": "This model models/gemini-2.5-flash is no longer available to new users."}})
+LISTED_ALL = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"]
+
+
+def test_daily_cap_is_remembered_and_skipped_without_a_request(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    s = ListingSession([DAILY_CAP, OK, OK], LISTED_ALL)
+    GeminiProvider(session=s, sleep=lambda d: None).chat([], [], "s")
+    assert [x["json"]["model"] for x in s.sent] == ["gemini-3.8-flash", "gemini-3.7-flash"]  # 429: no retry
+    h = {r["model"]: r for r in gemini_mod.model_health()}
+    assert h["gemini-3.8-flash"]["state"] == "quota" and h["gemini-3.8-flash"]["until"] - time.time() > 11 * 3600
+    GeminiProvider(session=s, sleep=lambda d: None).chat([], [], "s")
+    assert s.sent[-1]["json"]["model"] == "gemini-3.7-flash"   # the capped model was never called again
+
+
+def test_retired_model_is_skipped_for_a_day(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    s = ListingSession([RETIRED, OK], LISTED_ALL)
+    GeminiProvider(session=s, sleep=lambda d: None).chat([], [], "s")
+    assert {r["model"]: r["state"] for r in gemini_mod.model_health()}["gemini-3.8-flash"] == "retired"
+
+
+def test_background_purpose_uses_only_free_lite_models(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    s = ListingSession([BUSY, BUSY, OK], LISTED_ALL)
+    p = GeminiProvider(session=s, sleep=lambda d: None, purpose="background")
+    p.chat([], [], "s")
+    used = [x["json"]["model"] for x in s.sent]
+    assert used == ["gemini-3.5-flash-lite"] * 2 + ["gemma-4-26b-a4b-it"]
+    assert all(m in gemini_mod.LITE_CHAIN for m in used)
+
+
+def test_interactive_falls_back_to_lite_when_flash_quota_is_spent(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    s = ListingSession([DAILY_CAP, DAILY_CAP, OK], LISTED_ALL)
+    out = copilot.ask("why is gold up", provider=GeminiProvider(session=s, sleep=lambda d: None))
+    assert out["answer"] == "fine" and out["model"] == "gemini-3.5-flash-lite"
+
+
+def test_all_models_out_fails_fast_with_the_reset_time(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    for m in LISTED_ALL:
+        gemini_mod._mark(m, exhausted_until=time.time() + 3600, reason="quota")
+    s = ListingSession([], LISTED_ALL)
+    with pytest.raises(ProviderBusy) as e:
+        GeminiProvider(session=s, sleep=lambda d: None).chat([], [], "s")
+    assert not s.sent and "next model free at" in str(e.value)
+
+
+def test_status_reports_model_health(monkeypatch):
+    gemini_mod._mark("gemini-3.8-flash", exhausted_until=time.time() + 60, reason="quota")
+    st = client.status()
+    assert {"model": "gemini-3.8-flash", "state": "quota"}.items() <= next(
+        m for m in st["models"] if m["model"] == "gemini-3.8-flash").items()

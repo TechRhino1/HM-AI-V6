@@ -140,7 +140,7 @@ def _ai_cached(symbol: str, heads: List[Dict[str, Any]]) -> Optional[Dict[str, A
     def job():
         try:
             from jarvis.ai import client
-            p = client.get_provider()
+            p = client.get_provider("background")
             res = ai_read(p, symbol, heads) if p else None
             with _lock:
                 _ai_cache[symbol] = (key, time.time(), res)

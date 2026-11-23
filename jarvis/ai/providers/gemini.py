@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set
@@ -22,14 +23,63 @@ MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-3.8-flash"
 FALLBACK_CHAIN = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
                   "gemini-flash-latest", "gemini-flash-lite-latest")
+# Free-tier models with room to spare. Each flash model above allows only 20 requests/day on the
+# free tier (measured 2026-11-24: "limit: 20 requests per day on Free Tier"), so background work
+# (governor, attention headline, news check) runs on these, and interactive use falls back to them.
+LITE_CHAIN = ("gemini-3.5-flash-lite", "gemma-4-26b-a4b-it", "gemini-3.1-flash-lite",
+              "gemini-flash-lite-latest", "gemma-4-31b-it")
 RETRYABLE = {429, 500, 502, 503, 504}
-MAX_TRIES = 3            # per model
+MAX_TRIES = 2            # per model, for transient 5xx/timeouts; a 429 or 404 moves on at once
+BUSY_COOLDOWN_S = 60.0   # a model that stayed busy is skipped this long
+QUOTA_FALLBACK_S = 60.0  # a 429 without "retry in ..." is skipped this long
+RETIRED_S = 24 * 3600.0  # a 404 model (retired / not served to this key) is skipped this long
 MODEL_BUDGET_S = 20.0    # retrying one model stops once this much wall time is spent on it
 DISCOVERY_TTL_S = 6 * 3600
 _INPUT_STEPS = {"user_input", "function_result"}
 
 _discovery: Dict[str, Any] = {"at": 0.0, "ttl": 0.0, "models": None}
 _discovery_lock = threading.Lock()
+
+# Per-model health shared by every provider instance in this process: a model whose daily quota is
+# spent, that is retired, or that just stayed busy is skipped without a request until it recovers.
+_health: Dict[str, Dict[str, Any]] = {}
+_health_lock = threading.Lock()
+_RETRY_IN = re.compile(r"retry in\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+(?:\.\d+)?)s)?", re.IGNORECASE)
+
+
+def _retry_after_s(text: str) -> Optional[float]:
+    """Seconds from Google's 429 text ("Please retry in 11h59m49s"), or None if it gives none."""
+    m = _RETRY_IN.search(text or "")
+    if not m or not any(m.groups()):
+        return None
+    h, mi, se = (float(x) if x else 0.0 for x in m.groups())
+    return h * 3600 + mi * 60 + se
+
+
+def _mark(model: str, **fields: Any) -> None:
+    with _health_lock:
+        _health.setdefault(model, {}).update(fields)
+
+
+def _blocked_until(model: str) -> float:
+    h = _health.get(model) or {}
+    return max(float(h.get("exhausted_until") or 0.0), float(h.get("busy_until") or 0.0))
+
+
+def model_health(now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Each model this process has called: ok / busy / quota (daily cap) / retired, and until when."""
+    now = time.time() if now is None else now
+    out = []
+    with _health_lock:
+        items = sorted(_health.items())
+    for m, h in items:
+        until = _blocked_until(m)
+        state = "ok"
+        if until > now:
+            state = h.get("reason") or "busy"
+        out.append({"model": m, "state": state, "until": until if until > now else None,
+                    "last_ok_at": h.get("last_ok_at"), "last_status": h.get("last_status")})
+    return out
 
 
 def discover_models(session: Any, key: str) -> Optional[Set[str]]:
@@ -52,8 +102,12 @@ def discover_models(session: Any, key: str) -> Optional[Set[str]]:
 class GeminiProvider(Provider):
     name = "gemini"
 
-    def __init__(self, model: str = "", session: Any = None, timeout: float = 45.0, sleep=time.sleep) -> None:
-        self.model = model or os.environ.get("JARVIS_AI_MODEL") or DEFAULT_MODEL
+    def __init__(self, model: str = "", session: Any = None, timeout: float = 45.0, sleep=time.sleep,
+                 purpose: str = "interactive") -> None:
+        # background = unattended engine work: free lite/Gemma models only, never the 20/day flash quota.
+        self.purpose = "background" if purpose == "background" else "interactive"
+        default = LITE_CHAIN[0] if self.purpose == "background" else DEFAULT_MODEL
+        self.model = model or (os.environ.get("JARVIS_AI_MODEL") if self.purpose == "interactive" else "") or default
         self._http = session or requests.Session()
         self.timeout = timeout
         self._sleep = sleep
@@ -66,11 +120,20 @@ class GeminiProvider(Provider):
 
     def _chain(self, key: str) -> List[str]:
         m = self.model
-        chain = list(FALLBACK_CHAIN[FALLBACK_CHAIN.index(m):]) if m in FALLBACK_CHAIN else [m, *FALLBACK_CHAIN]
+        base = LITE_CHAIN if self.purpose == "background" else FALLBACK_CHAIN + LITE_CHAIN
+        chain = list(base[base.index(m):]) if m in base else [m, *base]
+        chain = list(dict.fromkeys(chain))
         listed = discover_models(self._http, key)
         if listed:
             chain = [x for x in chain if x in listed] or chain[:1]
-        return chain
+        now = time.time()
+        ready = [x for x in chain if _blocked_until(x) <= now]
+        if not ready:
+            nxt = min(_blocked_until(x) for x in chain)
+            note_call(None, True, chain)
+            raise ProviderBusy(f"AI busy at Google (quota) — next model free at "
+                               f"{time.strftime('%H:%M UTC', time.gmtime(nxt))}")
+        return ready
 
     def _post(self, body: Dict[str, Any], history: bool = False) -> Dict[str, Any]:
         """POST with bounded retry (exp. backoff + jitter) per model, then the model fallback chain."""
@@ -97,9 +160,16 @@ class GeminiProvider(Provider):
                     data = r.json()
                     if data.get("status") == "failed" or data.get("errors"):
                         raise ProviderError(f"gemini failed: {json.dumps(data.get('errors'))[:300]}")
+                    _mark(m, last_ok_at=time.time(), last_status=200, busy_until=0.0)
                     note_call(m, False, self.fallbacks_tried)
                     return data
-                if code == 404:  # model not served to this key: next model, no retry
+                if code == 404:  # retired / not served to this key: skip it for a day, no retry
+                    _mark(m, exhausted_until=time.time() + RETIRED_S, reason="retired", last_status=404)
+                    last = code
+                    break
+                if code == 429:  # quota: the daily cap says when it resets; retrying now only burns calls
+                    wait = _retry_after_s(r.text if r is not None else "") or QUOTA_FALLBACK_S
+                    _mark(m, exhausted_until=time.time() + wait, reason="quota", last_status=429)
                     last = code
                     break
                 if r is not None and code not in RETRYABLE:
@@ -109,6 +179,7 @@ class GeminiProvider(Provider):
                 # deterministic spread (no `random` under jarvis/ai): 50-100% of the exponential step
                 delay = min(8.0, 2.0 ** (attempt - 1)) * (0.5 + (time.monotonic_ns() % 1000) / 2000.0)
                 if attempt == MAX_TRIES or time.monotonic() - t0 + delay > MODEL_BUDGET_S:
+                    _mark(m, busy_until=time.time() + BUSY_COOLDOWN_S, reason="busy", last_status=code)
                     break
                 self._sleep(delay)
         self.fallbacks_tried.append(self.model)

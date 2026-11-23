@@ -16,7 +16,16 @@ interface Governor {
   reasoning?: string | null; updated_at?: string | null; paused: string[]; throttled: string[];
   ai?: GovernorAi | null; activity: Decision[];
 }
-interface AiStatus { provider?: string | null; model?: string | null; available?: boolean; busy?: boolean; governor?: Governor }
+interface ModelHealth { model: string; state: "ok" | "busy" | "quota" | "retired"; until?: number | null; last_ok_at?: number | null; last_status?: number | string | null }
+interface AiStatus { provider?: string | null; model?: string | null; available?: boolean; busy?: boolean; governor?: Governor; models?: ModelHealth[] }
+
+const MODEL_STATE: Record<ModelHealth["state"], { tone: "up" | "warn" | "down" | "flat"; label: string }> = {
+  ok: { tone: "up", label: "ok" },
+  busy: { tone: "warn", label: "busy at Google" },
+  quota: { tone: "down", label: "daily free cap reached" },
+  retired: { tone: "flat", label: "retired" },
+};
+const clock = (epochS?: number | null) => (epochS ? new Date(epochS * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");
 
 const isAi = (source?: string | null) => source === "LLM";
 const list = (xs?: string[] | null) => (xs && xs.length ? xs.join(", ") : "—");
@@ -59,6 +68,26 @@ export function AiGovernor() {
               <p className="faint" style={{ marginTop: 8, fontSize: 12 }}>Last AI error {ai.last_error_at ? ago(ai.last_error_at) : ""}: {ai.last_error}</p>
             )}
           </>
+        )}
+      </Card>
+
+      <Card title="Gemini models" sub="Free tier: flash models allow 20 requests a day each and are kept for the Copilot; the governor and widgets use the free lite and Gemma models. A spent or busy model is skipped until it recovers." flush>
+        {!st.data?.models?.length ? <Empty title="No model called yet in this engine session" /> : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Model</th><th>State</th><th>Usable again</th><th>Last answer</th></tr></thead>
+              <tbody>
+                {st.data.models.map((m) => (
+                  <tr key={m.model}>
+                    <td><b>{m.model}</b></td>
+                    <td><Badge tone={MODEL_STATE[m.state]?.tone ?? "flat"} dot>{MODEL_STATE[m.state]?.label ?? m.state}</Badge></td>
+                    <td className="muted">{m.state === "ok" ? "now" : clock(m.until)}</td>
+                    <td className="muted">{m.last_ok_at ? ago(new Date(m.last_ok_at * 1000).toISOString()) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
