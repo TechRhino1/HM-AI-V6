@@ -33,6 +33,10 @@ _DEFAULT_PROVIDER = object()  # sentinel: explicit provider=None still means "he
 
 # The governor may only cut risk; the engine never trades above its base risk.
 MIN_RISK_MULT, MAX_RISK_MULT = 0.35, 1.0
+# After a failed AI call (Google 429/503) the governor stays rule-based this long. On 2026-11-24 every
+# 3-minute cache expiry fired one Gemini call per scan thread: 78 failures in minutes, each retried
+# across 6 models inside the trading loop.
+AI_FAILURE_BACKOFF_SEC = 600.0
 
 _GOVERNOR_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -96,6 +100,51 @@ class GovernorDirectives:
         return d
 
 
+def recent_governor_activity(limit: int = 10) -> List[Dict[str, Any]]:
+    """The last `limit` governor decisions from the audit log, newest first (reads only its tail)."""
+    try:
+        from jarvis.learning.model_registry import _root
+        path = os.path.join(_root(), "audit.jsonl")
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: List[Dict[str, Any]] = []
+    for line in reversed(lines):
+        if '"governor_directive"' not in line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        out.append({k: r.get(k) for k in ("ts", "source", "posture", "risk_multiplier", "paused",
+                                           "throttled", "reasoning")})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def governor_status(controller: Any = None, published: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the dashboard shows about the governor: current directive, AI telemetry, recent decisions."""
+    cur = dict(published or {})
+    if controller is not None and getattr(controller, "_cached_directives", None) is not None:
+        cur = controller._cached_directives.to_dict()
+    syms = cur.get("symbol_directives") or {}
+    return {
+        "source": cur.get("source"),
+        "risk_posture": cur.get("risk_posture"),
+        "risk_multiplier": cur.get("risk_multiplier"),
+        "reasoning": cur.get("macro_reasoning"),
+        "updated_at": cur.get("timestamp"),
+        "paused": sorted(s for s, d in syms.items() if (d or {}).get("status") == "PAUSED"),
+        "throttled": sorted(s for s, d in syms.items() if (d or {}).get("status") == "THROTTLED"),
+        "ai": controller.ai_status() if controller is not None else (published or {}).get("ai"),
+        "activity": recent_governor_activity(),
+    }
+
+
 class AutonomousLLMSystemController:
     """
     Master Algorithmic Governor using LLM reasoning (with robust offline fallback)
@@ -115,6 +164,26 @@ class AutonomousLLMSystemController:
         self._lock = threading.Lock()
         self._last_eval_time: float = 0.0
         self._cached_directives: Optional[GovernorDirectives] = None
+        # One background AI refresh at a time; the trading loop never waits on the model.
+        self._refreshing = False
+        self._ai_backoff_until = 0.0
+        self.ai_stats: Dict[str, Any] = {"calls": 0, "failures": 0, "last_ok_at": None,
+                                         "last_error": None, "last_error_at": None,
+                                         "last_latency_ms": None}
+
+    def ai_status(self) -> Dict[str, Any]:
+        """The governor's AI telemetry for the dashboard (no keys, no prompts)."""
+        p = self.provider
+        now = time.time()
+        return {
+            **self.ai_stats,
+            "provider": getattr(p, "name", None) if p is not None else None,
+            "model": getattr(p, "model", None) if p is not None else None,
+            "enabled": p is not None and not is_offline(),
+            "backoff_until": (datetime.fromtimestamp(self._ai_backoff_until, timezone.utc).isoformat()
+                              if self._ai_backoff_until > now else None),
+            "refreshing": self._refreshing,
+        }
 
     def get_latest_directives(self, force_refresh: bool = False) -> GovernorDirectives:
         """
@@ -123,16 +192,35 @@ class AutonomousLLMSystemController:
         """
         now = time.time()
         with self._lock:
-            if (
-                not force_refresh
-                and self._cached_directives is not None
-                and (now - self._last_eval_time) < self.cache_ttl_sec
-            ):
-                return self._cached_directives
+            cached = self._cached_directives
+            if not force_refresh and cached is not None and (now - self._last_eval_time) < self.cache_ttl_sec:
+                return cached
+            ai_path = not force_refresh and self.provider is not None
+            start_bg = ai_path and not self._refreshing
+            if start_bg:
+                self._refreshing = True
+        if ai_path:
+            # Never block the trading loop on the model: serve the last directives (rule-based on
+            # the very first call) and let one background thread ask the AI.
+            if start_bg:
+                threading.Thread(target=self._refresh_in_background, daemon=True,
+                                 name="llm_governor_refresh").start()
+            if cached is not None:
+                return cached
+            return self._store(self._heuristic_governor(self._gather_system_context()), now)
 
-        # Compute fresh directives
-        directives = self._evaluate_system_and_market()
+        return self._store(self._evaluate_system_and_market(), now)
 
+    def _refresh_in_background(self) -> None:
+        try:
+            self._store(self._evaluate_system_and_market(), time.time())
+        except Exception as e:
+            logger.warning(f"Governor background refresh failed: {e}")
+        finally:
+            with self._lock:
+                self._refreshing = False
+
+    def _store(self, directives: "GovernorDirectives", now: float) -> "GovernorDirectives":
         with self._lock:
             previous = self._cached_directives
             self._cached_directives = directives
@@ -147,13 +235,14 @@ class AutonomousLLMSystemController:
             from jarvis.learning.model_registry import audit
             audit("governor_directive", source=directives.source, posture=directives.risk_posture,
                   risk_multiplier=directives.risk_multiplier,
-                  paused=[s for s, d in directives.symbol_directives.items() if d.status != "ENABLED"],
+                  paused=[s for s, d in directives.symbol_directives.items() if d.status == "PAUSED"],
+                  throttled=[s for s, d in directives.symbol_directives.items() if d.status == "THROTTLED"],
                   reasoning=directives.macro_reasoning)
 
         # Publish to state manager for UI visibility
         try:
             if hasattr(self.state_manager, "update_llm_governor_state"):
-                self.state_manager.update_llm_governor_state(directives.to_dict())
+                self.state_manager.update_llm_governor_state({**directives.to_dict(), "ai": self.ai_status()})
         except Exception as e:
             logger.debug(f"Could not push governor state to state_manager: {e}")
 
@@ -233,14 +322,24 @@ class AutonomousLLMSystemController:
         """
         ctx = self._gather_system_context()
 
-        if self.provider is not None and not is_offline():
+        if self.provider is not None and not is_offline() and time.time() >= self._ai_backoff_until:
+            t0 = time.time()
             try:
                 if self.provider.available():
+                    self.ai_stats["calls"] += 1
                     llm_directives = self._call_llm_governor(ctx)
+                    self.ai_stats["last_latency_ms"] = int((time.time() - t0) * 1000)
                     if llm_directives is not None:
+                        self.ai_stats["last_ok_at"] = datetime.now(timezone.utc).isoformat()
                         return llm_directives
             except Exception as e:
-                logger.warning(f"LLM Governor API call failed, falling back to heuristic: {e}")
+                from jarvis.ai.providers.base import redact
+                self.ai_stats["failures"] += 1
+                self.ai_stats["last_error"] = redact(e)[:200]
+                self.ai_stats["last_error_at"] = datetime.now(timezone.utc).isoformat()
+                self._ai_backoff_until = time.time() + AI_FAILURE_BACKOFF_SEC
+                logger.warning(f"LLM Governor API call failed, rule-based for {AI_FAILURE_BACKOFF_SEC:.0f}s: "
+                               f"{self.ai_stats['last_error']}")
 
         # Institutional Bayesian / Rule-Based Offline Governor
         return self._heuristic_governor(ctx)
@@ -293,6 +392,11 @@ BREAKOUT_EXPANSION. max_concurrent_trades is 1 or 2; confidence is 0.60 to 0.95.
         sym_dirs = dict(self._heuristic_governor(ctx).symbol_directives)
         for sym, d in (data.get("symbol_directives") or {}).items():
             status = str(d.get("status", "ENABLED")).upper()
+            if status == "PAUSED":
+                # Only the rule-based governor hard-pauses (spread spikes, weekends). Gemini paused
+                # 5-14 symbols per call on generic "micro account" grounds (2026-11-24), a different
+                # set each call, which would have stopped trading; its view is shown, not enforced.
+                status = "THROTTLED"
             base = sym_dirs.get(sym)
             if status not in rank or (base is not None and rank.get(base.status, 0) >= rank[status]):
                 continue
@@ -300,7 +404,7 @@ BREAKOUT_EXPANSION. max_concurrent_trades is 1 or 2; confidence is 0.60 to 0.95.
                 symbol=sym,
                 status=status,
                 preferred_strategy=str(d.get("preferred_strategy", "TREND_PULLBACK")),
-                reason=str(d.get("reason", "LLM directive")),
+                reason="AI advisory: " + str(d.get("reason", "LLM directive")),
             )
 
         return GovernorDirectives(

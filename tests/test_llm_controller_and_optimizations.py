@@ -102,7 +102,9 @@ def test_llm_governor_is_reduce_only():
     assert d.risk_multiplier == 1.0
     assert d.risk_posture == "NORMAL"
     if "BTCUSD" in d.symbol_directives:
-        assert d.symbol_directives["BTCUSD"].status == "PAUSED"
+        # Only the rule-based governor hard-pauses; an AI pause is shown as advisory THROTTLED.
+        assert d.symbol_directives["BTCUSD"].status == "THROTTLED"
+        assert d.symbol_directives["BTCUSD"].reason.startswith("AI advisory")
 
 
 def test_llm_governor_cannot_unpause_heuristic_pause():
@@ -197,3 +199,40 @@ def test_self_learning_database_indices_query():
     assert isinstance(pattern_stats, dict)
     assert "win_rate" in pattern_stats
     assert "conviction_multiplier" in pattern_stats
+
+
+def test_llm_failure_backs_off_instead_of_retrying_every_call():
+    """2026-11-24: Google 429/503 on every cache expiry, per scan thread (78 failures)."""
+    provider = _FakeProvider(exc=RuntimeError("AI busy at Google (429)"))
+    c = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider)
+    c.get_latest_directives(True)
+    c.get_latest_directives(True)
+    assert provider.calls == 1                      # second evaluation is inside the backoff
+    st = c.ai_status()
+    assert st["failures"] == 1 and "429" in st["last_error"] and st["backoff_until"] is not None
+
+
+def test_trading_loop_never_waits_on_the_model():
+    """A non-forced expired call returns the cached directive at once; one background refresh runs."""
+    import threading
+    gate = threading.Event()
+
+    class _Slow(_FakeProvider):
+        def structured(self, prompt, json_schema, system=""):
+            gate.wait(5)
+            return super().structured(prompt, json_schema, system)
+
+    provider = _Slow({"risk_posture": "DEFENSIVE", "risk_multiplier": 0.5, "max_concurrent_trades": 2,
+                      "macro_reasoning": "x", "symbol_directives": {}})
+    c = AutonomousLLMSystemController(state_manager=StateManager(), provider=provider, cache_ttl_sec=0.0)
+    first = c.get_latest_directives()               # rule-based now, AI in the background
+    assert first.source == "OFFLINE_HEURISTIC"
+    for _ in range(5):
+        assert c.get_latest_directives() is first   # still cached, no second thread started
+    gate.set()
+    for _ in range(50):
+        if not c._refreshing:
+            break
+        threading.Event().wait(0.05)
+    assert provider.calls == 1
+    assert c._cached_directives.source == "LLM" and c._cached_directives.risk_multiplier == 0.5
