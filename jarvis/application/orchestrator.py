@@ -57,6 +57,10 @@ UNKNOWN_ORDER_HOLD_SEC = 600.0
 
 # Styles fastest -> slowest. A faster style's bias younger than the window vetoes a slower
 # style entering the other way.
+# profile.score_col -> the decision attribute signal_scan recorded under that column
+_NEVER_FILLED_SQL = " AND NOT (closed_at IS NOT NULL AND exit_price IS NULL AND realized_pnl IS NULL)"
+_CALIBRATED_SCORE_ATTR = {"score": "model_confidence", "master_score": "master_confluence_score",
+                          "dissection_score": "dissection_score"}
 STYLE_SPEED = {"SCALP": 0, "DAY_TRADING": 1, "INTRADAY": 1, "DAY": 1, "SWING": 2, "H4_SWING": 3, "D1_SWING": 4}
 STYLE_CONFLICT_WINDOW_SEC = 600.0
 
@@ -1251,6 +1255,8 @@ class JarvisOrchestrator:
     @staticmethod
     def _count_entries_today(symbol: str, mode: Optional[str] = None) -> int:
         """Rows written for this symbol since 00:00 UTC today, mode-scoped ledger basis.
+        An order the broker never filled (closed with no exit price and no P&L, the shape
+        sync_mt5_history stamps on cancelled/expired orders) is not an entry.
 
         Used by the daily entry cap. Read-only on the canonical trade DB; any
         failure returns 0 (fails open — a counting outage must never freeze
@@ -1275,14 +1281,16 @@ class JarvisOrchestrator:
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
                         "AND timestamp LIKE ? AND lower(execution_mode) = ? "
-                        "AND COALESCE(regime, '') != 'FORWARD_TEST'",
+                        "AND COALESCE(regime, '') != 'FORWARD_TEST' "
+                        + _NEVER_FILLED_SQL,
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0], str(mode).lower().strip()),
                     ).fetchone()
                 else:
                     row = conn.execute(
                         "SELECT COUNT(*) FROM executed_trades "
                         "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
-                        "AND timestamp LIKE ? AND COALESCE(regime, '') != 'FORWARD_TEST'",
+                        "AND timestamp LIKE ? AND COALESCE(regime, '') != 'FORWARD_TEST' "
+                        + _NEVER_FILLED_SQL,
                         (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0]),
                     ).fetchone()
                 return int(row[0]) if row else 0
@@ -1341,10 +1349,10 @@ class JarvisOrchestrator:
             if hasattr(regime.primary_regime, "value")
             else str(regime.primary_regime)
         )
-        score_val = max(
-            float(getattr(decision, "model_confidence", 0.0) or 0.0),
-            float(getattr(decision, "ai_score", 0.0) or 0.0) / 100.0,
-        )
+        # The same score the profile was calibrated on (signal_scan writes "score" from
+        # model_confidence). max(confidence, ai_score/100) was looser than anything validated.
+        attr = _CALIBRATED_SCORE_ATTR.get(getattr(profile, "score_col", "score"), "model_confidence")
+        score_val = float(getattr(decision, attr, 0.0) or 0.0)
         return evaluate_entry(
             quality_gate=getattr(decision, "quality_gate", None),
             score=score_val,

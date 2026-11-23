@@ -345,3 +345,15 @@ class TestTheWireIsConnected:
         # The calibrated branch must be tried before the MIN_CONFIDENCE branch,
         # or the unvalidated floor vetoes the validated replacement.
         assert src.index("entry_dec is not None") < src.index("MIN_CONFIDENCE:")
+
+
+class TestTheScoreIsTheCalibratedOne:
+    def test_a_high_ai_score_does_not_lift_a_low_calibrated_confidence(self, orch):
+        # Calibration thresholded model_confidence; max(confidence, ai_score/100) let any
+        # 95-point legacy read through regardless of the validated score.
+        dec_obj = SimpleNamespace(model_confidence=0.40, ai_score=95.0,
+                                  quality_gate=SimpleNamespace(checks={}))
+        with _with_profiles({"XAUUSD": _profile(oos_exp=0.22, oos_n=54, min_score=0.60)}):
+            dec = orch._calibrated_entry_decision("XAUUSD", dec_obj, _regime())
+        assert dec.allowed is False
+        assert "below calibrated threshold" in dec.reason
