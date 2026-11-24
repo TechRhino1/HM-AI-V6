@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 
-from jarvis.backtesting.exit_geometry import deployment_refusal, live_exit_geometry, OOS_HURDLES
+from jarvis.backtesting.exit_geometry import deployment_refusal, live_exit_geometry, OOS_HURDLES, HOLDOUT_MIN_TRADES
 from jarvis.risk.position_sizing import PositionSizer
 from jarvis.intelligence.symbol_profile_config import get_symbol_profile_config
 from jarvis.intelligence.decision_engine import DecisionEngine
@@ -37,6 +37,9 @@ class TestAutomatedExecutionRootCauseFixes:
             from jarvis.data.symbol_registry import resolve
             h = OOS_HURDLES.get(str(resolve(sym).asset_class).upper(), OOS_HURDLES["DEFAULT"])
             clears = p["oos_trades"] >= h["min_trades"] and p["oos_expectancy_r"] >= h["min_expectancy_r"]
+            he = p.get("holdout_expectancy_r")  # HOLDOUT_GATE: a lost walk-forward holdout refuses too
+            if he is not None and int(p.get("holdout_trades", 0) or 0) >= HOLDOUT_MIN_TRADES and he <= 0:
+                clears = False
             assert (refusal is None) == clears, (sym, refusal)
 
     def test_oos_hurdles_are_asset_class_aware(self):
