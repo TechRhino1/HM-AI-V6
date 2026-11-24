@@ -197,6 +197,14 @@ class WRTargetProfile:
     oos_pre_policy_expectancy_r: float = 0.0
     policy_fitted_on: str = ""
 
+    # Walk-forward holdout: the same calibration fitted only on data before
+    # `holdout_window` and run by BacktestEngine over it (tools/backtests/run_3month_backtest.py
+    # --stamp). None = never holdout-tested; exit_geometry.deployment_refusal reads it.
+    holdout_window: str = ""
+    holdout_trades: int = 0
+    holdout_expectancy_r: Optional[float] = None
+    holdout_profit_factor: Optional[float] = None
+
     # AI artefacts
     score_calibration: Optional[ScoreCalibration] = None
     regime_edge: Dict[str, RegimeEdge] = field(default_factory=dict)
@@ -1286,7 +1294,8 @@ class WRProfileStore:
         profile.regime_edge = regime_edge_table(outcomes)
         profile.notes = (profile.notes + " | refit from realised outcomes").strip(" |")
         profiles[symbol] = profile
-        self.save(profiles)
+        # Keep the store's provenance block; save() alone would replace it with {}.
+        self.save(profiles, meta=json.loads(self.path.read_text(encoding="utf-8")).get("meta"))
         return profile
 
 

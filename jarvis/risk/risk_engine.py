@@ -898,15 +898,9 @@ class RiskEngine:
         margin_val = getattr(acc_obj, "margin", 0.0) or 0.0
         margin_util_pct = round((margin_val / account_equity * 100.0) if account_equity > 0 else 0.0, 1)
 
-        # Baseline Hierarchical Risk Parity allocation weights across standard universe
-        hrp_weights = {
-            "XAUUSD": 0.22,
-            "EURUSD": 0.18,
-            "GBPUSD": 0.17,
-            "USDJPY": 0.15,
-            "BTCUSD": 0.12,
-            "US30": 0.16
-        }
+        # No HRP allocation is computed on the live path; the fixed weights that used to sit
+        # here were placeholders presented as data (audit 2026-11-24). Empty = not computed.
+        hrp_weights: Dict[str, float] = {}
 
         return {
             "daily_loss_pct": dd.get("daily_loss_pct", 0.0),

@@ -42,6 +42,11 @@ from jarvis.config.paths import DATA_DIR  # noqa: E402
 from jarvis.config.runtime import offline_mode  # noqa: E402
 from jarvis.data.symbol_registry import resolve as resolve_symbol  # noqa: E402
 from jarvis.intelligence.winrate_targeting import WRProfileStore  # noqa: E402
+from jarvis.learning.deflated_sharpe import (  # noqa: E402
+    deflated_sharpe_ratio,
+    probabilistic_sharpe_ratio,
+    sharpe_stats,
+)
 from jarvis.learning.sample_weights import SampleUniquenessWeightEngine  # noqa: E402
 from jarvis.risk.hrp_allocator import HierarchicalRiskParityAllocator  # noqa: E402
 
@@ -69,13 +74,19 @@ def median_spread_pips(df: pd.DataFrame, symbol: str) -> float:
     return float(getattr(spec, "typical_spread_pips", 2.0) or 2.0)
 
 
-def discover() -> list[str]:
+def discover(days: int = 95) -> list[str]:
     if not REAL_DIR.exists():
         return []
     return sorted(
         d.name for d in REAL_DIR.iterdir()
-        if d.is_dir() and any(d.glob("*_H1_95d.parquet"))
+        if d.is_dir() and any(d.glob(f"*_H1_{days}d.parquet"))
     )
+
+
+def max_drawdown_r(rs: list[float]) -> float:
+    """Largest peak-to-trough fall of the cumulative R curve (trade order)."""
+    eq = np.cumsum([0.0] + list(rs))
+    return float(np.max(np.maximum.accumulate(eq) - eq))
 
 
 def r_multiple(trade: dict) -> float:
@@ -99,29 +110,64 @@ def r_multiple(trade: dict) -> float:
     return move / risk
 
 
+def stamp_holdout(path: Path, per_symbol: dict, window: str) -> list[str]:
+    """Write each tested symbol's holdout trades/expectancy/PF into the store at `path`,
+    keeping its meta. Symbols absent from the store are skipped (never invented)."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    store = WRProfileStore(path)
+    profiles = store.load()
+    stamped = []
+    for sym, e in per_symbol.items():
+        if sym not in profiles:
+            continue
+        p = profiles[sym]
+        p.holdout_window = window
+        p.holdout_trades = int(e["trades"])
+        p.holdout_expectancy_r = float(e["expectancy_r"])
+        p.holdout_profit_factor = float(e["profit_factor"])
+        stamped.append(sym)
+    store.save(profiles, meta=raw.get("meta"))
+    print(f"Stamped holdout results into {path}: {', '.join(stamped)}")
+    return stamped
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbols", default=None, help="comma-separated subset")
     ap.add_argument("--legacy", action="store_true",
                     help="run WITHOUT calibrated profiles (uncalibrated baseline)")
+    ap.add_argument("--days", type=int, default=95, help="data cache window (*_H1_<days>d.parquet)")
+    ap.add_argument("--start", default=None,
+                    help="UTC date the scored window starts; earlier bars are warmup only "
+                         "(walk-forward holdout: pair with calibrate_winrate.py --train-end)")
+    ap.add_argument("--profiles", default=None, help="profile store (default config/winrate_profiles.json)")
+    ap.add_argument("--out", default="backtest_3month_report", help="report file stem under reports/")
+    ap.add_argument("--n-trials", type=int, default=None,
+                    help="trials for the deflated Sharpe (default: number of symbols tested)")
+    ap.add_argument("--stamp", default=None,
+                    help="profile store to stamp with each symbol's holdout result (e.g. "
+                         "config/winrate_profiles.json); exit_geometry.deployment_refusal reads it. "
+                         "Requires --start and --profiles from calibrate_winrate.py --train-end")
     args = ap.parse_args()
+    if args.stamp and not (args.start and args.profiles):
+        ap.error("--stamp needs --start and --profiles (a train-only store), otherwise it is not a holdout")
 
     symbols = (
         [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-        if args.symbols else discover()
+        if args.symbols else discover(args.days)
     )
     if not symbols:
         logger.error(f"No real data found under {REAL_DIR}")
         return 2
 
-    store = WRProfileStore(PROFILE_PATH)
+    store = WRProfileStore(Path(args.profiles) if args.profiles else PROFILE_PATH)
     profiles = {} if args.legacy else store.load()
     if not args.legacy and not profiles:
         logger.error(f"No calibrated profiles at {PROFILE_PATH}. Run tools/calibrate_winrate.py first.")
         return 2
 
     print("=" * 108)
-    print(f"HM Algo 2.0 — 3-MONTH BACKTEST ON REAL MT5 DATA   "
+    print(f"HM Algo — BACKTEST ON REAL MT5 DATA ({args.days}d cache, from {args.start or 'bar 60'})   "
           f"({'UNCALIBRATED BASELINE' if args.legacy else 'CALIBRATED PROFILES'})")
     print("=" * 108)
 
@@ -132,7 +178,7 @@ def main() -> int:
 
     with offline_mode():
         for sym in symbols:
-            dpath = REAL_DIR / sym / f"{sym}_H1_95d.parquet"
+            dpath = REAL_DIR / sym / f"{sym}_H1_{args.days}d.parquet"
             if not dpath.exists():
                 print(f"  {sym:8s} SKIP (no data)")
                 continue
@@ -145,16 +191,37 @@ def main() -> int:
                 initial_balance=INITIAL_BALANCE,
                 risk_per_trade_pct=RISK_PER_TRADE_PCT,
             )
+            start_idx = 60
+            if args.start:
+                times = pd.to_datetime(df["time"], utc=True)
+                start_idx = max(60, int((times < pd.Timestamp(args.start, tz="UTC")).sum()))
             res = engine.run_backtest(
-                df_h1=df, symbol=sym, spread_pips=spread, wr_profile=profile
+                df_h1=df, symbol=sym, spread_pips=spread, wr_profile=profile,
+                start_bar_idx=start_idx,
             )
             trades = res.get("trades", [])
             m = res.get("metrics", {})
 
             rs = [r_multiple(t) for t in trades]
+            st = sharpe_stats(rs)
+            # Holdout: each symbol's configuration is fixed before the window, so the only
+            # selection left is picking winners among the symbols tested.
+            n_trials = args.n_trials or len(symbols)
+            psr = probabilistic_sharpe_ratio(st["sr"], st["n"], st["skew"], st["kurt"]) if st["n"] >= 3 else None
+            # Null variance of a trial Sharpe estimated from n trades is ~1/n.
+            dsr = (deflated_sharpe_ratio(st["sr"], st["n"], st["skew"], st["kurt"],
+                                         var_of_trial_sharpes=1.0 / st["n"], n_trials=n_trials)
+                   if st["n"] >= 3 else None)
             entry = {
                 "symbol": sym,
                 "bars": len(df),
+                "scored_bars": len(df) - start_idx,
+                "window_start": str(df["time"].iloc[min(start_idx, len(df) - 1)]),
+                "window_end": str(df["time"].iloc[-1]),
+                "max_drawdown_r": round(max_drawdown_r(rs), 3),
+                "psr": None if psr is None else round(float(psr), 4),
+                "dsr": None if dsr is None else round(float(dsr), 4),
+                "n_trials": n_trials,
                 "spread_pips_median": round(spread, 3),
                 "trades": len(trades),
                 "wins": m.get("wins", 0),
@@ -261,6 +328,9 @@ def main() -> int:
         "initial_balance": INITIAL_BALANCE,
         "risk_per_trade_pct": RISK_PER_TRADE_PCT,
         "elapsed_seconds": round(time.time() - t_start, 1),
+        "days_cache": args.days,
+        "scored_from": args.start,
+        "profiles_path": args.profiles or str(PROFILE_PATH.relative_to(REPO_ROOT)),
         "generated_utc": pd.Timestamp.now("UTC").isoformat(),
     }
     if not args.legacy and profiles:
@@ -273,12 +343,15 @@ def main() -> int:
 
     report = {"meta": meta, "portfolio": portfolio, "per_symbol": per_symbol}
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    (REPORT_DIR / "backtest_3month_report.json").write_text(
+    (REPORT_DIR / f"{args.out}.json").write_text(
         json.dumps(report, indent=2, default=str), encoding="utf-8"
     )
 
+    if args.stamp:
+        stamp_holdout(Path(args.stamp), per_symbol, f"{args.start}..{max(e['window_end'] for e in per_symbol.values())[:10]}")
+
     md = render_markdown(report, profiles, args.legacy)
-    (REPORT_DIR / "backtest_3month_report.md").write_text(md, encoding="utf-8")
+    (REPORT_DIR / f"{args.out}.md").write_text(md, encoding="utf-8")
 
     print()
     print("-" * 108)
@@ -289,7 +362,7 @@ def main() -> int:
     if "expectancy_r_uniqueness_weighted" in portfolio:
         print(f"           uniqueness-weighted expectancy: "
               f"{portfolio['expectancy_r_uniqueness_weighted']:+.4f}R")
-    print(f"Report: {(REPORT_DIR / 'backtest_3month_report.md').relative_to(REPO_ROOT)}")
+    print(f"Report: reports/{args.out}.md")
     print(f"Elapsed {meta['elapsed_seconds']}s")
     return 0
 
@@ -299,7 +372,7 @@ def render_markdown(report: dict, profiles: dict, legacy: bool) -> str:
     L: list[str] = []
     A = L.append
 
-    A("# HM Algo 2.0 — 3-Month Backtest on Real MT5 Data")
+    A(f"# HM Algo — Backtest on Real MT5 Data ({meta.get('days_cache', 95)}d cache, scored from {meta.get('scored_from') or 'bar 60'})")
     A("")
     A(f"**Mode:** {'uncalibrated baseline (legacy 29-gate stack)' if legacy else 'calibrated per-symbol win-rate profiles'}  ")
     A(f"**Data:** {meta['data_source']}  ")

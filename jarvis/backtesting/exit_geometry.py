@@ -462,6 +462,7 @@ OOS_HURDLES: Dict[str, Dict[str, float]] = {
 
 MIN_OOS_EXPECTANCY_R = 0.015
 MIN_OOS_TRADES = 25
+HOLDOUT_MIN_TRADES = 10
 
 
 def live_profile(symbol: str) -> Optional[Any]:
@@ -522,6 +523,12 @@ def deployment_refusal(symbol: str) -> Optional[str]:
     if n < min_trades or e < min_exp:
         return (f"EXPECTANCY_GATE: {symbol} out-of-sample {e:+.3f}R over {n} trades "
                 f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
+    # Walk-forward holdout (6 months unseen by the calibration): a loss there over enough
+    # trades means the calibration does not generalise for this symbol.
+    hn, he = int(getattr(prof, "holdout_trades", 0) or 0), getattr(prof, "holdout_expectancy_r", None)
+    if he is not None and hn >= HOLDOUT_MIN_TRADES and float(he) <= 0.0:
+        return (f"HOLDOUT_GATE: {symbol} walk-forward holdout {float(he):+.3f}R over {hn} trades "
+                f"({getattr(prof, 'holdout_window', '')}; needs > 0R over >= {HOLDOUT_MIN_TRADES})")
     return None
 
 

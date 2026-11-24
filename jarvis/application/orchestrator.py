@@ -135,7 +135,7 @@ class JarvisOrchestrator:
         self,
         symbols: Optional[List[str]] = None,
         mode: Optional[str] = None,
-        magic_number: int = 888999,
+        magic_number: Optional[int] = None,
         trade_style: str = "ALL"
     ):
 
@@ -245,7 +245,9 @@ class JarvisOrchestrator:
         # first use. Constructing without connecting means the web server binds
         # even when the broker is unreachable — which is exactly when an operator
         # needs the UI.
-        self.mt5_client = MT5Client(magic_number=magic_number, mode=self.mode, auto_init=False)
+        self.mt5_client = MT5Client(
+            magic_number=SETTINGS.trading.magic_number if magic_number is None else magic_number,
+            mode=self.mode, auto_init=False)
         self.data_feed = DataFeedEngine(self.mt5_client)
         # Demo-only forward test of the ETHUSD Donchian H4 ensemble (research rank 1).
         from jarvis.forward_tests.donchian_eth_h4 import DonchianForwardTest
@@ -259,6 +261,9 @@ class JarvisOrchestrator:
         # Demo-only session leads (ORB / anchored VWAP); empty until research clears them (session_leads.py).
         from jarvis.forward_tests.session_leads import build as _build_session_leads
         self.research_leads += _build_session_leads(self)
+        # Demo-only probation run of KN-Adaptive on GBPUSD H4 (reports/KN_ADAPTIVE_RESEARCH_2026-11-24.md).
+        from jarvis.forward_tests.kn_adaptive import build as _build_kn
+        self.research_leads += _build_kn(self)
         self.context_engine = MarketContextEngine()
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()
@@ -1355,9 +1360,8 @@ class JarvisOrchestrator:
         sync_mt5_history stamps on cancelled/expired orders) is not an entry.
 
         Used by the daily entry cap. Read-only on the canonical trade DB; any
-        failure returns 0 (fails open — a counting outage must never freeze
-        the trading loop), which is safe because the cap then simply lets the
-        other governors work.
+        failure returns 10**9 (fails closed — an unknown count must not let the
+        cap be exceeded), so a DB outage blocks new entries for that cycle.
         """
         try:
             from jarvis.data.database import TRADE_DB

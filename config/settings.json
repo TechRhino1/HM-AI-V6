@@ -4,20 +4,14 @@
     "default_mode": "demo",
     "primary_timeframe": "H1",
     "allowed_symbols": [
-      "BTCUSD",
-      "ETHUSD",
-      "EURUSD",
       "GBPUSD",
+      "NZDUSD",
       "SOLUSD",
-      "USDCAD",
-      "USDJPY",
-      "XAUUSD",
-      "GER40",
       "UK100",
       "US30",
       "USDCHF",
-      "NZDUSD",
-      "XAGUSD"
+      "XAGUSD",
+      "XAUUSD"
     ],
     "use_calibrated_entry_policy": true,
     "max_daily_entries_per_symbol": 4,

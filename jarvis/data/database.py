@@ -698,8 +698,11 @@ class SQLiteTradeDB:
                 _acct = mt5.account_info()
                 acct_login = int(getattr(_acct, "login", 0) or 0) or None
                 acct_server = getattr(_acct, "server", None)
+                # MT5 ACCOUNT_TRADE_MODE: 0 demo, 1 contest, 2 real. A demo deal is not real money.
+                acct_mode = {0: "demo", 1: "demo", 2: "live"}.get(getattr(_acct, "trade_mode", None), "unknown")
             except Exception:
                 acct_login = acct_server = None
+                acct_mode = "unknown"
             pos_map = {}
             for d in deals:
                 pid = d.position_id
@@ -889,17 +892,14 @@ class SQLiteTradeDB:
                     # "forecast" for engine-logged ones, which is why
                     # `self_learning` could not tell them apart. NULL is honest:
                     # no forecast was made.
-                    # `execution_mode='live'`: these rows are reconstructed from
-                    # `history_deals_get`, so they are real money by
-                    # construction — a deal the broker actually booked — whether
-                    # or not the engine that is reading them is currently
-                    # trading paper. This is the one place the mode is a fact
-                    # rather than something we were told.
+                    # `execution_mode` comes from the broker account's trade_mode: a
+                    # booked deal on a demo account is demo, on a real account live
+                    # (audit 2026-11-24: every demo deal used to be stamped 'live').
                     conn.execute('''
                         INSERT INTO executed_trades (ticket, position_id, origin, execution_mode, symbol, action, entry_price, sl, tp, volume, timestamp, ai_score, regime, expected_value, exit_price, realized_pnl, executor, closed_at,
                                                      account_login, server, commission, swap, exit_reason)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (pid, pid, "broker", "live", clean_sym, side, entry_p, sl_val, tp_val, vol, entry_dt_str, None, regime_str, None, exit_p, pnl, exec_label,
+                    ''', (pid, pid, "broker", acct_mode, clean_sym, side, entry_p, sl_val, tp_val, vol, entry_dt_str, None, regime_str, None, exit_p, pnl, exec_label,
                           dt_str if exit_deal else None,
                           acct_login, acct_server, entry_comm + exit_comm, entry_swap + exit_swap, exit_reason))
                 else:
