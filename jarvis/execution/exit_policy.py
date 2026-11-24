@@ -130,7 +130,10 @@ class ExitPolicy:
             from jarvis.config.settings import SETTINGS
             mode = str(getattr(SETTINGS.trading, "exit_mode", "legacy") or "legacy").lower()
             if mode == "institutional_lock" and not is_offline():
-                return institutional_lock(pol)
+                from jarvis.data.symbol_registry import resolve
+                hold = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+                canon = str(getattr(resolve(symbol), "canonical", symbol) or symbol).upper()
+                return institutional_lock(pol, hold=canon in hold or str(symbol).upper() in hold)
         except Exception:
             pass
         return pol
@@ -631,14 +634,17 @@ def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_
     return dec
 
 
-def institutional_lock(pol: "ExitPolicy") -> "ExitPolicy":
+def institutional_lock(pol: "ExitPolicy", hold: bool = False) -> "ExitPolicy":
     """A copy of `pol` on the institutional lock: +1R trigger, +0.3R floor (min lot) or a 50%
-    partial (splittable), 0.7R trail from the peak, and no time stop (measured to hurt)."""
+    partial (splittable), 0.7R trail from the peak, and no time stop (measured to hurt).
+    hold=True never triggers the lock: the trade runs to its original stop or target, still with
+    the monitor's discretionary layers off (trading.exit_hold_symbols)."""
     import dataclasses
     # profit_locks=False: the monitor's discretionary layers (proximity, MFE retrace, reversal, regime,
     # ML moves, TP1 partials) stay off - they are what lost R live (2026-11-24 replay).
-    return dataclasses.replace(pol, trail_mode="institutional", be_at_r=1.0, lock_floor_r=0.3,
-                               trail_r=0.7, lock_partial_pct=0.5, time_stop_minutes=0.0, profit_locks=False)
+    return dataclasses.replace(pol, trail_mode="institutional", be_at_r=float("inf") if hold else 1.0,
+                               lock_floor_r=0.3, trail_r=0.7, lock_partial_pct=0.5, time_stop_minutes=0.0,
+                               profit_locks=False)
 
 
 __all__ = [

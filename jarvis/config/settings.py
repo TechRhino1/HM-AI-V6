@@ -83,6 +83,9 @@ class TradingSettings:
     # Live exit management: "legacy" (the layered stack) or "institutional_lock" (one measured rule:
     # lock at +1R, trail 0.7R behind the peak; see exit_policy.institutional_lock).
     exit_mode: str = "legacy"
+    # Under institutional_lock, these symbols hold to their original stop/target instead (no lock,
+    # no trail): measured better in both halves for crypto on 353 clean live trades, 2026-11-24.
+    exit_hold_symbols: List[str] = field(default_factory=list)
     # Calibrated policy as its own entry route (2026-11-23): a SWING candidate the calibrated
     # policy allows is dispatched at market even when the legacy gates said WAIT/NO_TRADE, through
     # the full dispatch path (vetoes, slots, cooldowns, RiskEngine sizing/heat/correlation/circuit
@@ -195,6 +198,10 @@ class JarvisConfig:
                         }
                 if str(t_data.get("exit_mode", "")).lower() in ("legacy", "institutional_lock"):
                     cfg.trading.exit_mode = str(t_data["exit_mode"]).lower()
+                if isinstance(t_data.get("exit_hold_symbols"), list):
+                    cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
+                if isinstance(t_data.get("exit_hold_symbols"), list):
+                    cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
                 if "calibrated_policy_trader" in t_data:
                     raw = t_data["calibrated_policy_trader"]
                     cfg.trading.calibrated_policy_trader = (

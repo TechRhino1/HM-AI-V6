@@ -27,7 +27,12 @@
       "demo",
       "live"
     ],
-    "exit_mode": "institutional_lock"
+    "exit_mode": "institutional_lock",
+    "exit_hold_symbols": [
+      "BTCUSD",
+      "ETHUSD",
+      "SOLUSD"
+    ]
   },
   "risk": {
     "max_risk_per_trade_pct": 1.0,

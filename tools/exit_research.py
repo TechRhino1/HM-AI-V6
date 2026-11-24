@@ -211,24 +211,24 @@ def replay_live_trade(t, pol):
     return banked + size * t["path"][-1][2]
 
 
-def live_trades_main(out_md):
-    """Closed live demo trades (data/jarvis_history.db) on real MT5 M1 bars, 48 h each: actual exits vs
-    fixed stop/target vs legacy core vs the institutional lock. Read-only; MT5 history only."""
+def load_live_trades():
+    """Closed live demo trades (data/jarvis_history.db) with their real MT5 M1 path (48 h), in R.
+    Read-only; MT5 history only."""
     import sqlite3
     from datetime import datetime, timezone
     import MetaTrader5 as mt5
     from jarvis.data.broker_symbols import resolve_broker_symbol
     from jarvis.data.broker_time import broker_utc_offset
-    from jarvis.execution.exit_policy import institutional_lock
     mt5.initialize()
     off = broker_utc_offset(mt5_module=mt5, symbols=["EURUSD"]) or 0
     rows = sqlite3.connect("file:data/jarvis_history.db?mode=ro", uri=True).execute(
-        "SELECT symbol, action, entry_price, sl, tp, exit_price, timestamp, volume FROM executed_trades "
+        "SELECT symbol, action, entry_price, sl, tp, exit_price, timestamp, volume, "
+        "COALESCE(trade_style,''), COALESCE(strategy,''), COALESCE(session_name,'') FROM executed_trades "
         "WHERE closed_at IS NOT NULL AND realized_pnl IS NOT NULL AND exit_price IS NOT NULL AND sl > 0 "
         "AND entry_price <> sl AND execution_mode = 'demo' AND COALESCE(regime,'') != 'FORWARD_TEST' "
         "ORDER BY timestamp").fetchall()
     trades = []
-    for sym, side, e, s_, tp, x, ts, vol in rows:
+    for sym, side, e, s_, tp, x, ts, vol, style, strat, sess in rows:
         t0 = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() + off
         bars = mt5.copy_rates_range(resolve_broker_symbol(sym, mt5_module=mt5) or sym, mt5.TIMEFRAME_M1,
                                     datetime.fromtimestamp(t0 + 60, timezone.utc),
@@ -239,12 +239,31 @@ def live_trades_main(out_md):
         hi_k, lo_k = ("high", "low") if sg == 1 else ("low", "high")
         trades.append(dict(sym=sym, side=sg, entry=e, risk=r, actual=sg * (x - e) / r,
                            tp_r=sg * (tp - e) / r if tp and sg * (tp - e) > 0 else 2.0,
-                           splittable=(vol or 0) >= 0.02,
+                           splittable=(vol or 0) >= 0.02, ts=ts, style=style.upper(), strategy=strat,
+                           session=sess, hour=datetime.fromisoformat(ts.replace("Z", "+00:00")).hour,
                            path=[(sg * (b[hi_k] - e) / r, sg * (b[lo_k] - e) / r, sg * (b["close"] - e) / r) for b in bars]))
     mt5.shutdown()
+    # A stop a fraction of a pip from entry (corrupt or mis-recorded sl) turns ordinary moves into
+    # 50-400R and swamps every total: keep risk >= 25% of the symbol's median and a planned target <= 10R.
+    import statistics
+    med = {s: statistics.median(t["risk"] for t in trades if t["sym"] == s) for s in {t["sym"] for t in trades}}
+    kept = [t for t in trades if t["risk"] >= 0.25 * med[t["sym"]] and t["tp_r"] <= 10]
+    print(f"live trades: {len(kept)} kept, {len(trades) - len(kept)} dropped (stop too close to entry)")
+    return kept
+
+
+def live_trades_main(out_md):
+    """Actual exits vs fixed stop/target vs legacy core vs the institutional lock on the live trades."""
+    from datetime import datetime, timezone
+    from jarvis.execution.exit_policy import institutional_lock
+    trades = load_live_trades()
     legacy = ExitPolicy()
     pols = {"actual": "actual", "fixed stop/target": None, "legacy core": legacy,
-            "institutional lock": institutional_lock(legacy)}
+            "institutional lock": institutional_lock(legacy),
+            # trading.exit_hold_symbols: those symbols hold to their original stop/target
+            "lock + hold list": lambda t: institutional_lock(legacy, hold=t["sym"] in hold)}
+    from jarvis.config.settings import SETTINGS
+    hold = {str(s).upper() for s in (SETTINGS.trading.exit_hold_symbols or [])}
     n, h = len(trades), len(trades) // 2
     lines = [f"# Exit research on live trades {datetime.now(timezone.utc):%Y-%m-%d}", "",
              f"{n} closed live demo trades, real MT5 M1 bars (48 h each), replayed through `evaluate_exit`. "
@@ -253,7 +272,7 @@ def live_trades_main(out_md):
              "| Exits | Total R | Avg R | Win % | 1st half | 2nd half | " + " | ".join(GROUPS) + " | FX |",
              "|---|---|---|---|---|---|" + "---|" * (len(GROUPS) + 1)]
     for name, pol in pols.items():
-        v = [t["actual"] if pol == "actual" else replay_live_trade(t, pol) for t in trades]
+        v = [t["actual"] if pol == "actual" else replay_live_trade(t, pol(t) if callable(pol) else pol) for t in trades]
         grp = [sum(x for x, t in zip(v, trades) if t["sym"] in g) for g in GROUPS.values()]
         fx = sum(x for x, t in zip(v, trades) if not any(t["sym"] in g for g in GROUPS.values()))
         lines.append(f"| {name} | {sum(v):+.1f} | {sum(v) / max(n, 1):+.3f} | {sum(x > 0 for x in v) / max(n, 1) * 100:.0f} | "
