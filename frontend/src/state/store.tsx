@@ -1,7 +1,7 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { usePoll } from "../lib/hooks";
-import type { RiskStatus, SymbolIntel, Telemetry } from "../lib/types";
+import type { AutoTuneState, RiskStatus, SymbolIntel, Telemetry } from "../lib/types";
 import type { Prov } from "../features/markets/logic";
 
 /** A market alert that fired (from /api/alerts/fired or the SSE `alert` event). */
@@ -25,6 +25,7 @@ interface Store {
   symbolsError: string | null;
   reloadRisk: () => void;
   symbols: SymbolIntel[];
+  autoTune: AutoTuneState;
   reloadSymbols: () => void;
   symbol: string;
   setSymbol: (s: string) => void;
@@ -148,7 +149,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [pageCtx, setPageCtx] = useState<PageCtx>({});
 
   const riskRes = usePoll<RiskStatus>("/api/risk_status", 10000);
-  const symRes = usePoll<{ symbols: SymbolIntel[] }>("/api/symbols/intelligence", 15000);
+  const symRes = usePoll<{ symbols: SymbolIntel[]; auto_tune?: string; last_auto_tune?: AutoTuneState["last"] }>("/api/symbols/intelligence", 15000);
 
   const [symbol, setSymbolState] = useState<string>(() => {
     try { return localStorage.getItem("hm.symbol") || "EURUSD"; } catch { return "EURUSD"; }
@@ -163,6 +164,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     telemetry, link, lastUpdate, refresh,
     risk: riskRes.data, reloadRisk: riskRes.reload, riskError: riskRes.error, symbolsError: symRes.error,
     symbols: symRes.data?.symbols || [], reloadSymbols: symRes.reload,
+    autoTune: { mode: symRes.data?.auto_tune === "dynamic" ? "dynamic" : "off", last: symRes.data?.last_auto_tune ?? null },
     symbol, setSymbol, draft, setDraft,
     alerts: fired, unread: fired.filter((a) => !a.acked).length, lastAlert, reloadAlerts: firedRes.reload, markAcked,
     panel, setPanel, askAI, aiPrompt, clearAiPrompt, pageCtx, setPageCtx, alertDraft, setAlertDraft,

@@ -1259,7 +1259,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                         "total_universe": len(symbols_data),
                         "active_count": len(active_symbols),
                         "active_symbols": sorted(list(active_symbols)),
-                        "symbols": symbols_data
+                        "symbols": symbols_data,
+                        "auto_tune": str(getattr(SETTINGS.trading, "auto_tune", "off") or "off"),
+                        "last_auto_tune": getattr(orch, "last_auto_tune", None),
                     })
                 except Exception as e:
                     logger.error(f"Error fetching symbols intelligence: {e}", exc_info=True)
@@ -1505,7 +1507,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     orch.toggle_symbol(sym, enabled, persist=True)
                     active_syms = orch.get_active_symbols()
                 else:
-                    from jarvis.config.settings import SETTINGS, persist_allowed_symbols
+                    from jarvis.config.settings import persist_allowed_symbols
                     curr = set(SETTINGS.trading.symbols or [])
                     if enabled:
                         curr.add(sym)
@@ -1549,6 +1551,17 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 elif action == "SET" and isinstance(target_symbols, list):
                     clean_targets = {str(s).strip().upper() for s in target_symbols if str(s).strip()}
                     curr_active = clean_targets
+                elif action == "SET_AUTO_TUNE":
+                    from jarvis.config.settings import persist_auto_tune
+                    want = str(data.get("auto_tune", "")).strip().lower()
+                    if not persist_auto_tune(want):
+                        self._send_json({"status": "FAILED", "error": "auto_tune must be 'off' or 'dynamic'"}, status_code=400)
+                        return
+                    if orch is not None:
+                        orch._last_auto_tune_at = 0.0  # switching on runs it at the next watchdog tick
+                    self.state_manager._bump_version()
+                    self._send_json({"status": "SUCCESS", "action": action, "auto_tune": want})
+                    return
                 elif action == "AUTO_TUNE":
                     from jarvis.intelligence.auto_tune_engine import AutoTuneEngine
                     tune_mode = str(data.get("mode", "BALANCED")).strip().upper()
@@ -1563,10 +1576,14 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     )
                     curr_active = set(tune_result["active_symbols"])
                     new_active = sorted(list(curr_active))
+                    if orch is not None:
+                        tune_result.update(at=time.time(), trigger="manual",
+                                           changed=new_active != sorted(orch.get_active_symbols() if hasattr(orch, "get_active_symbols") else []))
+                        orch.last_auto_tune = tune_result
                     if orch and hasattr(orch, "set_active_symbols"):
                         orch.set_active_symbols(new_active, persist=True)
                     else:
-                        from jarvis.config.settings import SETTINGS, persist_allowed_symbols
+                        from jarvis.config.settings import persist_allowed_symbols
                         persist_allowed_symbols(new_active)
 
                     self.state_manager._bump_version()
@@ -1585,7 +1602,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 if orch and hasattr(orch, "set_active_symbols"):
                     orch.set_active_symbols(new_active, persist=True)
                 else:
-                    from jarvis.config.settings import SETTINGS, persist_allowed_symbols
+                    from jarvis.config.settings import persist_allowed_symbols
                     persist_allowed_symbols(new_active)
 
                 self.state_manager._bump_version()

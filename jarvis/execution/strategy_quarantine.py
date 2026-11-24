@@ -54,6 +54,8 @@ logger = logging.getLogger("JARVIS_StrategyQuarantine")
 CACHE_TTL_SEC = 300.0
 DEFAULT_MIN_TRADES = 20
 DEFAULT_MIN_EXPECTANCY_R = -0.15  # fallback when trading.quarantine_expectancy_r is unreadable
+SYMBOL_POOL = "*"  # details key for a symbol's closes across all strategies
+MAX_PLANNED_R = 10.0  # planned target beyond this many R = a mis-recorded stop
 DEFAULT_WINDOW = 30  # fallback when trading.quarantine_window is unreadable
 
 # 2026-10-20 graduation: quarantine is discipline, not life-imprisonment.
@@ -189,6 +191,10 @@ def _load_full(
             risk = abs(float(entry) - float(sl))
             if risk <= 1e-6 or math.isnan(risk) or math.isinf(risk):
                 continue
+            # A stop recorded a fraction of a pip from entry (rows of 29 Sep-7 Oct) scores ordinary
+            # moves as 50-400R; a planned target beyond MAX_PLANNED_R marks such a row.
+            if _tp and abs(float(_tp) - float(entry)) / risk > MAX_PLANNED_R:
+                continue
             if str(action).upper().startswith("BUY"):
                 r_i = (float(exit_price) - float(entry)) / risk
             else:
@@ -202,18 +208,31 @@ def _load_full(
             except Exception:
                 strat = "?"
             sums.setdefault((sym, strat), []).append(r_i)
+            sums.setdefault((sym, SYMBOL_POOL), []).append(r_i)
         except Exception:
             continue
 
     for pair, rs in sums.items():
         rs = rs[-window:]  # rolling window: the pair's most recent closes only
-        if rs:
+        if rs and pair[1] == SYMBOL_POOL:  # all strategies pooled: details only, never a quarantine pair
+            details[pair] = list(rs)
+        elif rs:
             stats[pair] = (len(rs), sum(rs) / len(rs))
             details[pair] = list(rs)
 
     with _CACHE_LOCK:
         _CACHE[key] = (now, stats, details)
     return stats, details
+
+
+def load_symbol_expectancy(
+    db_path: Optional[str] = None, execution_mode: str = "demo",
+) -> Dict[str, Tuple[int, float]]:
+    """{symbol: (n, expectancy_r)} over each symbol's last ``trading.quarantine_window`` closes,
+    all strategies pooled (the dynamic auto-tune's live edge). Same ledger and cache as above."""
+    details = _load_full(db_path, execution_mode)[1]
+    return {sym: (len(rs), sum(rs) / len(rs)) for (sym, strat), rs in details.items()
+            if strat == SYMBOL_POOL and rs}
 
 
 def is_quarantined(
@@ -419,6 +438,7 @@ __all__ = [
     "GRADUATION_RECENT_N",
     "GRADUATION_RECENT_MIN_R",
     "SIZING_MIN_TRADES",
+    "load_symbol_expectancy",
     "SIZE_MULT_FOR_NEGATIVE",
     "SIZE_MULT_FOR_NEUTRAL",
     "SIZE_MULT_FOR_POSITIVE",

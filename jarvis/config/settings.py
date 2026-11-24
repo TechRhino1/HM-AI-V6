@@ -7,6 +7,8 @@ from typing import List
 
 logger = logging.getLogger("JARVIS_Config")
 
+AUTO_TUNE_MODES = ("off", "dynamic")
+
 def verify_execution_mode(mode: str) -> str:
     """
     Verifies execution mode.
@@ -86,6 +88,9 @@ class TradingSettings:
     # Under institutional_lock, these symbols hold to their original stop/target instead (no lock,
     # no trail): measured better in both halves for crypto on 353 clean live trades, 2026-11-24.
     exit_hold_symbols: List[str] = field(default_factory=list)
+    # Symbol-universe auto-tune: "off" (manual button only) or "dynamic" (AutoTuneEngine DYNAMIC
+    # every 30 min from the watchdog; see reports/AUTO_TUNE_RESEARCH_2026-11-24.md).
+    auto_tune: str = "off"
     # Calibrated policy as its own entry route (2026-11-23): a SWING candidate the calibrated
     # policy allows is dispatched at market even when the legacy gates said WAIT/NO_TRADE, through
     # the full dispatch path (vetoes, slots, cooldowns, RiskEngine sizing/heat/correlation/circuit
@@ -203,8 +208,8 @@ class JarvisConfig:
                         }
                 if str(t_data.get("exit_mode", "")).lower() in ("legacy", "institutional_lock"):
                     cfg.trading.exit_mode = str(t_data["exit_mode"]).lower()
-                if isinstance(t_data.get("exit_hold_symbols"), list):
-                    cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
+                if str(t_data.get("auto_tune", "")).lower() in AUTO_TUNE_MODES:
+                    cfg.trading.auto_tune = str(t_data["auto_tune"]).lower()
                 if isinstance(t_data.get("exit_hold_symbols"), list):
                     cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
                 if "calibrated_policy_trader" in t_data:
@@ -277,9 +282,26 @@ class JarvisConfig:
 SETTINGS = JarvisConfig.load()
 
 
+def persist_auto_tune(mode: str) -> bool:
+    """Set and persist trading.auto_tune ("off" | "dynamic")."""
+    mode = str(mode or "").strip().lower()
+    if mode not in AUTO_TUNE_MODES:
+        return False
+    SETTINGS.trading.auto_tune = mode
+    return _persist_trading("auto_tune", mode)
+
+
 def persist_allowed_symbols(symbols: List[str]) -> bool:
     """Atomically write the allowed_symbols list back to config/settings.json."""
     clean = [str(s).strip().upper() for s in symbols if str(s).strip()]
+    if not _persist_trading("allowed_symbols", clean):
+        return False
+    SETTINGS.trading.symbols = list(clean)
+    return True
+
+
+def _persist_trading(key: str, value: object) -> bool:
+    """Atomically write one trading.<key> back to config/settings.json."""
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     json_path = os.path.join(base_dir, "config", "settings.json")
     try:
@@ -289,16 +311,15 @@ def persist_allowed_symbols(symbols: List[str]) -> bool:
                 data = json.load(f)
         if "trading" not in data or not isinstance(data["trading"], dict):
             data["trading"] = {}
-        data["trading"]["allowed_symbols"] = clean
+        data["trading"][key] = value
 
         temp_path = json_path + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(temp_path, json_path)
-        SETTINGS.trading.symbols = list(clean)
-        logger.info(f"💾 SETTINGS: Persisted {len(clean)} allowed_symbols to {json_path}")
+        logger.info(f"💾 SETTINGS: Persisted trading.{key} to {json_path}")
         return True
     except Exception as e:
-        logger.error(f"Failed to persist allowed_symbols to {json_path}: {e}")
+        logger.error(f"Failed to persist trading.{key} to {json_path}: {e}")
         return False
 

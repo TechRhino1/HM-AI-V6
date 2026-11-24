@@ -223,12 +223,12 @@ def load_live_trades():
     off = broker_utc_offset(mt5_module=mt5, symbols=["EURUSD"]) or 0
     rows = sqlite3.connect("file:data/jarvis_history.db?mode=ro", uri=True).execute(
         "SELECT symbol, action, entry_price, sl, tp, exit_price, timestamp, volume, "
-        "COALESCE(trade_style,''), COALESCE(strategy,''), COALESCE(session_name,'') FROM executed_trades "
+        "COALESCE(trade_style,''), COALESCE(strategy,''), COALESCE(session_name,''), closed_at FROM executed_trades "
         "WHERE closed_at IS NOT NULL AND realized_pnl IS NOT NULL AND exit_price IS NOT NULL AND sl > 0 "
         "AND entry_price <> sl AND execution_mode = 'demo' AND COALESCE(regime,'') != 'FORWARD_TEST' "
         "ORDER BY timestamp").fetchall()
     trades = []
-    for sym, side, e, s_, tp, x, ts, vol, style, strat, sess in rows:
+    for sym, side, e, s_, tp, x, ts, vol, style, strat, sess, closed in rows:
         t0 = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() + off
         bars = mt5.copy_rates_range(resolve_broker_symbol(sym, mt5_module=mt5) or sym, mt5.TIMEFRAME_M1,
                                     datetime.fromtimestamp(t0 + 60, timezone.utc),
@@ -240,7 +240,7 @@ def load_live_trades():
         trades.append(dict(sym=sym, side=sg, entry=e, risk=r, actual=sg * (x - e) / r,
                            tp_r=sg * (tp - e) / r if tp and sg * (tp - e) > 0 else 2.0,
                            splittable=(vol or 0) >= 0.02, ts=ts, style=style.upper(), strategy=strat,
-                           session=sess, hour=datetime.fromisoformat(ts.replace("Z", "+00:00")).hour,
+                           session=sess, closed_at=closed, hour=datetime.fromisoformat(ts.replace("Z", "+00:00")).hour,
                            path=[(sg * (b[hi_k] - e) / r, sg * (b[lo_k] - e) / r, sg * (b["close"] - e) / r) for b in bars]))
     mt5.shutdown()
     # A stop a fraction of a pip from entry (corrupt or mis-recorded sl) turns ordinary moves into
@@ -281,7 +281,67 @@ def live_trades_main(out_md):
     print("\n".join(lines))
 
 
+def auto_tune_main(out_md):
+    """Walk-forward check of the DYNAMIC auto-tune on the live trades: before each entry, select
+    symbols with AutoTuneEngine.dynamic_select from closes known at that moment only (hysteresis
+    carried over), and score the trades it would have kept vs all trades, by half. It can only
+    filter what was traded: symbols it would have added never traded, so they are not scored."""
+    from datetime import datetime, timezone
+    from jarvis.execution.exit_policy import institutional_lock
+    from jarvis.intelligence.auto_tune_engine import AutoTuneEngine, dynamic_score
+    from jarvis.intelligence.winrate_targeting import load_profiles
+    from jarvis.config.settings import SETTINGS
+    trades = load_live_trades()
+    dt = lambda x: datetime.fromisoformat(str(x).replace("Z", "+00:00").replace(" ", "T"))
+    for t in trades:
+        t["_open"], t["_close"] = dt(t["ts"]), dt(t["closed_at"])
+    hold = {str(x).upper() for x in (SETTINGS.trading.exit_hold_symbols or [])}
+    legacy = ExitPolicy()
+    for t in trades:
+        t["lock_r"] = replay_live_trade(t, institutional_lock(legacy, hold=t["sym"] in hold))
+    priors = {k.upper(): float(p.oos_expectancy_r) for k, p in load_profiles().items()}
+    syms = sorted({t["sym"] for t in trades} | set(priors))
+    window = int(getattr(SETTINGS.trading, "quarantine_window", 30) or 30)
+
+    def walk(prior_map, learn="actual"):
+        on, kept = set(syms), []
+        for t in trades:
+            done = [u for u in trades if u["_close"] < t["_open"]]
+            cands = []
+            for s_ in syms:
+                rs = [u[learn] for u in done if u["sym"] == s_][-window:]
+                cands.append(dict(symbol=s_, confluence=50.0, ev=0.0, is_open=True, is_spread_spiked=False,
+                                  spread_pips=0.0, max_spread=0.0,
+                                  **dynamic_score(len(rs), sum(rs) / len(rs) if rs else 0.0, prior_map.get(s_))))
+            on, _ = AutoTuneEngine.dynamic_select(cands, on)
+            kept.append(t["sym"] in on)
+        return kept
+
+    n, h = len(trades), len(trades) // 2
+    lines = [f"# Dynamic auto-tune walk-forward on live trades {datetime.now(timezone.utc):%Y-%m-%d}", "",
+             f"{n} clean closed live demo trades. Before each entry, DYNAMIC selects symbols from the closes known "
+             "at that moment. `actual R` is what each trade made; `lock R` is the same trade under the shipped "
+             "exits (lock + hold list). Priors are the calibrated profiles of 2026-11-19 (730 days of bars, which "
+             "overlaps this period); the live-only row uses no prior.", "",
+             "| Selection | trades kept | actual R | 1st half | 2nd half | lock R | 1st half | 2nd half |",
+             "|---|---|---|---|---|---|---|---|"]
+    for name, kept in (("all symbols (today)", [True] * n), ("DYNAMIC (priors + live)", walk(priors)),
+                       ("DYNAMIC (live only)", walk({})),
+                       # the ledger from now on records the shipped exits, so learn from those R
+                       ("DYNAMIC (priors + live, learns lock R)", walk(priors, "lock_r")),
+                       ("DYNAMIC (live only, learns lock R)", walk({}, "lock_r"))):
+        row = [name, f"{sum(kept)}/{n}"]
+        for key in ("actual", "lock_r"):
+            v = [t[key] if k else 0.0 for t, k in zip(trades, kept)]
+            row += [f"{sum(v):+.1f}", f"{sum(v[:h]):+.1f}", f"{sum(v[h:]):+.1f}"]
+        lines.append("| " + " | ".join(row) + " |")
+    open(out_md, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--auto-tune":
+        return auto_tune_main(sys.argv[2] if len(sys.argv) > 2 else "reports/AUTO_TUNE_RESEARCH.md")
     if len(sys.argv) > 1 and sys.argv[1] == "--live-trades":
         return live_trades_main(sys.argv[2] if len(sys.argv) > 2 else "reports/EXIT_LOCK_RESEARCH.md")
     res = research(pickle.load(open(sys.argv[1], "rb")), sys.argv[3:] or None)
