@@ -523,19 +523,20 @@ class MT5Client:
         """
         if not (isinstance(sl, (int, float)) and math.isfinite(sl) and sl > 0):
             return "stop-loss must be a positive finite number"
-        if not (isinstance(tp, (int, float)) and math.isfinite(tp) and tp > 0):
-            return "take-profit must be a positive finite number"
+        # tp == 0 means "no take-profit" (signal-exit strategies), as on the live path.
+        if not (isinstance(tp, (int, float)) and math.isfinite(tp) and tp >= 0):
+            return "take-profit must be a non-negative finite number (0 = none)"
         if not (isinstance(price, (int, float)) and math.isfinite(price) and price > 0):
             return "fill price must be a positive finite number"
         if order_type == "BUY":
             if sl >= price:
                 return f"BUY stop-loss {sl} is not below the fill price {price}"
-            if tp <= price:
+            if tp and tp <= price:
                 return f"BUY take-profit {tp} is not above the fill price {price}"
         else:
             if sl <= price:
                 return f"SELL stop-loss {sl} is not above the fill price {price}"
-            if tp >= price:
+            if tp and tp >= price:
                 return f"SELL take-profit {tp} is not below the fill price {price}"
         return None
 
