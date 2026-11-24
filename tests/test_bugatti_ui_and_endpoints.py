@@ -32,7 +32,7 @@ class TestBugattiEndpoints(unittest.TestCase):
         self.assertEqual(status["portfolio_heat_zone"], "NORMAL")
         self.assertGreaterEqual(status["portfolio_heat_score"], 0.0)
         self.assertLessEqual(status["portfolio_heat_score"], 100.0)
-        self.assertIn("XAUUSD", status["hrp_weights"])
+        self.assertEqual(status["hrp_weights"], {})  # never placeholder numbers
 
     def test_intelligence_missed_trades_endpoint(self):
         """Verify /api/intelligence/missed-trades returns structured vetoed opportunities."""

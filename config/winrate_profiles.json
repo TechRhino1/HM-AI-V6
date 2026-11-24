@@ -71,6 +71,10 @@
       "oos_pre_policy_win_rate": 0.5823,
       "oos_pre_policy_expectancy_r": -0.0874,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 0,
+      "holdout_expectancy_r": 0.0,
+      "holdout_profit_factor": 0.0,
       "score_calibration": {
         "bin_edges": [
           0.3512,
@@ -293,6 +297,10 @@
       "oos_pre_policy_win_rate": 0.3333,
       "oos_pre_policy_expectancy_r": -0.1575,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 210,
+      "holdout_expectancy_r": -0.0296,
+      "holdout_profit_factor": 0.94,
       "score_calibration": {
         "bin_edges": [
           0.5062,
@@ -530,6 +538,10 @@
       "oos_pre_policy_win_rate": 0.3,
       "oos_pre_policy_expectancy_r": 0.0681,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 97,
+      "holdout_expectancy_r": -0.0691,
+      "holdout_profit_factor": 0.79,
       "score_calibration": {
         "bin_edges": [
           0.5455,
@@ -746,6 +758,10 @@
       "oos_pre_policy_win_rate": 0.3378,
       "oos_pre_policy_expectancy_r": 0.0476,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 0,
+      "holdout_expectancy_r": 0.0,
+      "holdout_profit_factor": 0.0,
       "score_calibration": {
         "bin_edges": [
           0.4555,
@@ -974,6 +990,10 @@
       "oos_pre_policy_win_rate": 0.5,
       "oos_pre_policy_expectancy_r": 0.0005,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 0,
+      "holdout_expectancy_r": 0.0,
+      "holdout_profit_factor": 0.0,
       "score_calibration": {
         "bin_edges": [
           0.378,
@@ -1220,6 +1240,10 @@
       "oos_pre_policy_win_rate": 0.3485,
       "oos_pre_policy_expectancy_r": 0.0877,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 421,
+      "holdout_expectancy_r": -0.0579,
+      "holdout_profit_factor": 0.68,
       "score_calibration": {
         "bin_edges": [
           0.4442,
@@ -1466,6 +1490,10 @@
       "oos_pre_policy_win_rate": 0.7521,
       "oos_pre_policy_expectancy_r": -0.0078,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 398,
+      "holdout_expectancy_r": -0.0295,
+      "holdout_profit_factor": 0.81,
       "score_calibration": {
         "bin_edges": [
           0.41,
@@ -1704,6 +1732,10 @@
       "oos_pre_policy_win_rate": 0.2545,
       "oos_pre_policy_expectancy_r": -0.2405,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18 production profile engine run",
+      "holdout_trades": 113,
+      "holdout_expectancy_r": -0.0618,
+      "holdout_profit_factor": 0.87,
       "score_calibration": {
         "bin_edges": [
           0.3751,
@@ -1941,6 +1973,10 @@
       "oos_pre_policy_win_rate": 0.3846,
       "oos_pre_policy_expectancy_r": 0.306,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18 production profile engine run",
+      "holdout_trades": 124,
+      "holdout_expectancy_r": -0.0808,
+      "holdout_profit_factor": 0.56,
       "score_calibration": {
         "bin_edges": [
           0.4867,
@@ -2177,6 +2213,10 @@
       "oos_pre_policy_win_rate": 0.3548,
       "oos_pre_policy_expectancy_r": 0.0725,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 337,
+      "holdout_expectancy_r": -0.1267,
+      "holdout_profit_factor": 0.42,
       "score_calibration": {
         "bin_edges": [
           0.31,
@@ -2414,6 +2454,10 @@
       "oos_pre_policy_win_rate": 0.4615,
       "oos_pre_policy_expectancy_r": 0.0885,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 190,
+      "holdout_expectancy_r": -0.0498,
+      "holdout_profit_factor": 0.91,
       "score_calibration": {
         "bin_edges": [
           0.3775,
@@ -2660,6 +2704,10 @@
       "oos_pre_policy_win_rate": 0.7527,
       "oos_pre_policy_expectancy_r": 0.0051,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 149,
+      "holdout_expectancy_r": 0.0123,
+      "holdout_profit_factor": 0.92,
       "score_calibration": {
         "bin_edges": [
           0.4921,
@@ -2888,6 +2936,10 @@
       "oos_pre_policy_win_rate": 0.6567,
       "oos_pre_policy_expectancy_r": 0.0588,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 233,
+      "holdout_expectancy_r": -0.1561,
+      "holdout_profit_factor": 0.54,
       "score_calibration": {
         "bin_edges": [
           0.4223,
@@ -3116,6 +3168,10 @@
       "oos_pre_policy_win_rate": 0.1786,
       "oos_pre_policy_expectancy_r": -0.3972,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 99,
+      "holdout_expectancy_r": -0.1382,
+      "holdout_profit_factor": 0.86,
       "score_calibration": {
         "bin_edges": [
           0.3637,
@@ -3353,6 +3409,10 @@
       "oos_pre_policy_win_rate": 0.4757,
       "oos_pre_policy_expectancy_r": 0.0508,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 313,
+      "holdout_expectancy_r": -0.06,
+      "holdout_profit_factor": 0.87,
       "score_calibration": {
         "bin_edges": [
           0.4373,
@@ -3621,6 +3681,10 @@
       "oos_pre_policy_win_rate": 0.5809,
       "oos_pre_policy_expectancy_r": 0.0477,
       "policy_fitted_on": "train folds",
+      "holdout_window": "2026-05-19..2026-11-18",
+      "holdout_trades": 347,
+      "holdout_expectancy_r": -0.1062,
+      "holdout_profit_factor": 0.83,
       "score_calibration": {
         "bin_edges": [
           0.35,

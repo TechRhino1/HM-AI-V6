@@ -142,7 +142,17 @@ def main() -> int:
                     help="upsert into the existing profile store instead of replacing it "
                          "(required when calibrating a subset, otherwise the other symbols "
                          "are silently dropped)")
+    ap.add_argument("--train-end", default=None,
+                    help="walk-forward holdout: calibrate only on candidates before this UTC date, "
+                         "minus a purge gap of --purge-days so no training trade can reach the holdout")
+    ap.add_argument("--purge-days", type=float, default=3.0,
+                    help="purge gap before --train-end (default 3 days > the 48-bar max hold)")
+    ap.add_argument("--out", default=None,
+                    help="profile store to write (default config/winrate_profiles.json, the live store)")
     args = ap.parse_args()
+    profile_path = Path(args.out) if args.out else PROFILE_PATH
+    train_cut = (pd.Timestamp(args.train_end, tz="UTC") - pd.Timedelta(days=args.purge_days)
+                 if args.train_end else None)
 
     symbols = (
         [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -191,6 +201,9 @@ def main() -> int:
             continue
         df = pd.read_parquet(dpath).reset_index(drop=True)
         cands = pd.read_parquet(cpath)
+        if train_cut is not None:
+            cands = cands[pd.to_datetime(cands["time"], utc=True) < train_cut]
+            df = df[pd.to_datetime(df["time"], utc=True) < pd.Timestamp(args.train_end, tz="UTC")].reset_index(drop=True)
         if args.live_takeable:
             if "live_takeable" not in cands.columns:
                 print(f"  {sym:8s} SKIP ({cpath.name} predates live_takeable; rescan with tools/scan_signals.py)")
@@ -224,7 +237,7 @@ def main() -> int:
     # merged store may hold others from a different window or grid.
     new_profiles = dict(profiles)
 
-    store = WRProfileStore(PROFILE_PATH)
+    store = WRProfileStore(profile_path)
     if args.merge:
         # Upsert. ``save`` replaces the whole file, so calibrating a single
         # symbol without this would silently delete every other profile.
@@ -252,6 +265,8 @@ def main() -> int:
         "slippage_pips": SLIPPAGE_PIPS,
         "generated_utc": pd.Timestamp.now("UTC").isoformat(),
         "symbols": list(profiles.keys()),
+        "train_end": args.train_end,
+        "purge_days": args.purge_days if args.train_end else None,
     })
 
     profiles = new_profiles
@@ -273,10 +288,10 @@ def main() -> int:
     print(f"Aggregate OOS: {total_oos} trades, win rate {agg_wr*100:.1f}%, total {agg_r:+.1f}R")
     print(f"Aggregate OOS before regime policy: {pre_oos} trades, win rate {pre_wr*100:.1f}%, "
           f"total {pre_r:+.1f}R")
-    print(f"Profiles written to {PROFILE_PATH.relative_to(REPO_ROOT)}")
+    print(f"Profiles written to {profile_path}")
 
     # A short machine-readable roll-up for the reporting step.
-    (SIGNAL_DIR / "calibration_summary.json").write_text(
+    (profile_path.with_suffix(".summary.json") if args.out else SIGNAL_DIR / "calibration_summary.json").write_text(
         json.dumps({
             "target_wr": args.target,
             "min_trades": args.min_trades,
