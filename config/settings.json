@@ -26,7 +26,8 @@
       "paper",
       "demo",
       "live"
-    ]
+    ],
+    "exit_mode": "institutional_lock"
   },
   "risk": {
     "max_risk_per_trade_pct": 1.0,

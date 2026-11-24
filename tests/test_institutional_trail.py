@@ -55,3 +55,45 @@ def test_live_and_backtest_share_one_structural_filter():
     assert struct_level_for("BUY", 100.0, st) == 105.0
     assert struct_level_for("BUY", 106.0, st) is None                       # nothing above entry
     assert struct_level_for("BUY", 100.0, SimpleNamespace(**{**vars(st), "higher_lows": False})) is None
+
+
+
+# ---- institutional lock (trading.exit_mode="institutional_lock"; measured on 173 live trades) ----
+from jarvis.execution.exit_policy import ExitPolicy as _EP, evaluate_exit as _ev, institutional_lock as _lock
+
+
+def _lk():
+    return _lock(_EP(digits=2, pip_size=0.01))
+
+
+def _run(price, peak, *, split=False, taken=False, sl=95.0):
+    # BUY at 100, stop 95 -> 1R = 5
+    return _ev(side="BUY", entry=100.0, initial_sl=95.0, current_sl=sl, tp=125.0, price=price,
+               favorable_dist=peak, atr=2.0, policy=_lk(), partial_already_taken=taken, partial_executable=split)
+
+
+def test_lock_does_nothing_before_1r():
+    d = _run(104.5, 4.5)
+    assert d.new_sl in (0, 95.0) and not d.partial_close_pct
+
+
+def test_min_lot_floors_at_0_3r_then_trails_0_7r():
+    assert _run(105.0, 5.0).new_sl == 101.5          # +0.3R floor beats the trail (100+5-3.5)
+    assert _run(109.0, 10.0).new_sl == 106.5         # peak 2R -> 100+10-3.5
+
+
+def test_splittable_banks_half_and_floors_at_breakeven():
+    d = _run(105.0, 5.0, split=True)
+    assert d.partial_close_pct == 0.5 and d.partial_price == 105.0
+    assert d.new_sl == 101.5 and not any(x.startswith("LOCK_0.3R") for x in d.actions)  # trail, no floor
+    assert not _run(105.0, 5.0, split=True, taken=True).partial_close_pct
+
+
+def test_lock_never_loosens_and_skips_time_stop():
+    assert _run(108.0, 10.0, sl=107.0).new_sl == 107.0
+    assert _lk().time_stop_minutes == 0.0
+
+
+def test_plain_institutional_trail_unchanged_without_lock_fields():
+    p = _EP(digits=2, pip_size=0.01, trail_mode="institutional")
+    assert p.lock_floor_r is None and p.trail_r is None and p.lock_partial_pct == 0.0

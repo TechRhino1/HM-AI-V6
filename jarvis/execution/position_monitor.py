@@ -654,7 +654,10 @@ class PositionMonitorEngine:
                         f"🪜 MARGIN_LADDER: margin_level={margin_level:.0f}% < {MARGIN_LEVEL_FLATTEN:.0f}% — "
                         f"closing largest floating loser #{worst.ticket} ({worst.symbol})."
                     )
-                    self.mt5_client.close_position(worst.ticket)
+                    _res = self.mt5_client.close_position(worst.ticket)
+                    if _res and _res.get("status") in ("CLOSED", "PARTIALLY_CLOSED"):
+                        from jarvis.data import database
+                        database.TRADE_DB.set_exit_reason(worst.ticket, "MARGIN_LADDER")  # else it reads "ENGINE"
             elif margin_level > 0 and margin_level < MARGIN_LEVEL_TIGHTEN:
                 logger.warning(
                     f"🪜 MARGIN_LADDER: margin_level={margin_level:.0f}% < {MARGIN_LEVEL_TIGHTEN:.0f}% — "
@@ -1203,7 +1206,9 @@ class PositionMonitorEngine:
                     # which marking it "taken" used to suppress (neither partial nor lock happened).
 
             # ── 1.5 Adversarial Order Flow Shield (Suppressed in Grace Period) ────
-            if not in_grace_period:
+            # The institutional lock (trading.exit_mode) manages the stop by one measured rule only.
+            _lock = getattr(self._exit_policy.get(pos.ticket), "lock_floor_r", None) is not None
+            if not in_grace_period and not _lock:
                 shield_triggered, shield_action = self._check_adversarial_order_flow_shield(pos, ctx, c_price, atr, digits)
                 if shield_triggered:
                     if shield_action == "CLOSE":
@@ -1353,9 +1358,21 @@ class PositionMonitorEngine:
                     return
 
             if exit_dec.partial_close_pct > 0.0 and pos.ticket not in self._partially_closed_tickets:
-                # evaluate_exit signals *that* a partial is due; the actual lot
-                # split is executed in step 0 above, so only record the intent.
-                actions.append(f"PARTIAL_DUE_{exit_dec.partial_close_pct:.2f}")
+                if getattr(policy, "lock_partial_pct", 0.0) > 0.0:
+                    # Institutional lock: bank the half here (step 0's TP1 partial is off in this mode).
+                    _spec = self.mt5_client.get_symbol_trading_spec(pos.symbol) if hasattr(self.mt5_client, "get_symbol_trading_spec") else {}
+                    _vmin = float((_spec or {}).get("volume_min", 0.01) or 0.01) if isinstance(_spec, dict) else 0.01
+                    _vstep = float((_spec or {}).get("volume_step", 0.01) or 0.01) if isinstance(_spec, dict) else 0.01
+                    _close = round(int(pos.volume * exit_dec.partial_close_pct / _vstep + 1e-9) * _vstep, 8)
+                    if _close >= _vmin and pos.volume - _close >= _vmin - 1e-9:
+                        _res = self.mt5_client.close_position(pos.ticket, volume=_close)
+                        if _res and _res.get("status") in ("PARTIALLY_CLOSED", "CLOSED"):
+                            self._partially_closed_tickets.add(pos.ticket)
+                            actions.append(f"LOCK_PARTIAL_CLOSED_{_close}")
+                else:
+                    # evaluate_exit signals *that* a partial is due; the actual lot
+                    # split is executed in step 0 above, so only record the intent.
+                    actions.append(f"PARTIAL_DUE_{exit_dec.partial_close_pct:.2f}")
 
             if exit_dec.new_sl and exit_dec.new_sl != new_sl:
                 # Ratchets are one-way; evaluate_exit already enforces this, but we
@@ -1640,6 +1657,9 @@ class PositionMonitorEngine:
                     self._execute_exit(pos, reason="SCALP_STAGNATION")
                     return
 
+                # Institutional lock: only the scalp stagnation exit above is kept (measured helpful).
+                elif _lock:
+                    pass
                 # Day: 14 hours (full session) max hold without progress (R < 0.10R) -> Close position
                 elif style in ("DAY_TRADING", "DAY", "INTRADAY") and open_dur_sec >= 50400.0 and current_r < 0.10:
                     self._execute_exit(pos, reason="DAY_STAGNATION")
@@ -1660,37 +1680,40 @@ class PositionMonitorEngine:
 
                 # Fallback Regime-Adaptive Time-Decay Stale Trade Exit
                 try:
-                    regime_str = getattr(regime, "primary_regime", None)
-                    r_name = getattr(regime_str, "value", str(regime_str or "DEFAULT")).upper()
-                    if "TREND" in r_name:
-                        max_stall_sec = 43200.0
-                    elif "RANGE" in r_name or "LOW_VOLATILITY" in r_name:
-                        max_stall_sec = 28800.0
-                    elif "BREAKOUT" in r_name:
-                        max_stall_sec = 21600.0
+                    if _lock:
+                        pass  # institutional lock: no time-decay exit or time-decay breakeven
                     else:
-                        max_stall_sec = 86400.0
+                        regime_str = getattr(regime, "primary_regime", None)
+                        r_name = getattr(regime_str, "value", str(regime_str or "DEFAULT")).upper()
+                        if "TREND" in r_name:
+                            max_stall_sec = 43200.0
+                        elif "RANGE" in r_name or "LOW_VOLATILITY" in r_name:
+                            max_stall_sec = 28800.0
+                        elif "BREAKOUT" in r_name:
+                            max_stall_sec = 21600.0
+                        else:
+                            max_stall_sec = 86400.0
 
-                    if open_dur_sec >= max_stall_sec:
-                        trend_score = getattr(ctx.momentum, "trend_score", 0.0)
-                        profit_ratio = abs(pos.profit / (balance + 1e-9))
-                        if profit_ratio < 0.005 and abs(trend_score) < 20.0:
-                            self._execute_exit(pos, reason=f"REGIME_TIME_DECAY_{r_name}")
-                            return
-                        elif profit_ratio >= 0.005:
-                            # Protect a stale-but-profitable trade with a breakeven floor
-                            be_buffer = policy.buffer_distance(risk_dist)
-                            be_cand = round(
-                                pos.open_price + be_buffer if pos.type == "BUY"
-                                else pos.open_price - be_buffer,
-                                digits,
-                            )
-                            if pos.type == "BUY" and be_cand > new_sl and be_cand < c_price:
-                                new_sl = be_cand
-                                actions.append(f"TIME_DECAY_BE@{new_sl:.4f}")
-                            elif pos.type == "SELL" and (new_sl == 0 or be_cand < new_sl) and be_cand > c_price:
-                                new_sl = be_cand
-                                actions.append(f"TIME_DECAY_BE@{new_sl:.4f}")
+                        if open_dur_sec >= max_stall_sec:
+                            trend_score = getattr(ctx.momentum, "trend_score", 0.0)
+                            profit_ratio = abs(pos.profit / (balance + 1e-9))
+                            if profit_ratio < 0.005 and abs(trend_score) < 20.0:
+                                self._execute_exit(pos, reason=f"REGIME_TIME_DECAY_{r_name}")
+                                return
+                            elif profit_ratio >= 0.005:
+                                # Protect a stale-but-profitable trade with a breakeven floor
+                                be_buffer = policy.buffer_distance(risk_dist)
+                                be_cand = round(
+                                    pos.open_price + be_buffer if pos.type == "BUY"
+                                    else pos.open_price - be_buffer,
+                                    digits,
+                                )
+                                if pos.type == "BUY" and be_cand > new_sl and be_cand < c_price:
+                                    new_sl = be_cand
+                                    actions.append(f"TIME_DECAY_BE@{new_sl:.4f}")
+                                elif pos.type == "SELL" and (new_sl == 0 or be_cand < new_sl) and be_cand > c_price:
+                                    new_sl = be_cand
+                                    actions.append(f"TIME_DECAY_BE@{new_sl:.4f}")
                 except Exception as e:
                     logger.debug(f"Regime time-decay evaluation failed for #{pos.ticket} ({symbol}): {e}")
 
