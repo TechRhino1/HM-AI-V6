@@ -5,6 +5,8 @@ Evaluates the entire multi-asset universe across four selectable strategy profil
 2. CONSERVATIVE (Grade A+ / Highest Edge Only)
 3. AGGRESSIVE (High Coverage & Broad Discovery)
 4. SESSION_ADAPTIVE (Time-of-Day Global Flow Alignment)
+5. DYNAMIC (live evidence: each symbol's own closed-trade R, shrunk toward its calibrated
+   out-of-sample prior, with hysteresis; runs every 30 min when trading.auto_tune="dynamic")
 
 Takes into account live market open/closed sessions, spread friction defense,
 currency correlation caps, setup quality grades, and master confluence scores.
@@ -21,6 +23,51 @@ from jarvis.market.data_feed import _is_weekend_gap
 
 logger = logging.getLogger("JARVIS_AutoTuneEngine")
 
+# DYNAMIC: edge = (n * live_R + K * prior_R) / (n + K), the AutoStyleSelector shrinkage (K=30).
+# A symbol switches on at >= ENTER and, once on, stays on until it falls below EXIT (the
+# quarantine threshold), so one bad trade does not flip it. Without a calibrated prior or
+# MIN_LIVE closes there is no evidence, and the symbol keeps whatever state it has.
+DYN_K = 30.0
+DYN_ENTER_R = -0.05
+DYN_EXIT_R = -0.15
+DYN_MIN_LIVE = 6
+DYN_MAX_SYMBOLS = 8
+DYN_MAX_USD = 3
+
+
+def dynamic_edge(n: int, live_r: float, prior_r: float, k: float = DYN_K) -> float:
+    """Live mean R shrunk toward the calibrated prior; n=0 returns the prior."""
+    return (n * live_r + k * prior_r) / (n + k)
+
+
+def dynamic_score(n: int, live_r: float, prior_r: Optional[float]) -> Dict[str, Any]:
+    """The DYNAMIC fields for one symbol: evidence = enough live closes or a calibrated prior."""
+    return {"n": n, "live_r": live_r, "prior_r": prior_r,
+            "evidence": n >= DYN_MIN_LIVE or prior_r is not None,
+            "edge": dynamic_edge(n, live_r, prior_r or 0.0)}
+
+
+def dynamic_on(edge: float, was_on: bool) -> bool:
+    """Hysteresis: the bar to stay on (EXIT) is lower than the bar to switch on (ENTER)."""
+    return edge >= (DYN_EXIT_R if was_on else DYN_ENTER_R)
+
+
+def _dynamic_inputs(orchestrator: Any) -> Tuple[Dict[str, Tuple[int, float]], Dict[str, float]]:
+    """({symbol: (n, live mean R)}, {symbol: calibrated out-of-sample R}); empty on failure."""
+    live: Dict[str, Tuple[int, float]] = {}
+    priors: Dict[str, float] = {}
+    try:
+        from jarvis.execution.strategy_quarantine import load_symbol_expectancy
+        live = load_symbol_expectancy(execution_mode=str(getattr(orchestrator, "mode", "demo") or "demo"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Dynamic auto-tune: live ledger unavailable: %s", exc)
+    try:
+        from jarvis.intelligence.winrate_targeting import load_profiles
+        priors = {k.upper(): float(p.oos_expectancy_r) for k, p in load_profiles().items()}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Dynamic auto-tune: calibrated priors unavailable: %s", exc)
+    return live, priors
+
 
 class AutoTuneEngine:
     """
@@ -33,6 +80,50 @@ class AutoTuneEngine:
     CRYPTO_PAIRS = {"BTCUSD", "ETHUSD", "SOLUSD"}
     INDEX_PAIRS = {"US500", "GER40", "UK100"}
     COMMODITY_PAIRS = {"XAUUSD", "XAGUSD", "WTI"}
+
+    @classmethod
+    def dynamic_select(cls, candidates: List[Dict[str, Any]], incumbents: Set[str]) -> Tuple[Set[str], List[Dict[str, Any]]]:
+        """DYNAMIC selection over scored candidates (keys: symbol, edge, n, live_r, prior_r, evidence,
+        confluence, ev, is_open, is_spread_spiked, spread_pips, max_spread). Pure: no I/O."""
+        selected_symbols: Set[str] = set()
+        tuning_details: List[Dict[str, Any]] = []
+        # Rank by edge; the current radar (confluence, EV) only breaks near-ties.
+        ranked = sorted(candidates, key=lambda x: x["edge"] + 0.02 * (x["confluence"] - 50.0) / 50.0
+                        + 0.01 * max(-1.0, min(1.0, x["ev"])), reverse=True)
+        usd_count = 0
+        for c in ranked:
+            sym, was_on = c["symbol"], c["symbol"] in incumbents
+            why = (f"edge {c['edge']:+.2f}R (live {c['live_r']:+.2f}R n={c['n']}, prior "
+                   + (f"{c['prior_r']:+.2f}R" if c["prior_r"] is not None else "none") + ")")
+            if not c["is_open"]:
+                tuning_details.append({"symbol": sym, "status": "DEACTIVATED", "reason": "Market session closed"})
+                continue
+            if c["is_spread_spiked"]:
+                tuning_details.append({"symbol": sym, "status": "DEACTIVATED", "reason": f"Spread friction high ({c['spread_pips']}p > {c['max_spread']}p)"})
+                continue
+            if not c["evidence"]:
+                if was_on:
+                    selected_symbols.add(sym)
+                tuning_details.append({"symbol": sym, "status": "ACTIVATED" if was_on else "DEACTIVATED",
+                                       "reason": f"No evidence yet (n={c['n']}, no calibrated prior): kept as it was"})
+                continue
+            if not dynamic_on(c["edge"], was_on):
+                bar = DYN_EXIT_R if was_on else DYN_ENTER_R
+                tuning_details.append({"symbol": sym, "status": "DEACTIVATED", "reason": f"{why} below {bar:+.2f}R"})
+                continue
+            if sym in cls.USD_PAIRS:
+                if usd_count >= DYN_MAX_USD:
+                    tuning_details.append({"symbol": sym, "status": "DEACTIVATED", "reason": f"USD pair correlation limit reached (max {DYN_MAX_USD})"})
+                    continue
+                usd_count += 1
+            if len(selected_symbols) >= DYN_MAX_SYMBOLS:
+                tuning_details.append({"symbol": sym, "status": "DEACTIVATED", "reason": f"Universe cap reached (max {DYN_MAX_SYMBOLS})"})
+                continue
+            selected_symbols.add(sym)
+            tuning_details.append({"symbol": sym, "status": "ACTIVATED", "reason": why,
+                                   "edge_r": round(c["edge"], 3), "n": c["n"]})
+
+        return selected_symbols, tuning_details
 
     @classmethod
     def tune_universe(
@@ -55,7 +146,7 @@ class AutoTuneEngine:
             }
         """
         profile = (mode or "BALANCED").strip().upper()
-        if profile not in ("BALANCED", "CONSERVATIVE", "AGGRESSIVE", "SESSION_ADAPTIVE"):
+        if profile not in ("BALANCED", "CONSERVATIVE", "AGGRESSIVE", "SESSION_ADAPTIVE", "DYNAMIC"):
             profile = "BALANCED"
 
         target_class = (asset_class or "ALL").strip().upper()
@@ -110,7 +201,8 @@ class AutoTuneEngine:
 
             confluence = float(radar_item.get("confluence_score") or getattr(dec_obj, "master_confluence_score", 0.0) or 0.0)
             win_prob = float(radar_item.get("win_prob") or (round(dec_obj.model_confidence * 100.0, 1) if (dec_obj and hasattr(dec_obj, "model_confidence") and dec_obj.model_confidence is not None) else 50.0))
-            ev = float(radar_item.get("ev") or getattr(dec_obj, "expected_value", 0.0) or 0.0)
+            ev = float(radar_item.get("ev") or radar_item.get("expected_value")
+                       or getattr(dec_obj, "expected_value", 0.0) or 0.0)
             bias = str(radar_item.get("bias") or (getattr(dec_obj, "bias", None) if dec_obj else "NEUTRAL")).upper()
             regime = str(radar_item.get("regime") or "NORMAL").upper()
             grade = str(radar_item.get("setup_grade") or (radar_item.get("grade") or "B")).upper()
@@ -201,6 +293,20 @@ class AutoTuneEngine:
                     "status": "ACTIVATED",
                     "reason": f"Elite Grade {c['grade']} Setup | Conf {c['confluence']:.0f} | WinP {c['win_prob']:.0f}%"
                 })
+
+        elif profile == "DYNAMIC":
+            live, priors = _dynamic_inputs(orchestrator)
+            try:
+                from jarvis.config.settings import SETTINGS
+                incumbents = {str(x).upper() for x in (getattr(orchestrator, "symbols", None)
+                                                        or SETTINGS.trading.symbols or [])}
+            except Exception:  # noqa: BLE001
+                incumbents = set()
+            for c in candidates:
+                c.update(dynamic_score(*live.get(c["symbol"], (0, 0.0)), priors.get(c["symbol"])))
+            sel, det = cls.dynamic_select(candidates, incumbents)
+            selected_symbols |= sel
+            tuning_details.extend(det)
 
         elif profile == "AGGRESSIVE":
             # Broad coverage: enable anything open with directional bias and normal spread

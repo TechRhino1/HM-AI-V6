@@ -55,6 +55,15 @@ export interface SymbolIntel {
   confluence_tier: string; grade: string; risk_reward_ratio: number; ev: number; suggestion: string; suggestion_type: string;
 }
 
+export interface AutoTuneDetail { symbol: string; status: "ACTIVATED" | "DEACTIVATED"; reason: string; edge_r?: number; n?: number }
+
+/** Symbol-universe auto-tune: the switch and the last run (manual or every-30-min). */
+export interface AutoTuneState {
+  mode: "off" | "dynamic";
+  last: { mode: string; at: number; trigger: "manual" | "schedule"; changed: boolean; summary: string;
+    active_symbols: string[]; details: AutoTuneDetail[] } | null;
+}
+
 export interface ClosedTrade {
   id?: number; ticket: number; symbol: string; action?: string; type?: string; volume: number;
   entry_price: number; exit_price?: number; realized_pnl?: number; profit?: number;

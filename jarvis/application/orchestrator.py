@@ -614,6 +614,30 @@ class JarvisOrchestrator:
                 self._execution_in_progress.discard(sym)
         return stale
 
+    AUTO_TUNE_EVERY_SEC = 1800.0
+
+    def _maybe_auto_tune(self, now: float):
+        """Run the DYNAMIC auto-tune when enabled and due; apply it only when the set changes."""
+        try:
+            if str(getattr(SETTINGS.trading, "auto_tune", "off") or "off").lower() != "dynamic":
+                return None
+            if now - float(getattr(self, "_last_auto_tune_at", 0.0)) < self.AUTO_TUNE_EVERY_SEC:
+                return None
+            self._last_auto_tune_at = now
+            from jarvis.intelligence.auto_tune_engine import AutoTuneEngine
+            res = AutoTuneEngine.tune_universe(orchestrator=self, state_manager=self.state_manager,
+                                               mt5_client=self.mt5_client, mode="DYNAMIC")
+            res.update(at=now, trigger="schedule",
+                       changed=sorted(res["active_symbols"]) != sorted(self.symbols or []))
+            self.last_auto_tune = res
+            if res["changed"]:
+                logger.info(f"AUTO_TUNE (dynamic): {sorted(self.symbols or [])} -> {res['active_symbols']}")
+                self.set_active_symbols(res["active_symbols"], persist=True)
+            return res
+        except Exception as exc:  # the watchdog must keep running
+            logger.warning(f"Dynamic auto-tune failed: {exc}")
+            return None
+
     def _watchdog_loop(self):
         """Autonomous self-healing watchdog monitoring broker state, thread health, and stale locks."""
         logger.info("HM Algo 2.0 Autonomous Watchdog supervisor active.")
@@ -651,6 +675,9 @@ class JarvisOrchestrator:
                 self.state_manager.update_service_health(
                     "DATA_FEED", self.data_feed.data_health().get("status", "OFFLINE")
                 )
+
+                # 2b. Dynamic symbol-universe auto-tune (trading.auto_tune="dynamic"), every 30 min.
+                self._maybe_auto_tune(now)
 
                 # 3. ML Predictor Brier Score Health Check
                 if int(now) % 300 < 10:
