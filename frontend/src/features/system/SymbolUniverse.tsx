@@ -42,7 +42,16 @@ export function SymbolUniverse() {
   return (
     <>
     <Card title="Auto-tune" sub={autoTune.mode === "dynamic" ? "Dynamic runs every 30 min and changes the list only when the evidence does" : "Manual: runs when you press Auto-tune"}
-      actions={<Switch checked={autoTune.mode === "dynamic"} onChange={setAuto} label="Run dynamic auto-tune every 30 min" />}>
+      actions={
+        <div className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+          <select className="select" style={{ width: "auto", height: 30 }} value={profile} onChange={(e) => setProfile(e.target.value)} aria-label="Auto-tune profile">
+            {PROFILES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <button className="btn sm" onClick={() => batch("AUTO_TUNE")}>Run now{cls === "ALL" ? "" : ` (${cls.toLowerCase()})`}</button>
+          <span className="muted" style={{ fontSize: 12.5 }}>Every 30 min</span>
+          <Switch checked={autoTune.mode === "dynamic"} onChange={setAuto} label="Run dynamic auto-tune every 30 min" />
+        </div>
+      }>
       {!last ? <Empty title="No auto-tune run yet" /> : (
         <>
           <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
@@ -73,10 +82,6 @@ export function SymbolUniverse() {
           {CLASSES.map((c) => <button key={c} className={`chip ${cls === c ? "on" : ""}`} onClick={() => setCls(c)}>{c === "ALL" ? "All" : c.toLowerCase()}</button>)}
           <button className="btn sm" onClick={() => batch("ENABLE_ALL")}>Enable all</button>
           <button className="btn sm" onClick={() => batch("DISABLE_ALL")}>Disable all</button>
-          <select className="select" value={profile} onChange={(e) => setProfile(e.target.value)} aria-label="Auto-tune profile">
-            {PROFILES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          <button className="btn sm" onClick={() => batch("AUTO_TUNE")}>Auto-tune</button>
         </div>
       }>
       {!list.length ? <Empty title="No symbols" /> : (
