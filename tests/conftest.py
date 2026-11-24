@@ -246,3 +246,12 @@ def managed_gold_exit(monkeypatch):
     yield
     exit_policy._RESOLVED_POLICY_CACHE.clear()
 
+
+
+
+@pytest.fixture(autouse=True)
+def _legacy_exit_mode_unless_asked(monkeypatch):
+    """config/settings.json runs live on the institutional lock; tests assert the code default (legacy)
+    unless they select the lock themselves (exit_policy.institutional_lock)."""
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(SETTINGS.trading, "exit_mode", "legacy")

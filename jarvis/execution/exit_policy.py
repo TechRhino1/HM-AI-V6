@@ -110,10 +110,36 @@ class ExitPolicy:
     trail_mode: str = "legacy"
     chandelier_atr_mult: float = 3.0
     be_at_r: float = 1.0
+    # Institutional lock (trading.exit_mode="institutional_lock", measured on 173 live trades
+    # 2026-11-24): at +be_at_r bank lock_partial_pct when the position can be split (floor then
+    # breakeven), else floor the stop at +lock_floor_r; then trail trail_r R behind the peak.
+    # None = the plain institutional trail above.
+    lock_floor_r: Optional[float] = None
+    trail_r: Optional[float] = None
+    lock_partial_pct: float = 0.0
 
     # ── Construction ────────────────────────────────────────────────────────
     @classmethod
-    def for_symbol(
+    def for_symbol(cls, symbol: str, spec: Any = None, trade_style: str = "SWING",
+                   regime: Optional[str] = None) -> "ExitPolicy":
+        """The resolved policy, switched to the institutional lock when trading.exit_mode asks
+        for it (live only: offline backtests and research keep the policy they calibrated)."""
+        pol = cls._resolve(symbol, spec, trade_style, regime)
+        try:
+            from jarvis.config.runtime import is_offline
+            from jarvis.config.settings import SETTINGS
+            mode = str(getattr(SETTINGS.trading, "exit_mode", "legacy") or "legacy").lower()
+            if mode == "institutional_lock" and not is_offline():
+                from jarvis.data.symbol_registry import resolve
+                hold = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+                canon = str(getattr(resolve(symbol), "canonical", symbol) or symbol).upper()
+                return institutional_lock(pol, hold=canon in hold or str(symbol).upper() in hold)
+        except Exception:
+            pass
+        return pol
+
+    @classmethod
+    def _resolve(
         cls,
         symbol: str,
         spec: Any = None,
@@ -367,7 +393,9 @@ def evaluate_exit(
 
     if policy.trail_mode == "institutional":
         return _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, _peak_r * risk_dist,
-                                    atr, struct_level, buffer_dist, policy)
+                                    atr, struct_level, buffer_dist, policy,
+                                    partial_already_taken=partial_already_taken,
+                                    partial_executable=partial_executable)
 
     # ── 1. Partial profit banking (risk reduction) ──────────────────────────
     # Take a partial BEFORE moving to breakeven so the position is de-risked
@@ -567,14 +595,28 @@ def struct_level_for(side: str, entry: float, st: Any) -> Optional[float]:
 
 
 def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_dist, atr,
-                         struct_level, buffer_dist, policy) -> ExitDecision:
+                         struct_level, buffer_dist, policy, partial_already_taken=False,
+                         partial_executable=False) -> ExitDecision:
     """Initial stop until +be_at_r; then the tightest of breakeven+buffer, the chandelier
-    (best price since entry - k x ATR) and the last swing beyond entry - 0.25 ATR. One-way."""
+    (best price since entry - k x ATR) and the last swing beyond entry - 0.25 ATR. One-way.
+    With lock_floor_r/trail_r set (the institutional lock) the candidates are only breakeven,
+    the floor and the R trail - the rule that was measured - plus the partial when splittable."""
     if peak_dist < policy.be_at_r * risk_dist:
         return dec
     sgn = 1 if is_buy else -1
     cands = [(entry + sgn * buffer_dist, "BE_1R")]
-    if atr > 0:
+    if policy.lock_floor_r is not None or policy.trail_r is not None:
+        split = policy.lock_partial_pct > 0 and partial_executable
+        if split and not partial_already_taken:
+            dec.partial_close_pct = policy.lock_partial_pct
+            dec.partial_price = round(entry + sgn * risk_dist * policy.be_at_r, policy.digits)
+            dec.actions.append(f"LOCK_PARTIAL_{policy.lock_partial_pct:.0%}@{policy.be_at_r:.1f}R")
+        if policy.lock_floor_r is not None and not (split or partial_already_taken):
+            cands.append((entry + sgn * max(policy.lock_floor_r * risk_dist, buffer_dist),
+                          f"LOCK_{policy.lock_floor_r:.1f}R"))
+        if policy.trail_r is not None:
+            cands.append((entry + sgn * (peak_dist - policy.trail_r * risk_dist), f"R_TRAIL_{policy.trail_r:.1f}R"))
+    elif atr > 0:
         cands.append((entry + sgn * (peak_dist - policy.chandelier_atr_mult * atr),
                       f"CHANDELIER_{policy.chandelier_atr_mult:.1f}ATR"))
         if struct_level and sgn * (struct_level - entry) > 0:
@@ -592,8 +634,22 @@ def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_
     return dec
 
 
+def institutional_lock(pol: "ExitPolicy", hold: bool = False) -> "ExitPolicy":
+    """A copy of `pol` on the institutional lock: +1R trigger, +0.3R floor (min lot) or a 50%
+    partial (splittable), 0.7R trail from the peak, and no time stop (measured to hurt).
+    hold=True never triggers the lock: the trade runs to its original stop or target, still with
+    the monitor's discretionary layers off (trading.exit_hold_symbols)."""
+    import dataclasses
+    # profit_locks=False: the monitor's discretionary layers (proximity, MFE retrace, reversal, regime,
+    # ML moves, TP1 partials) stay off - they are what lost R live (2026-11-24 replay).
+    return dataclasses.replace(pol, trail_mode="institutional", be_at_r=float("inf") if hold else 1.0,
+                               lock_floor_r=0.3, trail_r=0.7, lock_partial_pct=0.5, time_stop_minutes=0.0,
+                               profit_locks=False)
+
+
 __all__ = [
     "ExitPolicy",
+    "institutional_lock",
     "ExitDecision",
     "evaluate_exit",
     "DEFAULT_BE_TRIGGER_R",
