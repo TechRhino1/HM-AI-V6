@@ -166,18 +166,18 @@ class TestStrategyQuarantine(unittest.TestCase):
     DB_ROWS = 25
 
     def _temp_db(self, rows_per_pair, expectancy_r=-1.0, symbol="XAUUSD",
-                 strategy="TREND_PULLBACK", r_values=None):
+                 strategy="TREND_PULLBACK", r_values=None, mode="demo", regime=None, path=None):
         """Build a temp ledger. ``r_values`` (optional) overrides each row's R
         multiple in trade order (entry 4200.0 / sl 4190.0 = risk 10.0; BUY exit
         price 4200 + r*10). Rows repeat the provided list cyclically."""
         if not hasattr(self, "_db_counter"):
             self._db_counter = 0
         self._db_counter += 1
-        path = os.path.join(self.temp_dir.name, f"quarantine_test_{self._db_counter}.db")
+        path = path or os.path.join(self.temp_dir.name, f"quarantine_test_{self._db_counter}.db")
         conn = sqlite3.connect(path)
         conn.execute(
             """
-            CREATE TABLE executed_trades (
+            CREATE TABLE IF NOT EXISTS executed_trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticket INTEGER, position_id INTEGER,
                 symbol TEXT, action TEXT, entry_price REAL, sl REAL, tp REAL, volume REAL,
                 timestamp TEXT, ai_score REAL, regime TEXT, expected_value REAL,
@@ -199,11 +199,12 @@ class TestStrategyQuarantine(unittest.TestCase):
                 """
                 INSERT INTO executed_trades (ticket, symbol, action, entry_price, sl, tp,
                     volume, timestamp, exit_price, realized_pnl, features_json,
-                    closed_at, execution_mode, origin)
-                VALUES (?, 'XAUUSD', 'BUY', 4200.0, 4190.0, 4220.0, 0.01,
-                        '2026-10-20T09:15:27+00:00', ?, ?, ?, 'x', 'demo', 'broker')
-                """.replace("'XAUUSD'", "?"),
-                (960000 + i, symbol, exit_px, -r_i * 10.0, json.dumps({"strategy": strategy})),
+                    closed_at, execution_mode, origin, regime)
+                VALUES (?, ?, 'BUY', 4200.0, 4190.0, 4220.0, 0.01,
+                        '2026-10-20T09:15:27+00:00', ?, ?, ?, 'x', ?, 'broker', ?)
+                """,
+                (960000 + i, symbol, exit_px, -r_i * 10.0, json.dumps({"strategy": strategy}),
+                 mode, regime),
             )
         conn.commit()
         conn.close()
@@ -373,6 +374,69 @@ class TestStrategyQuarantine(unittest.TestCase):
             self.assertFalse(
                 is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path)
             )
+
+    def test_threshold_is_config_driven_default_minus_015(self):
+        """-0.2R per trade over 25 closes: condemned at the -0.15R default
+        (the old -0.25R floor let it bleed), freed by a looser config."""
+        from unittest.mock import patch
+
+        from jarvis.execution.strategy_quarantine import is_quarantined
+
+        path = self._temp_db(25, r_values=[-0.2])
+        self.assertTrue(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+        self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path,
+                                        min_expectancy_r=-0.25))
+        with patch("jarvis.config.settings.SETTINGS.trading.quarantine_expectancy_r", -0.25):
+            self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+
+    def test_window_keeps_only_last_n_closes_per_pair(self):
+        """Old losers outside the last `quarantine_window` closes no longer count;
+        no calendar window either (closed_at is irrelevant)."""
+        from unittest.mock import patch
+
+        from jarvis.execution.strategy_quarantine import (
+            clear_cache, expectancy_state, is_quarantined,
+        )
+
+        # 20 winners at +0.1R, then 25 losers at -1R: the last 30 are 5 wins + 25 losses.
+        path = self._temp_db(45, r_values=[0.1] * 20 + [-1.0] * 25)
+        state = expectancy_state("XAUUSD", "TREND_PULLBACK", db_path=path)
+        self.assertEqual(state["n"], 30)
+        self.assertAlmostEqual(state["expectancy_r"], (5 * 0.1 - 25) / 30, places=3)
+        self.assertTrue(state["quarantined"])
+        # 25 losers first, then 20 winners: the window holds 5 losers + 20 wins → free.
+        path = self._temp_db(45, r_values=[-1.0] * 25 + [0.1] * 20)
+        self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+        # A smaller window from config is honoured (n below the 20-trade floor → open).
+        clear_cache()
+        path = self._temp_db(25)
+        with patch("jarvis.config.settings.SETTINGS.trading.quarantine_window", 10):
+            self.assertEqual(expectancy_state("XAUUSD", "TREND_PULLBACK", db_path=path)["n"], 10)
+            self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+
+    def test_execution_mode_selects_the_ledger(self):
+        from jarvis.execution.strategy_quarantine import is_quarantined
+
+        path = self._temp_db(25, mode="live")
+        self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))  # default demo
+        self.assertTrue(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path,
+                                       execution_mode="live"))
+        self.assertTrue(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path,
+                                       execution_mode="LIVE"))
+
+    def test_forward_test_rows_are_excluded(self):
+        from jarvis.execution.strategy_quarantine import expectancy_state, is_quarantined
+
+        path = self._temp_db(25, regime="FORWARD_TEST")
+        self.assertFalse(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+        self.assertEqual(expectancy_state("XAUUSD", "TREND_PULLBACK", db_path=path)["n"], 0)
+
+    def test_enum_style_strategy_names_match(self):
+        from jarvis.execution.strategy_quarantine import is_quarantined
+
+        path = self._temp_db(25, strategy="StrategyType.TREND_PULLBACK")
+        self.assertTrue(is_quarantined("XAUUSD", "TREND_PULLBACK", db_path=path))
+        self.assertTrue(is_quarantined("xauusd", "StrategyType.TREND_PULLBACK", db_path=path))
 
 
 class TestLearnedSizingInRiskEngine(unittest.TestCase):

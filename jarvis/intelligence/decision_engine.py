@@ -219,7 +219,7 @@ class DecisionEngine:
 
     _QUARANTINE_REFRESH_SEC: float = 300.0
     _QUARANTINE_MIN_TRADES: int = 20
-    _QUARANTINE_MIN_EXPECTANCY_R: float = -0.25
+    _QUARANTINE_MIN_EXPECTANCY_R = None  # None -> trading.quarantine_expectancy_r
 
     def _strategy_quarantined(self, symbol: str, strategy: str) -> bool:
         """Consult the strategy quarantine governor with graduation support.
@@ -1271,7 +1271,7 @@ class DecisionEngine:
 
                 # Live-expectancy quarantine (2026-10-20 ledger audit): static
                 # ban lists cannot see an edge dying. A (symbol, strategy)
-                # pair that has burned >= 20 closed demo trades at <= -0.25R
+                # pair whose last 30 closes (>= 20) average <= -0.15R (config)
                 # per trade is disabled regardless of what the setup looks
                 # like today. Consults the constructor's snapshot (refreshed
                 # on a TTL in live, frozen empty in offline/backtest); fails

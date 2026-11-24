@@ -110,6 +110,11 @@ class TradingSettings:
     # entries per symbol per UTC day (position management/trailing unaffected).
     # 0 disables the cap.
     max_daily_entries_per_symbol: int = 4
+    # Live-expectancy quarantine (jarvis.execution.strategy_quarantine): a
+    # (symbol, strategy) pair whose last ``quarantine_window`` closed trades
+    # average <= ``quarantine_expectancy_r`` R is vetoed on every entry route.
+    quarantine_expectancy_r: float = -0.15
+    quarantine_window: int = 30
 
 @dataclass
 class ServerSettings:
@@ -224,6 +229,12 @@ class JarvisConfig:
                         cfg.trading.max_daily_entries_per_symbol = int(t_data["max_daily_entries_per_symbol"])
                     except (TypeError, ValueError) as exc:
                         logger.warning(f"Ignoring invalid max_daily_entries_per_symbol={t_data['max_daily_entries_per_symbol']!r}: {exc}")
+                for _qk, _qcast in (("quarantine_expectancy_r", float), ("quarantine_window", int)):
+                    if _qk in t_data:
+                        try:
+                            setattr(cfg.trading, _qk, _qcast(t_data[_qk]))
+                        except (TypeError, ValueError) as exc:
+                            logger.warning(f"Ignoring invalid {_qk}={t_data[_qk]!r}: {exc}")
                 m_data = data.get("ml", {})
                 ml_keys = (
                     ("sgd_learning_rate", "sgd_learning_rate", float),

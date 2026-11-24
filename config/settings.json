@@ -21,6 +21,8 @@
     ],
     "use_calibrated_entry_policy": true,
     "max_daily_entries_per_symbol": 4,
+    "quarantine_expectancy_r": -0.15,
+    "quarantine_window": 30,
     "calibrated_policy_trader": true,
     "forward_test_modes": [
       "paper",
