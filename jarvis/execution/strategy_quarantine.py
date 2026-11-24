@@ -16,12 +16,15 @@ answers one question a decision can check synchronously:
 
 It is a *trailing performance governor*, not a prediction: it only ever
 disables a strategy × symbol pair that has already burned the account in the
-demo ledger, and only once the sample is large enough (default: >= 20 usable
-closed trades and <= -0.25 R per trade).
+ledger, and only once the sample is large enough (default: >= 20 usable
+closed trades and <= ``trading.quarantine_expectancy_r`` (-0.15) R per trade
+over the pair's last ``trading.quarantine_window`` (30) closes).
 
 NOTES
 -----
-* Only demo-mode closed rows with a computable R multiple enter the sample.
+* Only closed rows of the caller's execution mode (default 'demo') with a
+  computable R multiple enter the sample; FORWARD_TEST rows are excluded
+  (their own experiment, not the strategy's live book).
   The R multiple is signed price progress over |entry - sl| per trade, which
   is scale-free across gold, crypto, FX and indices.
 * Rows whose realized_pnl is NULL (never recorded) are ignored, not zero —
@@ -38,18 +41,20 @@ import sqlite3
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timezone, timedelta
 
 try:
     from jarvis.data.database import TRADE_DB as _CANONICAL_DB
 except Exception:  # pragma: no cover - the DB is always importable in engine
     _CANONICAL_DB = None
 
+from jarvis.intelligence.auto_style import strat_name
+
 logger = logging.getLogger("JARVIS_StrategyQuarantine")
 
 CACHE_TTL_SEC = 300.0
 DEFAULT_MIN_TRADES = 20
-DEFAULT_MIN_EXPECTANCY_R = -0.25
+DEFAULT_MIN_EXPECTANCY_R = -0.15  # fallback when trading.quarantine_expectancy_r is unreadable
+DEFAULT_WINDOW = 30  # fallback when trading.quarantine_window is unreadable
 
 # 2026-10-20 graduation: quarantine is discipline, not life-imprisonment.
 # A quarantined pair earns back the right to trade when its MOST RECENT
@@ -73,7 +78,8 @@ SIZE_MULT_FOR_NEGATIVE = 0.80   # expectancy <= -0.05R
 SIZE_MULT_FOR_NEUTRAL = 1.00    # -0.05R < expectancy < +0.10R
 SIZE_MULT_FOR_POSITIVE = 1.15   # expectancy >= +0.10R
 
-_CACHE: Dict[str, object] = {}
+# {(db_path, execution_mode, window): (loaded_at, stats, details)}
+_CACHE: Dict[Tuple[str, str, int], tuple] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -88,18 +94,40 @@ def _db_path(db_path: Optional[str]) -> Optional[str]:
     return path
 
 
-def load_live_expectancy(db_path: Optional[str] = None) -> Dict[Tuple[str, str], Tuple[int, float]]:
-    """Return {(symbol, strategy): (n, expectancy_r)} over the demo ledger.
+def _cfg_threshold() -> float:
+    try:
+        from jarvis.config.settings import SETTINGS
+
+        return float(SETTINGS.trading.quarantine_expectancy_r)
+    except Exception:
+        return DEFAULT_MIN_EXPECTANCY_R
+
+
+def _cfg_window() -> int:
+    try:
+        from jarvis.config.settings import SETTINGS
+
+        return max(1, int(SETTINGS.trading.quarantine_window))
+    except Exception:
+        return DEFAULT_WINDOW
+
+
+def load_live_expectancy(
+    db_path: Optional[str] = None, execution_mode: str = "demo",
+) -> Dict[Tuple[str, str], Tuple[int, float]]:
+    """Return {(symbol, strategy): (n, expectancy_r)} over the last
+    ``trading.quarantine_window`` closes per pair in ``execution_mode``'s ledger.
 
     Read-only, cached for ``CACHE_TTL_SEC``. ``strategy`` defaults to "?" when
     the row's features_json does not record one (the "no strategy" bucket is
     never quarantined automatically — there is nothing reliable to blame).
     """
-    return _load_full(db_path)[0]
+    return _load_full(db_path, execution_mode)[0]
 
 
 def _load_full(
     db_path: Optional[str] = None,
+    execution_mode: str = "demo",
 ) -> Tuple[Dict[Tuple[str, str], Tuple[int, float]], Dict[Tuple[str, str], List[float]]]:
     """Build (stats, details) where details keeps per-pair R values in trade order.
 
@@ -107,13 +135,14 @@ def _load_full(
     id order is chronological close order — exactly what graduation needs to
     look at the freshest cohort.
     """
-    key = str(db_path or _db_path(None))
+    mode = str(execution_mode or "demo").strip().lower()
+    window = _cfg_window()
+    key = (str(db_path or _db_path(None)), mode, window)
     now = time.monotonic()
     with _CACHE_LOCK:
-        cached_path = _CACHE.get("path")
-        cached_at = float(_CACHE.get("at", 0.0))
-        if cached_path == key and (now - cached_at) < CACHE_TTL_SEC:
-            return _CACHE.get("stats", {}), _CACHE.get("details", {})
+        hit = _CACHE.get(key)
+        if hit is not None and (now - hit[0]) < CACHE_TTL_SEC:
+            return hit[1], hit[2]
 
     stats: Dict[Tuple[str, str], Tuple[int, float]] = {}
     details: Dict[Tuple[str, str], List[float]] = {}
@@ -123,21 +152,19 @@ def _load_full(
 
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
-        LOOKBACK_DAYS = 14
-        since_iso = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
         try:
             rows = conn.execute(
                 """
                 SELECT symbol, action, entry_price, exit_price, sl, tp,
                        realized_pnl, features_json
                 FROM executed_trades
-                WHERE execution_mode = 'demo'
+                WHERE lower(execution_mode) = ?
                   AND closed_at IS NOT NULL
                   AND realized_pnl IS NOT NULL
-                  AND closed_at >= ?
+                  AND COALESCE(regime, '') <> 'FORWARD_TEST'
                 ORDER BY id ASC
                 """,
-                (since_iso,)
+                (mode,),
             ).fetchall()
         finally:
             conn.close()
@@ -149,10 +176,9 @@ def _load_full(
         # only ever cached by a successful read of an actually-empty ledger.
         logger.warning("StrategyQuarantine read failed for %s: %s", path, exc)
         with _CACHE_LOCK:
-            if (_CACHE.get("path") == key
-                    and isinstance(_CACHE.get("stats"), dict)
-                    and isinstance(_CACHE.get("details"), dict)):
-                return _CACHE["stats"], _CACHE["details"]
+            hit = _CACHE.get(key)
+            if hit is not None:
+                return hit[1], hit[2]
         return stats, details
 
     sums: Dict[Tuple[str, str], list] = {}
@@ -171,7 +197,8 @@ def _load_full(
             if not sym:
                 continue
             try:
-                strat = str((json.loads(features_json or "{}") or {}).get("strategy") or "?")
+                raw = (json.loads(features_json or "{}") or {}).get("strategy")
+                strat = strat_name(raw) if raw else "?"
             except Exception:
                 strat = "?"
             sums.setdefault((sym, strat), []).append(r_i)
@@ -179,15 +206,13 @@ def _load_full(
             continue
 
     for pair, rs in sums.items():
+        rs = rs[-window:]  # rolling window: the pair's most recent closes only
         if rs:
             stats[pair] = (len(rs), sum(rs) / len(rs))
             details[pair] = list(rs)
 
     with _CACHE_LOCK:
-        _CACHE["path"] = key
-        _CACHE["at"] = now
-        _CACHE["stats"] = stats
-        _CACHE["details"] = details
+        _CACHE[key] = (now, stats, details)
     return stats, details
 
 
@@ -196,8 +221,9 @@ def is_quarantined(
     strategy: str,
     *,
     min_trades: int = DEFAULT_MIN_TRADES,
-    min_expectancy_r: float = DEFAULT_MIN_EXPECTANCY_R,
+    min_expectancy_r: Optional[float] = None,
     db_path: Optional[str] = None,
+    execution_mode: str = "demo",
 ) -> bool:
     """True when the live demo ledger shows a losing edge for symbol × strategy.
 
@@ -214,6 +240,7 @@ def is_quarantined(
     """
     if not strategy or strategy == "?":
         return False
+    strategy = strat_name(strategy)  # "StrategyType.X" and "X" are one pair
     try:
         from jarvis.config.runtime import is_offline
 
@@ -221,7 +248,9 @@ def is_quarantined(
             return False
     except Exception:
         pass
-    stats = load_live_expectancy(db_path=db_path)
+    if min_expectancy_r is None:
+        min_expectancy_r = _cfg_threshold()
+    stats = load_live_expectancy(db_path=db_path, execution_mode=execution_mode)
     rec = stats.get((str(symbol or "").upper().strip(), str(strategy)))
     if rec is None:
         return False
@@ -233,7 +262,7 @@ def is_quarantined(
     # (last GRADUATION_RECENT_N closed trades) demonstrated a recovered
     # edge? If so it re-enters Play — allowed to trade again, subject to a
     # neutral size multiplier until the aggregate turns around as well.
-    details = _load_full(db_path)[1]
+    details = _load_full(db_path, execution_mode)[1]
     rs = details.get((str(symbol or "").upper().strip(), str(strategy))) or ()
     if len(rs) >= GRADUATION_RECENT_N:
         recent = list(rs)[-GRADUATION_RECENT_N:]
@@ -252,6 +281,7 @@ def expectancy_state(
     symbol: str,
     strategy: str,
     db_path: Optional[str] = None,
+    execution_mode: str = "demo",
 ) -> Dict[str, object]:
     """Full learned-state snapshot for one (symbol, strategy) pair.
 
@@ -271,10 +301,10 @@ def expectancy_state(
         "size_multiplier": 1.0,
     }
     sym = str(symbol or "").upper().strip()
-    strat = str(strategy or "").strip()
+    strat = strat_name(strategy) if strategy else ""
     if not sym or not strat or strat == "?":
         return empty
-    stats, details = _load_full(db_path)
+    stats, details = _load_full(db_path, execution_mode)
     rec = stats.get((sym, strat))
     if rec is None:
         return empty
@@ -283,11 +313,11 @@ def expectancy_state(
     recent_n = min(len(rs), GRADUATION_RECENT_N)
     recent_exp = (sum(rs[-GRADUATION_RECENT_N:]) / recent_n) if recent_n else None
 
-    quarantined = is_quarantined(sym, strat, db_path=db_path)
+    quarantined = is_quarantined(sym, strat, db_path=db_path, execution_mode=execution_mode)
     # "graduated" describes the pair the aggregate currently condemns but the
     # recent cohort says recover. A pair that was never quarantined is not
     # "graduated" — it simply was never shut out.
-    aggregate_condemns = n >= DEFAULT_MIN_TRADES and exp_r <= DEFAULT_MIN_EXPECTANCY_R
+    aggregate_condemns = n >= DEFAULT_MIN_TRADES and exp_r <= _cfg_threshold()
     graduated = bool(quarantined is False and aggregate_condemns
                      and recent_n >= GRADUATION_RECENT_N
                      and recent_exp is not None
@@ -300,7 +330,8 @@ def expectancy_state(
         "recent_expectancy_r": round(float(recent_exp), 4) if recent_exp is not None else None,
         "quarantined": bool(quarantined),
         "graduated": graduated,
-        "size_multiplier": expectancy_risk_multiplier(sym, strat, db_path=db_path),
+        "size_multiplier": expectancy_risk_multiplier(
+            sym, strat, db_path=db_path, execution_mode=execution_mode),
     }
 
 
@@ -308,6 +339,7 @@ def expectancy_risk_multiplier(
     symbol: str,
     strategy: str,
     db_path: Optional[str] = None,
+    execution_mode: str = "demo",
 ) -> float:
     """Learned size multiplier in [0.0, 1.15] for one (symbol, strategy).
 
@@ -319,7 +351,7 @@ def expectancy_risk_multiplier(
     """
     base = 1.0
     sym = str(symbol or "").upper().strip()
-    strat = str(strategy or "").strip()
+    strat = strat_name(strategy) if strategy else ""
     if not sym or not strat or strat == "?":
         return base
     try:
@@ -329,14 +361,14 @@ def expectancy_risk_multiplier(
             return base
     except Exception:
         pass
-    stats, _details = _load_full(db_path)
+    stats, _details = _load_full(db_path, execution_mode)
     rec = stats.get((sym, strat))
     if rec is None:
         return base
     n, exp_r = rec
     if n < SIZING_MIN_TRADES:
         return base
-    if is_quarantined(sym, strat, db_path=db_path):
+    if is_quarantined(sym, strat, db_path=db_path, execution_mode=execution_mode):
         # Condemned pairs must not trade at all; if some path still reaches
         # sizing with one, zero it out rather than fund it.
         return 0.0
@@ -351,11 +383,14 @@ def quarantine_report(
     symbol: str = "",
     *,
     min_trades: int = DEFAULT_MIN_TRADES,
-    min_expectancy_r: float = DEFAULT_MIN_EXPECTANCY_R,
+    min_expectancy_r: Optional[float] = None,
     db_path: Optional[str] = None,
+    execution_mode: str = "demo",
 ) -> Dict[str, Dict[str, float]]:
     """Diagnostic dump for dashboards/ops: n and expectancy_r per (symbol)[×strategy]."""
-    stats = load_live_expectancy(db_path=db_path)
+    if min_expectancy_r is None:
+        min_expectancy_r = _cfg_threshold()
+    stats = load_live_expectancy(db_path=db_path, execution_mode=execution_mode)
     out: Dict[str, Dict[str, float]] = {}
     for (sym, strat), (n, exp_r) in stats.items():
         if symbol and sym != str(symbol).upper().strip():
@@ -380,6 +415,7 @@ __all__ = [
     "clear_cache",
     "DEFAULT_MIN_TRADES",
     "DEFAULT_MIN_EXPECTANCY_R",
+    "DEFAULT_WINDOW",
     "GRADUATION_RECENT_N",
     "GRADUATION_RECENT_MIN_R",
     "SIZING_MIN_TRADES",

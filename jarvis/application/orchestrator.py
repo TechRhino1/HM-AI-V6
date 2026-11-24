@@ -1220,8 +1220,58 @@ class JarvisOrchestrator:
 
         return first_unusable_frame(mtf_data)
 
+    def _manage_inline_trailing(self, positions, context) -> None:
+        """Inline trail / time-stop for open positions when the PositionMonitor is not running."""
+        for pos in positions:
+            try:
+                manage_res = self.order_manager.manage_position(pos, context)
+                if manage_res.get("should_close"):
+                    logger.info(
+                        f"⏰ TIME_STOP (inline trail): closing #{pos.ticket} "
+                        f"({pos.symbol} {pos.type}) — {manage_res.get('close_reason', '')}"
+                    )
+                    res = self.mt5_client.close_position(ticket=pos.ticket)
+                    self._label_close({"ticket": pos.ticket, **(res or {})}, "INLINE_TIME_STOP")
+                    continue
+                if manage_res.get("modified"):
+                    self.mt5_client.modify_position(
+                        ticket=pos.ticket,
+                        sl=manage_res["new_sl"],
+                        tp=manage_res["new_tp"]
+                    )
+            except Exception as e:
+                logger.error(f"Error trailing position #{pos.ticket}: {e}", exc_info=True)
+
+    @staticmethod
+    def _label_close(res, reason: str) -> None:
+        """Record why the ENGINE closed a position (else MT5 reports a bare 'ENGINE' close)."""
+        if not (isinstance(res, dict) and res.get("status") in ("CLOSED", "PARTIALLY_CLOSED") and res.get("ticket")):
+            return
+        try:
+            from jarvis.data.database import TRADE_DB
+            TRADE_DB.set_exit_reason(res["ticket"], reason)
+        except Exception as exc:
+            logger.warning(f"Could not record exit reason {reason} for #{res.get('ticket')}: {exc}")
+
+    def _quarantine_veto(self, symbol, strategy) -> str:
+        """``STRATEGY_QUARANTINE: ...`` when the live ledger condemns (symbol, strategy), else ""."""
+        if not strategy:
+            return ""
+        try:
+            from jarvis.execution.strategy_quarantine import expectancy_state
+            from jarvis.intelligence.auto_style import strat_name
+
+            strat = strat_name(strategy)
+            st = expectancy_state(_resolve_sym(symbol).canonical, strat, execution_mode=self.mode)
+            if st.get("quarantined"):
+                return f"STRATEGY_QUARANTINE: {strat} n={st['n']} exp={float(st['expectancy_r']):+.2f}R"
+        except Exception as exc:  # fails open like the module itself: other governors still apply
+            logger.debug("Strategy quarantine check failed for %s: %s", symbol, exc)
+        return ""
+
     def _dispatch_vetoes(self, symbol, prof, profile_lookup_failed, is_session_blackout,
-                         premium_offwindow_elite, gov_sym_dir, tf_conflict, is_exec_style_match) -> List[str]:
+                         premium_offwindow_elite, gov_sym_dir, tf_conflict, is_exec_style_match,
+                         strategy=None) -> List[str]:
         """Reasons an arbiter dispatch must not place this order (empty list = none)."""
         vetoes: List[str] = []
         if profile_lookup_failed:
@@ -1239,6 +1289,9 @@ class JarvisOrchestrator:
             vetoes.append(f"LLM_GOVERNOR_PAUSED: {getattr(gov_sym_dir, 'reason', '')}")
         if tf_conflict:
             vetoes.append(f"TIMEFRAME_CONFLICT: {tf_conflict}")
+        quarantine = self._quarantine_veto(symbol, strategy)
+        if quarantine:
+            vetoes.append(quarantine)
         cap = int(getattr(SETTINGS.trading, "max_daily_entries_per_symbol", 4) or 4)
         if cap > 0 and not premium_offwindow_elite and self._count_entries_today(symbol, mode=self.mode) >= cap:
             vetoes.append("DAILY_ENTRY_CAP")
@@ -1569,6 +1622,7 @@ class JarvisOrchestrator:
         )
         close_res = self.mt5_client.close_position(opp_pos.ticket)
         if close_res and close_res.get("status") in ("CLOSED", "PARTIALLY_CLOSED"):
+            self._label_close({"ticket": opp_pos.ticket, **close_res}, "STOP_AND_REVERSE")
             self.risk_engine.release_risk(canonical_sym)
             active_sym_positions = [p for p in active_sym_positions if p.ticket != opp_pos.ticket]
             positions = [p for p in positions if p.ticket != opp_pos.ticket]
@@ -2095,24 +2149,7 @@ class JarvisOrchestrator:
         # Suppressed on a dry run. When PositionMonitorEngine is actively running,
         # defer to it to prevent race-condition collisions on MT5 modify_position.
         if not dry_run and not (hasattr(self, "position_monitor") and getattr(self.position_monitor, "_running", False)):
-            for pos in active_sym_positions:
-                try:
-                    manage_res = self.order_manager.manage_position(pos, context)
-                    if manage_res.get("should_close"):
-                        logger.info(
-                            f"⏰ TIME_STOP (inline trail): closing #{pos.ticket} "
-                            f"({pos.symbol} {pos.type}) — {manage_res.get('close_reason', '')}"
-                        )
-                        self.mt5_client.close_position(ticket=pos.ticket)
-                        continue
-                    if manage_res.get("modified"):
-                        self.mt5_client.modify_position(
-                            ticket=pos.ticket,
-                            sl=manage_res["new_sl"],
-                            tp=manage_res["new_tp"]
-                        )
-                except Exception as e:
-                    logger.error(f"Error trailing position #{pos.ticket}: {e}", exc_info=True)
+            self._manage_inline_trailing(active_sym_positions, context)
 
         # These guards are keyed on "this cycle wants to enter", NOT on the
         # legacy verdict. A candidate the calibrated policy accepted can still
@@ -2315,6 +2352,13 @@ class JarvisOrchestrator:
             decision.decision = 'WAIT'
             decision.execution_authorized = False
             auth_res = {'authorized': False, 'reason': f'TIMEFRAME_CONFLICT: {_conflict}'}
+        # Live-expectancy quarantine on the direct path too (the arbiter path gets it via
+        # dispatch_vetoes below). Computed whatever the verdict so both paths share one read.
+        _quarantine = self._quarantine_veto(symbol, getattr(decision, "strategy", None))
+        if _quarantine and decision.decision == 'EXECUTE':
+            decision.decision = 'WAIT'
+            decision.execution_authorized = False
+            auth_res = {'authorized': False, 'reason': _quarantine}
         # Only a read that passed the quality bar votes; a NO_TRADE read clears this style's vote.
         _votes = self._style_bias.setdefault(canonical_sym, {})
         if getattr(decision, "bias", None) in ("BUY", "SELL") and decision.decision in ("EXECUTE", "WAIT"):
@@ -2334,6 +2378,7 @@ class JarvisOrchestrator:
         decision.dispatch_vetoes = self._dispatch_vetoes(
             symbol, _prof, _profile_lookup_failed, is_session_blackout,
             _premium_offwindow_elite, gov_sym_dir, _conflict, is_exec_style_match,
+            strategy=getattr(decision, "strategy", None),
         )
 
         # 7. Execute if authorized (Atomic Reservation -> Execute -> Commit/Release)
@@ -2948,6 +2993,8 @@ class JarvisOrchestrator:
         closed_positions = []
         if close_positions and hasattr(self, "mt5_client") and self.mt5_client:
             closed_positions = self.mt5_client.close_all_positions()
+            for res in closed_positions:
+                self._label_close(res, "EMERGENCY_STOP")
 
         logger.warning(f"🚨 EMERGENCY STOP ACTIVATED: {reason} | Cancelled {len(cancelled_orders)} orders | Closed {len(closed_positions)} positions")
         return {
