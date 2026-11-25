@@ -327,9 +327,9 @@ class BacktestEngine:
             full_df_h4.rename(columns={"index": "time"}, inplace=True)
         if "index" in full_df_d1.columns and "time" not in full_df_d1.columns:
             full_df_d1.rename(columns={"index": "time"}, inplace=True)
-        else:
-            full_df_h4 = None
-            full_df_d1 = None
+        # (A stray `else: full_df_h4 = full_df_d1 = None` here bound to the rename
+        # `if`, so whenever the column was already "time" - always - the legacy
+        # path silently ran with NO H4/D1 context.)
 
         # ── Style-aware real MTF context ────────────────────────────────────
         # When a trade style is supplied the engine reproduces the live path:
@@ -529,8 +529,13 @@ class BacktestEngine:
                     hold_minutes=float(open_trade.get("bars_held", 0)) * _tf_minutes,
                 )
 
+                # Intra-bar order is unknown: if this bar also spans the stop resting
+                # at its open, the stop fills first and no partial is banked (the
+                # simulator's conservative rule). Banking both was optimistic.
+                _stop_spanned = (low <= bar_start_sl) if open_trade["type"] == "BUY" else (high >= bar_start_sl)
+
                 # Apply the partial scale-out (only if the lots can actually split)
-                if exit_dec.partial_close_pct > 0.0 and not (open_trade.get("partial_closed", False) or open_trade.get("partial_unsupported", False)):
+                if exit_dec.partial_close_pct > 0.0 and not _stop_spanned and not (open_trade.get("partial_closed", False) or open_trade.get("partial_unsupported", False)):
                     partial_ratio = exit_dec.partial_close_pct
                     partial_lots = round(open_trade["lots"] * partial_ratio, 2)
                     if partial_lots >= 0.01 and (open_trade["lots"] - partial_lots) >= 0.01:
@@ -579,8 +584,15 @@ class BacktestEngine:
                 # above used this bar's high/close; stopping out at that new level
                 # on this same bar's low assumes the high printed first and booked
                 # profitable "trail" exits the live trade may never have had.
-                if (low <= bar_start_sl) if open_trade["type"] == "BUY" else (high >= bar_start_sl):
+                if _stop_spanned:
                     exit_price = bar_start_sl
+                    # A bar that OPENS through the stop (weekend/news gap) fills at
+                    # the open, not at a stop price that never traded.
+                    _bar_open = float(current_bar.get("open", bar_start_sl))
+                    if open_trade["type"] == "BUY" and _bar_open < bar_start_sl:
+                        exit_price = _bar_open
+                    elif open_trade["type"] == "SELL" and _bar_open > bar_start_sl:
+                        exit_price = _bar_open
                     if open_trade.get("be_locked", False) or open_trade.get("partial_closed", False):
                         result = "BE/TRAIL_SL"
                     else:

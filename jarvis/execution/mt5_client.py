@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any, ClassVar, Tuple
 from jarvis.common.timeout_guard import TimeoutGuard
 from jarvis.data.broker_time import broker_utc_offset
 from jarvis.data.schemas import AccountSnapshot, PositionSnapshot
+from jarvis.data.symbol_registry import volume_decimals
 from jarvis.execution.broker_lock import DEFAULT_WAIT_SEC, TrackedRLock
 
 logger = logging.getLogger("JARVIS_MT5Client")
@@ -230,7 +231,7 @@ class MT5Client:
             "volume_max": 100.0,
             "volume_step": 0.01,
         }
-        if not MT5_AVAILABLE or mt5 is None or not self.is_connected or self.is_paper_or_offline:
+        def _registry_spec(cache: bool = True) -> Dict[str, Any]:
             from jarvis.data.symbol_registry import resolve as resolve_sym
             s = resolve_sym(symbol)
             spec_dict.update({
@@ -244,8 +245,12 @@ class MT5Client:
                 "digits": s.digits,
                 "spread": int(round(s.typical_spread_pips * s.pip_size / (10 ** -s.digits))),
             })
-            self._symbol_spec_cache[resolved] = (now_ts, dict(spec_dict))
+            if cache:
+                self._symbol_spec_cache[resolved] = (now_ts, dict(spec_dict))
             return spec_dict
+
+        if not MT5_AVAILABLE or mt5 is None or not self.is_connected or self.is_paper_or_offline:
+            return _registry_spec()
 
         try:
             with self._lock:
@@ -265,9 +270,14 @@ class MT5Client:
                         "volume_step": float(getattr(sym_info, "volume_step", 0.01) or 0.01),
                     })
                     self._symbol_spec_cache[resolved] = (now_ts, dict(spec_dict))
+                    return spec_dict
         except Exception as e:
             logger.warning(f"Failed to fetch MT5 symbol info for {resolved}: {e}")
-        return spec_dict
+        # Live lookup failed. The EURUSD-shaped defaults above value a price unit
+        # at 1.0/0.0001 = $10k/lot; for a 5-digit FX pair it is $100k, so sizing
+        # off them oversized lots up to 10x. Use the symbol's registry spec, uncached.
+        logger.warning(f"Live symbol_info unavailable for {resolved}; sizing from registry spec.")
+        return _registry_spec(cache=False)
 
     def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
         """Convenience alias for get_symbol_trading_spec to ensure backward compatibility."""
@@ -400,10 +410,14 @@ class MT5Client:
 
 
     def get_open_positions(self, symbol: Optional[str] = None) -> List[PositionSnapshot]:
+        # [] means "flat" only when last_positions_ok is True; a failed broker read
+        # also returns [] (callers iterate) but flags it so the synchronizer can skip.
+        self.last_positions_ok = False
 
         self._reconnect_if_needed()
 
         if self.is_paper_or_offline:
+            self.last_positions_ok = True
             with self._lock:
                 if symbol:
                     resolved = self.resolve_symbol_name(symbol)
@@ -433,6 +447,10 @@ class MT5Client:
             with self._lock:
                 resolved = self.resolve_symbol_name(symbol) if symbol else None
                 positions = mt5.positions_get(symbol=resolved) if resolved else mt5.positions_get()
+                if positions is None:  # MT5 error; () is the real "no positions"
+                    logger.warning(f"MT5 positions_get returned None: {mt5.last_error()}")
+                    return []
+                self.last_positions_ok = True
                 if not positions:
                     return []
 
@@ -523,19 +541,20 @@ class MT5Client:
         """
         if not (isinstance(sl, (int, float)) and math.isfinite(sl) and sl > 0):
             return "stop-loss must be a positive finite number"
-        if not (isinstance(tp, (int, float)) and math.isfinite(tp) and tp > 0):
-            return "take-profit must be a positive finite number"
+        # tp == 0 means "no take-profit" (signal-exit strategies), as on the live path.
+        if not (isinstance(tp, (int, float)) and math.isfinite(tp) and tp >= 0):
+            return "take-profit must be a non-negative finite number (0 = none)"
         if not (isinstance(price, (int, float)) and math.isfinite(price) and price > 0):
             return "fill price must be a positive finite number"
         if order_type == "BUY":
             if sl >= price:
                 return f"BUY stop-loss {sl} is not below the fill price {price}"
-            if tp <= price:
+            if tp and tp <= price:
                 return f"BUY take-profit {tp} is not above the fill price {price}"
         else:
             if sl <= price:
                 return f"SELL stop-loss {sl} is not above the fill price {price}"
-            if tp >= price:
+            if tp and tp >= price:
                 return f"SELL take-profit {tp} is not below the fill price {price}"
         return None
 
@@ -690,8 +709,7 @@ class MT5Client:
                     quantized_vol = volume
 
                 quantized_vol = max(vol_min, min(vol_max, quantized_vol))
-                vol_decimals = 2 if vol_step <= 0.01 else (1 if vol_step <= 0.1 else 0)
-                final_volume = round(quantized_vol, vol_decimals)
+                final_volume = round(quantized_vol, volume_decimals(vol_step))
 
                 price = tick.ask if order_type == "BUY" else tick.bid
                 type_op = getattr(mt5, "ORDER_TYPE_BUY", 0) if order_type == "BUY" else getattr(mt5, "ORDER_TYPE_SELL", 1)
@@ -735,34 +753,33 @@ class MT5Client:
                     "type_filling": getattr(mt5, "ORDER_FILLING_IOC", 1)
                 }
 
-                # Direct fast execution with instant filling fallback & requote retry loop
+                # Direct fast execution with instant filling fallback & requote retry loop.
+                # Only a requote / price-changed / price-off is safe to re-send:
+                # every other code is final. Re-sending on 10010 (partial fill),
+                # 10019 (no money) etc. opened a duplicate position per attempt.
+                _done_rc = int(getattr(mt5, "TRADE_RETCODE_DONE", 10009))
+                _partial_rc = int(getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010))
+                _ok_codes = (_done_rc, int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)), _partial_rc)
+                _reprice_codes = (10004, 10020, 10021)  # REQUOTE, PRICE_CHANGED, PRICE_OFF
+                _filling_rc = 10030  # INVALID_FILL (10031 is CONNECTION, not a filling error)
                 max_retries = 3
                 for attempt in range(max_retries):
                     result = mt5.order_send(request)
-                    if result is not None and result.retcode in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
-                        break
-
-                    # If filling type rejected (10030 / 10031), retry filling modes
-                    if result and result.retcode in [10030, 10031]:
+                    if result is not None and result.retcode == _filling_rc:
                         request["type_filling"] = getattr(mt5, "ORDER_FILLING_FOK", 0)
                         result = mt5.order_send(request)
-                        if result and result.retcode in [10030, 10031]:
+                        if result is not None and result.retcode == _filling_rc:
                             request["type_filling"] = getattr(mt5, "ORDER_FILLING_RETURN", 2)
                             result = mt5.order_send(request)
-                        # A fill on the fallback mode must stop the loop, or the next attempt sends a DUPLICATE order.
-                        if result is not None and result.retcode in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
-                            break
+                    if result is None or result.retcode not in _reprice_codes or attempt >= max_retries - 1:
+                        break
+                    time.sleep(0.1 * (2 ** attempt))
+                    fresh_tick = mt5.symbol_info_tick(resolved)
+                    if fresh_tick:
+                        request["price"] = round(fresh_tick.ask if order_type == "BUY" else fresh_tick.bid, digits)
+                        logger.info(f"Requote retry #{attempt+1} for {resolved}: updated price -> {request['price']}")
 
-                    # Requote error (10004) -> refresh tick price and retry after small backoff
-                    if result and result.retcode == 10004 and attempt < (max_retries - 1):
-                        time.sleep(0.1 * (2 ** attempt))
-                        fresh_tick = mt5.symbol_info_tick(resolved)
-                        if fresh_tick:
-                            request["price"] = round(fresh_tick.ask if order_type == "BUY" else fresh_tick.bid, digits)
-                            logger.info(f"Requote retry #{attempt+1} for {resolved}: updated price -> {request['price']}")
-                        continue
-
-                if result is None or result.retcode not in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
+                if result is None or result.retcode not in _ok_codes:
                     err_msg = result.comment if result else str(mt5.last_error())
                     logger.error(f"MT5 Order Send Failed for {resolved}: {err_msg}")
                     return {"status": "FAILED", "reason": err_msg}
@@ -774,9 +791,7 @@ class MT5Client:
                 # that did not exist yet, and the caller skipped the reconciliation
                 # that a still-pending order needs. 10009 is the real fill.
                 _rc = int(getattr(result, "retcode", 0) or 0)
-                _done_rc = int(getattr(mt5, "TRADE_RETCODE_DONE", 10009))
-                _placed_rc = int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008))
-                fill_status = "FILLED" if _rc == _done_rc else "PLACED"
+                fill_status = "FILLED" if _rc in (_done_rc, _partial_rc) else "PLACED"
 
                 # The broker may fill less than requested (IOC partial fill) and
                 # may clamp SL/TP to its stop level. Both were silently reported
@@ -1329,11 +1344,18 @@ class MT5Client:
                         request["price"] = round(fresh_tick.bid if is_buy else fresh_tick.ask, sym_info.digits)
                     result = mt5.order_send(request)
 
-                if result is None or result.retcode != getattr(mt5, "TRADE_RETCODE_DONE", 10009):
+                _partial_rc = getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)
+                if result is None or result.retcode not in (getattr(mt5, "TRADE_RETCODE_DONE", 10009), _partial_rc):
                     err_msg = result.comment if result else str(mt5.last_error())
                     logger.error(f"MT5 Close Order Failed for #{ticket}: {err_msg}")
                     return {"status": "FAILED", "reason": err_msg}
 
+                # 10010 executed part of the close. Reporting it FAILED made the
+                # caller re-send and close the chunk twice.
+                if result.retcode == _partial_rc:
+                    done_vol = float(getattr(result, "volume", 0.0) or 0.0)
+                    if 0 < done_vol < close_volume:
+                        is_partial, close_volume = True, done_vol
                 status_code = "PARTIALLY_CLOSED" if is_partial else "CLOSED"
                 logger.info(f"LIVE POSITION {status_code}: Ticket=#{ticket} {symbol} closed {close_volume} lots @ {result.price}")
                 return {

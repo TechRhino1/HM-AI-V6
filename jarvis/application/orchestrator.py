@@ -1252,9 +1252,16 @@ class JarvisOrchestrator:
 
         return first_unusable_frame(mtf_data)
 
+    def _is_own_position(self, pos) -> bool:
+        """True when the position carries this bot's magic number."""
+        own = getattr(self.mt5_client, "magic_number", None)
+        return not isinstance(own, int) or getattr(pos, "magic", None) == own
+
     def _manage_inline_trailing(self, positions, context) -> None:
         """Inline trail / time-stop for open positions when the PositionMonitor is not running."""
         for pos in positions:
+            if not self._is_own_position(pos):
+                continue  # never trail/close a manual or foreign-EA position
             try:
                 manage_res = self.order_manager.manage_position(pos, context)
                 if manage_res.get("should_close"):
@@ -1570,6 +1577,7 @@ class JarvisOrchestrator:
         opposing_positions = [
             p for p in active_sym_positions
             if _get_pos_side(p) != str(getattr(decision, "bias", "")).upper()
+            and self._is_own_position(p)
         ]
         if not opposing_positions:
             return active_sym_positions, positions, False

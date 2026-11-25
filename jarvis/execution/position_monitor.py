@@ -2519,7 +2519,12 @@ class PositionMonitorEngine:
 
     def _is_manual_trade(self, pos: PositionSnapshot) -> bool:
         """Identifies trades NOT placed by HM Algo 2.0 (manual dashboard or MT5 terminal)."""
-        is_wrong_magic = (pos.magic != JARVIS_MAGIC_NUMBER)
+        # The client's configured magic, not the default: an overridden
+        # trading.magic_number otherwise flagged every bot position as manual.
+        own_magic = getattr(self.mt5_client, "magic_number", None)
+        if not isinstance(own_magic, int):
+            own_magic = JARVIS_MAGIC_NUMBER
+        is_wrong_magic = (pos.magic != own_magic)
         has_manual_comment = any(
             tag in (pos.comment or "").upper()
             for tag in ("MANUAL", "DESK")

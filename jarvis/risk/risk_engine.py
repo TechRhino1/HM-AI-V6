@@ -710,6 +710,24 @@ class RiskEngine:
                     "heat_zone": heat_res.zone
                 }
 
+            # Portfolio budget INCLUDING this trade. Step 6 runs before sizing, so it
+            # only saw open risk: a book at 2.4% took a 1% trade to 3.4% vs a 2.5% cap.
+            _incoming_usd = (abs(float(decision.entry_price) - float(decision.stop_loss)) * lots
+                             * get_dollar_risk_per_price_unit(decision.symbol, sym_info_enriched))
+            _budget = self.exposure_manager.check_exposure(
+                symbol=symbol, positions=positions, account=account,
+                is_second_trade_approved=True, incoming_risk_usd=_incoming_usd,
+            )
+            _budget_breaches = [b for b in _budget.get("breaches", []) if b.startswith("Portfolio Risk Budget")]
+            if _budget_breaches:
+                return {
+                    "authorized": False,
+                    "lots": 0.0,
+                    "reasons": _budget_breaches,
+                    "heat_score": heat_res.score,
+                    "heat_zone": heat_res.zone,
+                }
+
             # Final backstop checks
             cb_final = self.circuit_breaker.check_status()
             if cb_final.get("active"):

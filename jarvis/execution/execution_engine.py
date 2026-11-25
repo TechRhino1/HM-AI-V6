@@ -22,7 +22,7 @@ from jarvis.observability import log_event
 
 from jarvis.observability.instruments import ORDERS_SUBMITTED, ORDER_LATENCY
 
-from jarvis.data.symbol_registry import resolve as resolve_symbol_spec
+from jarvis.data.symbol_registry import resolve as resolve_symbol_spec, volume_decimals
 
 
 
@@ -412,9 +412,10 @@ class ExecutionEngine:
 
 
 
-            safe_lots = max(vol_min, round(safe_lots / vol_step) * vol_step)
+            # Floor, not nearest: rounding up re-breaches the ceiling being enforced.
+            safe_lots = max(vol_min, math.floor(safe_lots / vol_step + 1e-6) * vol_step)
 
-            safe_lots = round(safe_lots, 2)
+            safe_lots = round(safe_lots, volume_decimals(vol_step))
 
             if safe_lots < lots:
 
