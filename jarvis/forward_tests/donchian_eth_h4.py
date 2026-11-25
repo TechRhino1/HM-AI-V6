@@ -143,7 +143,7 @@ class DonchianForwardTest:
             from jarvis.data import database
             database.TRADE_DB.log_trade(
                 ticket=res.get("ticket"), position_id=res.get("position_id"), symbol=SYMBOL, action=order,
-                entry=float(res.get("price") or close), sl=stop, tp=0.0, volume=lots, score=0.0,
+                entry=float(res.get("price") or close), sl=float(res.get("sl") or stop), tp=0.0, volume=lots, score=0.0,
                 regime="FORWARD_TEST", ev=None, origin="broker",
                 execution_mode=str(getattr(self.orch, "mode", "demo")).lower(),
                 account_login=getattr(acct, "login", None), server=getattr(acct, "server", None),

@@ -47,6 +47,27 @@ logger = logging.getLogger("JARVIS_ForwardTest")
 ENABLED_MODES = ("demo",)  # fallback only; trading.forward_test_modes decides
 
 
+STALE_DRIFT_R = 0.5  # live price moved more than half the stop distance since the signal close
+
+
+def _reprice(client, sym: str, order: str, stop: float, tp: float, ref: float):
+    """Move the bracket from the signal bar's close to the executable price, keeping its distances.
+
+    Forward tests size and place stops off the last closed bar; an entry taken later (engine
+    restart, a lifted halt) filled away from that price with the stop still anchored to it
+    (ETHUSD #2007190343: signal 1631.18, fill 1638.57). Returns (stop, tp, ref, stale_reason)."""
+    tick = client.get_tick(sym) if hasattr(client, "get_tick") else None
+    if not isinstance(tick, dict):
+        return stop, tp, ref, None  # no live quote (paper/offline): the signal price stands
+    live = float(tick["ask"] if order == "BUY" else tick["bid"])
+    sd = abs(float(ref) - float(stop))
+    shift = live - float(ref)
+    if sd > 0 and abs(shift) > STALE_DRIFT_R * sd:
+        return stop, tp, ref, (f"STALE_SIGNAL: {sym} moved {shift:+.5g} since the signal close "
+                               f"(> {STALE_DRIFT_R:.0%} of the {sd:.5g} stop distance)")
+    return float(stop) + shift, (float(tp) + shift if tp else 0.0), live, None
+
+
 def gated_forward_entry(orch, sym: str, order: str, lots: float, stop: float, tp: float,
                         ref: float, comment: str, style: str = "SWING", strategy: str = "") -> Optional[Dict[str, Any]]:
     """Send a forward-test entry through the SAME hard risk gates and execution path as the
@@ -58,6 +79,14 @@ def gated_forward_entry(orch, sym: str, order: str, lots: float, stop: float, tp
     from jarvis.observability import decision_journal as _dj
 
     client = orch.mt5_client
+    stop, tp, ref, stale = _reprice(client, sym, order, stop, tp, ref)
+    if stale:
+        if SETTINGS.forward_tests.gated:
+            trace = _dj.GateTrace(sym, style, order, origin=f"forward_test:{comment}")
+            trace.reject("STALE_SIGNAL", stale)
+            _dj.record_attempt(trace, status="BLOCKED", lots=lots)
+        logger.info("%s %s skipped: %s", comment, order, stale)
+        return {"status": "BLOCKED", "reason": stale}
     if not SETTINGS.forward_tests.gated:  # explicit opt-out only
         return client.send_market_order(sym, order, lots, sl_price=stop, tp_price=tp,
                                         comment=comment, reference_price=ref)
@@ -294,7 +323,7 @@ class _LeadBase:
             from jarvis.data import database
             database.TRADE_DB.log_trade(
                 ticket=res.get("ticket"), position_id=res.get("position_id"), symbol=sym, action=order,
-                entry=float(res.get("price") or ref), sl=stop, tp=tp, volume=lots, score=0.0,
+                entry=float(res.get("price") or ref), sl=float(res.get("sl") or stop), tp=float(res.get("tp") or tp), volume=lots, score=0.0,
                 regime="FORWARD_TEST", ev=None, origin="broker",
                 execution_mode=str(getattr(self.orch, "mode", "demo")).lower(),
                 account_login=getattr(acct, "login", None), server=getattr(acct, "server", None),
