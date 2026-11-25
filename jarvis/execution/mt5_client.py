@@ -885,6 +885,25 @@ class MT5Client:
             task_name=f"MT5_SendOrder_{symbol}",
         )
 
+    def get_tick(self, symbol: str) -> Optional[Dict[str, float]]:
+        """Fresh quote {bid, ask, age_s} for the pre-send verifier, or None (paper/offline/no tick).
+
+        ``age_s`` is measured on the broker clock (tick.time is server time), so it is
+        immune to the broker's UTC offset.
+        """
+        if self.is_paper_or_offline or not MT5_AVAILABLE or mt5 is None or not self.is_connected:
+            return None
+        try:
+            with self._lock:
+                tick = mt5.symbol_info_tick(self.resolve_symbol_name(symbol))
+            if not tick or not getattr(tick, "bid", 0) or not getattr(tick, "ask", 0):
+                return None
+            age = max(0.0, self.get_broker_time() - float(getattr(tick, "time", 0) or 0))
+            return {"bid": float(tick.bid), "ask": float(tick.ask), "age_s": age}
+        except Exception as e:
+            logger.debug("get_tick failed for %s: %s", symbol, e)
+            return None
+
     def get_broker_time(self) -> float:
         """Returns the current broker server time in seconds, or time.time() as fallback."""
         if self.mode != "paper" and MT5_AVAILABLE and self.is_connected and mt5 is not None:

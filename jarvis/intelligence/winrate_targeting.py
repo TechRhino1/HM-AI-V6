@@ -1267,7 +1267,14 @@ class WRProfileStore:
             "meta": meta or {},
             "profiles": {k: p.to_dict() for k, p in profiles.items()},
         }
-        self.path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        text = json.dumps(payload, indent=2, default=str)
+        if _is_live_profile_path(self.path):
+            from jarvis.learning.model_registry import governed_write
+            governed_write("winrate_profiles", str(self.path), text,
+                           reason=str((meta or {}).get("reason") or "calibration save"),
+                           author="calibration", approve=True, validation=dict(meta or {}))
+        else:
+            self.path.write_text(text, encoding="utf-8")
 
     def merge_realised(
         self,
@@ -1367,3 +1374,14 @@ __all__ = [
     "default_geometry_grid",
     "min_tp_r_for_target",
 ]
+
+
+def _is_live_profile_path(path: Any) -> bool:
+    """True only for the live config/winrate_profiles.json (governed); temp/test paths write plainly."""
+    import os
+    try:
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.normcase(os.path.abspath(str(path))) == os.path.normcase(
+            os.path.join(base, "config", "winrate_profiles.json"))
+    except Exception:
+        return False

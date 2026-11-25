@@ -47,6 +47,60 @@ logger = logging.getLogger("JARVIS_ForwardTest")
 ENABLED_MODES = ("demo",)  # fallback only; trading.forward_test_modes decides
 
 
+def gated_forward_entry(orch, sym: str, order: str, lots: float, stop: float, tp: float,
+                        ref: float, comment: str, style: str = "SWING", strategy: str = "") -> Optional[Dict[str, Any]]:
+    """Send a forward-test entry through the SAME hard risk gates and execution path as the
+    main engine (forward_tests.gated). Returns the broker/engine result; a refusal returns
+    {"status": "BLOCKED", "reason": ...}. Journaled with origin=forward_test:<comment>.
+    """
+    from datetime import datetime, timezone
+    from jarvis.config.settings import SETTINGS
+    from jarvis.observability import decision_journal as _dj
+
+    client = orch.mt5_client
+    if not SETTINGS.forward_tests.gated:  # explicit opt-out only
+        return client.send_market_order(sym, order, lots, sl_price=stop, tp_price=tp,
+                                        comment=comment, reference_price=ref)
+    trace = _dj.GateTrace(sym, style, order, origin=f"forward_test:{comment}")
+    acct = client.get_account_snapshot()
+    positions = list(client.get_open_positions() or [])
+    spec = client.get_symbol_trading_spec(sym) or {}
+    auth = orch.risk_engine.authorize_forward_test(sym, order, ref, stop, lots, acct, positions,
+                                                   symbol_info=spec, strategy=strategy, trace=trace)
+    if not auth.get("authorized"):
+        _dj.record_attempt(trace, status="BLOCKED", lots=lots)
+        logger.info("%s %s blocked by hard risk gates: %s", comment, order, auth.get("reasons"))
+        return {"status": "BLOCKED", "reason": "; ".join(auth.get("reasons") or [])}
+    if getattr(getattr(orch, "state_manager", None), "is_safe_mode", False):
+        trace.reject("SAFE_MODE", "safe mode active")
+        _dj.record_attempt(trace, status="BLOCKED", lots=lots)
+        return {"status": "BLOCKED", "reason": "Safe mode active"}
+    from types import SimpleNamespace
+    # Minimal order intent for the verifier; the forward test keeps its own geometry
+    # (tp=0 runners included), so the order is sent as-is, not via the main engine's TP rewrite.
+    decision = SimpleNamespace(
+        symbol=sym, bias=order, entry_price=float(ref), stop_loss=float(stop), take_profit=float(tp or 0.0),
+        trade_style=style, strategy=strategy, order_type="MARKET", execution_authorized=True,
+        timestamp=datetime.now(timezone.utc), origin=f"forward_test:{comment}",
+        dispatch_vetoes=[], gate_trace=trace, context=None)
+    blocked = orch.execution_engine._pre_send_verify(decision, lots, spec)
+    if blocked is not None:
+        _dj.record_attempt(trace, status="BLOCKED", lots=lots)
+        return blocked
+    res = client.send_market_order(sym, order, lots, sl_price=stop, tp_price=tp,
+                                   comment=comment, reference_price=ref)
+    if (res or {}).get("status") in _dj.SENT_STATUSES:
+        try:  # telemetry must never cost the caller its TRADE_DB log of a real fill
+            from jarvis.risk.trade_guard import note_sent
+            note_sent(sym, order, f"forward_test:{comment}")
+        except Exception as e:
+            logger.debug("note_sent failed for %s: %s", comment, e)
+    elif trace.blocked_by() is None:
+        trace.reject("BROKER", str((res or {}).get("reason") or (res or {}).get("status")))
+    _dj.record_attempt(trace, status=(res or {}).get("status"), ticket=(res or {}).get("ticket"), lots=lots)
+    return res
+
+
 def forward_test_enabled(orchestrator) -> bool:
     """Whether FT_ forward tests trade in the orchestrator's mode (trading.forward_test_modes)."""
     try:
@@ -232,8 +286,9 @@ class _LeadBase:
             logger.info("%s %s entry skipped: minimum lot exceeds the risk policy.", self.TAG, sym)
             return None
         order = "BUY" if side == 1 else "SELL"
-        res = client.send_market_order(sym, order, lots, sl_price=stop, tp_price=tp,
-                                       comment=comment or f"{self.TAG}_{sym}", reference_price=ref)
+        res = gated_forward_entry(self.orch, sym, order, lots, stop, tp, ref,
+                                  comment=comment or f"{self.TAG}_{sym}", style=self.STYLE,
+                                  strategy=self.STRATEGY)
         logger.info("%s %s %s %.2f lots @~%.5f stop %.5f tp %.5f: %s", self.TAG, sym, order, lots, ref, stop, tp, res)
         if res and res.get("status") in ("FILLED", "PARTIAL", "POSITION_CONFIRMED"):
             from jarvis.data import database

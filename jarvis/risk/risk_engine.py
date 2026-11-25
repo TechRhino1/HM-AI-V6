@@ -318,6 +318,95 @@ class RiskEngine:
         max_allowed_spread_pips: float = 35.0,
         **kwargs
     ) -> Dict[str, Any]:
+        """Master Authorization Pipeline (see ``_authorize_execution_impl``).
+
+        Records each refusal reason and the sizing multipliers on the decision's
+        GateTrace when one rides on it; decisions without a trace are unaffected.
+        """
+        t0 = time.perf_counter()
+        res = self._authorize_execution_impl(
+            decision, account, positions, symbol_info,
+            current_spread_pips=current_spread_pips,
+            max_allowed_spread_pips=max_allowed_spread_pips, **kwargs)
+        try:
+            from jarvis.observability.decision_journal import trace_of
+            trace = trace_of(decision)
+            if trace is not None:
+                ms = (time.perf_counter() - t0) * 1000.0
+                if res.get("authorized"):
+                    for name, mult in (res.get("size_factors") or {}).items():
+                        if mult is not None and float(mult) < 1.0:
+                            trace.add(f"SIZE_{name.upper()}", "SCALE", value=round(float(mult), 3))
+                else:
+                    for reason in res.get("reasons") or ["Risk constraints"]:
+                        trace.reject(gate_for_reason(str(reason)), str(reason), ms=ms)
+        except Exception:  # telemetry never reaches the trading path
+            pass
+        return res
+
+    def authorize_forward_test(self, symbol: str, side: str, entry: float, sl: float, lots: float,
+                               account: AccountSnapshot, positions: List[PositionSnapshot],
+                               symbol_info: Optional[Dict[str, Any]] = None,
+                               strategy: str = "", trace: Any = None) -> Dict[str, Any]:
+        """Hard risk gates for a forward-test entry (2026-11-25: they used to send unchecked).
+
+        Same components as ``authorize_execution`` -- circuit breaker, drawdown guard,
+        per-symbol cap (forward-test positions included), portfolio budget / margin with
+        THIS order's risk, portfolio heat, quarantine -- but not the deployment gate or
+        the sizing multipliers: forward tests are research experiments with their own sizing.
+        """
+        from jarvis.risk.exposure import HARD_MAX_TRADES_PER_SYMBOL
+        reasons: List[str] = []
+
+        def _gate(name: str, failed: List[str]) -> None:
+            if trace is not None:
+                if failed:
+                    for r in failed:
+                        trace.reject(name, r)
+                else:
+                    trace.add(name, "PASS")
+            reasons.extend(failed)
+
+        with self._lock:
+            cb = self.circuit_breaker.check_status()
+            _gate("CIRCUIT_BREAKER", [f"Circuit Breaker active: {cb.get('reason')}"] if cb.get("active") else [])
+            dd = self.drawdown_guard.check_limits(account.equity, account.balance)
+            _gate("DRAWDOWN_GUARD", [] if dd.get("passed") else list(dd.get("breaches") or ["drawdown limit"]))
+            canon = resolve_symbol(symbol).canonical
+            n_sym = sum(1 for p in positions if resolve_symbol(getattr(p, "symbol", "")).canonical == canon)
+            _gate("HARD_SYMBOL_LIMIT", [f"HARD_SYMBOL_LIMIT: {symbol} already has {n_sym} position(s) incl. forward tests "
+                                        f"(limit {HARD_MAX_TRADES_PER_SYMBOL})."] if n_sym >= HARD_MAX_TRADES_PER_SYMBOL else [])
+            incoming = abs(float(entry) - float(sl)) * float(lots) * get_dollar_risk_per_price_unit(symbol, symbol_info)
+            exp = self.exposure_manager.check_exposure(symbol=symbol, positions=positions, account=account,
+                                                       is_second_trade_approved=True, incoming_risk_usd=incoming)
+            _gate("PORTFOLIO_RISK_BUDGET", [b for b in exp.get("breaches", [])
+                                            if b.startswith(("Portfolio Risk Budget", "High Margin", "Max Notional"))])
+            open_risk = self.exposure_manager.calculate_portfolio_monetary_risk(positions, account) + self.get_total_reserved_risk_usd()
+            heat = self.portfolio_heat_engine.calculate_heat(account=account, positions=positions,
+                                                             open_monetary_risk_usd=open_risk)
+            _gate("PORTFOLIO_HEAT", [] if heat.allow_new_risk else
+                  [f"PORTFOLIO_HEAT_BLOCK: Portfolio Heat is {heat.score:.1f}/100 (EXTREME)."])
+            q: List[str] = []
+            if strategy:
+                try:
+                    from jarvis.execution.strategy_quarantine import is_quarantined, ledger_modes
+                    if any(is_quarantined(canon, strategy, execution_mode=m) for m in ledger_modes(self.mode)):
+                        q = [f"STRATEGY_QUARANTINE: {canon} {strategy}"]
+                except Exception:
+                    pass
+            _gate("STRATEGY_QUARANTINE", q)
+        return {"authorized": not reasons, "lots": float(lots) if not reasons else 0.0, "reasons": reasons}
+
+    def _authorize_execution_impl(
+        self,
+        decision: DecisionObject,
+        account: AccountSnapshot,
+        positions: List[PositionSnapshot],
+        symbol_info: Dict[str, Any],
+        current_spread_pips: float = 2.0,
+        max_allowed_spread_pips: float = 35.0,
+        **kwargs
+    ) -> Dict[str, Any]:
         """
         Master Authorization Pipeline.
         Evaluates Circuit Breaker, Drawdown, Exposure, Quality Guard, Heat, and Adaptive 2nd Trade conditions.
@@ -351,7 +440,7 @@ class RiskEngine:
             is_over_hard_limit = total_symbol_exposure >= HARD_MAX_TRADES_PER_SYMBOL
             if is_over_hard_limit:
                 rejection_reasons.append(
-                    f"SYMBOL_EXPOSURE_LIMIT: Symbol {symbol} already has {symbol_count} position(s) "
+                    f"HARD_SYMBOL_LIMIT: Symbol {symbol} already has {symbol_count} position(s) "
                     f"and {pending_count} pending order(s) (limit {HARD_MAX_TRADES_PER_SYMBOL})."
                 )
 
@@ -425,8 +514,7 @@ class RiskEngine:
                     rejection_reasons.append(f"PORTFOLIO_HEAT_BLOCK: Portfolio Heat is {heat_res.score:.1f}/100 (EXTREME). All new risk blocked.")
 
             # 4. Hard Same-Symbol & Portfolio Position Limits
-            if is_over_hard_limit:
-                rejection_reasons.append(f"HARD_SYMBOL_LIMIT: Symbol {symbol} already has {symbol_count} open positions (Max {HARD_MAX_TRADES_PER_SYMBOL}).")
+            # (Same condition already refused above as HARD_SYMBOL_LIMIT; not appended twice.)
 
             # 5. Adaptive Second-Trade 15-Point Validation
             is_second_trade_approved = False
@@ -624,11 +712,15 @@ class RiskEngine:
             try:
                 from jarvis.execution.strategy_quarantine import (
                     expectancy_risk_multiplier,
+                    ledger_modes,
                     SIZING_MIN_TRADES,
                 )
 
-                _learned_mult = float(
-                    expectancy_risk_multiplier(decision.symbol, getattr(decision, "strategy", "") or "")
+                # The account's own ledger, never looser than demo (min across ledgers).
+                _learned_mult = min(
+                    float(expectancy_risk_multiplier(decision.symbol, getattr(decision, "strategy", "") or "",
+                                                     execution_mode=_m))
+                    for _m in ledger_modes(getattr(self, "mode", "demo"))
                 )
                 if _learned_mult != 1.0:
                     base_risk = max(0.001, base_risk * _learned_mult)
@@ -760,6 +852,11 @@ class RiskEngine:
                 "heat_score": heat_res.score,
                 "heat_zone": heat_res.zone,
                 "recovery_mode": recovery_mode,
+                "size_factors": {
+                    "heat": heat_res.risk_multiplier, "drawdown": dd_risk_mult,
+                    "daily": _daily_for_size, "streak": streak_mult,
+                    "correlation": corr_scaling_factor, "governor": _gov_mult,
+                },
             }
 
     def _recovery_today(self) -> str:
@@ -944,3 +1041,27 @@ class RiskEngine:
         }
 
 
+# Reason text -> stable gate name for GateTrace / GATE_VERDICTS (bounded label set).
+_REASON_GATES = (
+    ("HOLDOUT_GATE", "HOLDOUT_GATE"), ("EXPECTANCY_GATE", "EXPECTANCY_GATE"),
+    ("NO_VALIDATED_PROFILE", "NO_VALIDATED_PROFILE"), ("CORRELATION_GATE", "CORRELATION_GATE"),
+    ("ADAPTIVE_GATE", "ADAPTIVE_SECOND_TRADE"), ("RECOVERY_CHANNEL", "RECOVERY_CHANNEL"),
+    ("Max Daily Loss", "DRAWDOWN_GUARD"), ("Max Weekly Loss", "DRAWDOWN_GUARD"),
+    ("Max Portfolio Drawdown", "DRAWDOWN_GUARD"), ("Circuit Breaker", "CIRCUIT_BREAKER"),
+    ("Portfolio Risk Budget", "PORTFOLIO_RISK_BUDGET"), ("Hard Max Exposure", "SYMBOL_EXPOSURE"),
+    ("Base Exposure", "SYMBOL_EXPOSURE"), ("SYMBOL_EXPOSURE", "SYMBOL_EXPOSURE"),
+    ("HARD_SYMBOL_LIMIT", "SYMBOL_EXPOSURE"), ("Max Concurrent", "MAX_CONCURRENT"),
+    ("Max Notional", "MARGIN_NOTIONAL"), ("High Margin", "MARGIN_NOTIONAL"),
+    ("PORTFOLIO_HEAT", "PORTFOLIO_HEAT"), ("Risk Ceiling", "RISK_CEILING"),
+    ("Sub-minimum Risk:Reward", "RR_FLOOR"), ("Spread", "SPREAD_GUARD"),
+    ("LOSS_COOLDOWN", "LOSS_COOLDOWN"), ("OFF_HOURS", "OFF_HOURS_QUALITY"),
+    ("ADVERSARIAL", "ADVERSARIAL_GATE"),
+)
+
+
+def gate_for_reason(reason: str) -> str:
+    """Stable gate name for a risk-engine refusal reason (unknown -> RISK_OTHER)."""
+    for needle, gate in _REASON_GATES:
+        if needle.lower() in reason.lower():
+            return gate
+    return "RISK_OTHER"

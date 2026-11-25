@@ -130,6 +130,54 @@ _executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="jarvis-scan")
 atexit.register(_executor.shutdown, wait=False)
 
 
+# Waiting reasons that are hard refusals, not "not yet" waits: the arbiter must not
+# promote a WAIT that carries one (scalp Cost Friction / quality floor), nor one
+# below the most lenient CONFIDENCE_GATE floor (0.45).
+_HARD_WAIT_MARKERS = ("current friction", "quality threshold")
+_CONFIDENCE_FLOOR = 0.45
+
+
+def _news_pre_min() -> int:
+    from jarvis.market.news import NEWS_BLACKOUT_PRE_MIN
+    return NEWS_BLACKOUT_PRE_MIN
+
+
+def _news_post_min() -> int:
+    from jarvis.market.news import NEWS_BLACKOUT_POST_MIN
+    return NEWS_BLACKOUT_POST_MIN
+
+
+def _promotion_hole(decision: Any, d_action: str) -> str:
+    """Reason a promoted WAIT must not dispatch, or '' when the promotion is clean."""
+    if d_action != "WAIT" or decision is None:
+        return ""
+    for w in getattr(decision, "waiting_reasons", None) or []:
+        if any(m in str(w).lower() for m in _HARD_WAIT_MARKERS):
+            return str(w)
+    conf = getattr(decision, "model_confidence", None)
+    if isinstance(conf, (int, float)) and conf < _CONFIDENCE_FLOOR:
+        return f"CONFIDENCE_GATE: {conf:.2f} < {_CONFIDENCE_FLOOR}"
+    return ""
+
+
+def _elite_bypass_allowed(symbol: str, entry_dec: Any) -> bool:
+    """The ai>=80 'elite' override of a calibrated-entry refusal (gates.elite_bypass_enabled).
+
+    Off by default until validated. Even when on it never overrides a regime the
+    learned policy disabled, and only for a symbol the deployment gate accepts.
+    """
+    try:
+        from jarvis.config.settings import SETTINGS
+        if not SETTINGS.gates.elite_bypass_enabled:
+            return False
+        if entry_dec is not None and "learned policy" in str(getattr(entry_dec, "reason", "")):
+            return False
+        from jarvis.backtesting.exit_geometry import deployment_refusal
+        return deployment_refusal(symbol) is None
+    except Exception:
+        return False
+
+
 class JarvisOrchestrator:
     def __init__(
         self,
@@ -268,6 +316,7 @@ class JarvisOrchestrator:
         self.regime_classifier = MarketRegimeClassifier()
         self.analyst_cluster = ParallelAnalystCluster()
         self.decision_engine = DecisionEngine(ml_predictor=self.ml_predictor, strategy_bandit=self.strategy_bandit)
+        self.decision_engine.execution_mode = self.mode
         self.opportunity_arbiter = UniversalOpportunityArbiter(
             ml_predictor=self.ml_predictor,
             bandit=self.strategy_bandit,
@@ -292,6 +341,8 @@ class JarvisOrchestrator:
         self._main_thread: Optional[threading.Thread] = None
         self._watchdog_thread: Optional[threading.Thread] = None
         self._last_heartbeat: float = time.time()
+        self._started_at: float = self._last_heartbeat
+        self.monitor_state: Dict[str, Any] = {}
 
     def apply_execution_mode(self, new_mode: str) -> Dict[str, Any]:
         """Switch execution mode AND rebuild all mode-scoped risk state.
@@ -330,6 +381,8 @@ class JarvisOrchestrator:
         previous = self.mode
         self.mode = target
         self.mt5_client.mode = target
+        if getattr(self, "decision_engine", None) is not None:
+            self.decision_engine.execution_mode = target
         self.risk_engine = RiskEngine(mode=target)
         self.circuit_breaker = self.risk_engine.circuit_breaker
         self.drawdown_guard = self.risk_engine.drawdown_guard
@@ -346,72 +399,9 @@ class JarvisOrchestrator:
         }
 
     def _is_news_blackout(self, symbol: str, now: datetime) -> bool:
-        """Institutional Mandate 4: Reject new entries inside major high-impact news windows.
-
-        Only events with an EXACT published time may block an entry. A TBA row
-        has no time at all, and an estimated row is a relative guess from a
-        feed; closing entries for a window that may not exist is a false halt,
-        which is both a lost opportunity and an unpredictable one.
-        """
-        try:
-            from jarvis.market.news import GLOBAL_NEWS_ENGINE
-            from jarvis.data.symbol_registry import resolve as _res
-
-            from jarvis.market.news import (USD_AFFECTED, us_release_slot_active,
-                                            NEWS_BLACKOUT_PRE_MIN, NEWS_BLACKOUT_POST_MIN)
-
-            canon = _res(symbol).canonical.upper()
-            calendar = GLOBAL_NEWS_ENGINE.get_news_calendar(max_wait=0.2) or []
-
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=timezone.utc)
-
-            # Fail CLOSED when the feed gives no exact-time live rows (cold start, outage, or
-            # only estimated rows): an empty/fallback calendar used to authorise entries into NFP.
-            healthy = any(e.get("source") == "live_feed" and not e.get("is_fallback", False)
-                          and str(e.get("time_quality") or "") == "exact" for e in calendar)
-            if not healthy:
-                if canon in USD_AFFECTED and us_release_slot_active(now):
-                    logger.warning("NEWS_FEED_DOWN: no exact-time calendar; blocking %s around a "
-                                   "scheduled US release", symbol)
-                    return True
-                return False
-
-            for e in calendar:
-                if str(e.get("impact", "")).upper() != "HIGH":
-                    continue
-                if e.get("is_fallback", False) or str(e.get("source", "")) != "live_feed":
-                    continue
-                if str(e.get("time_quality") or "") != "exact":
-                    continue
-                pairs = {str(p).upper() for p in (e.get("affected_pairs") or [])}
-                if canon not in pairs:
-                    continue
-                raw = e.get("timestamp_iso")
-                if not raw:
-                    continue
-                try:
-                    event_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-                except (TypeError, ValueError):
-                    continue
-                if event_dt.tzinfo is None:
-                    event_dt = event_dt.replace(tzinfo=timezone.utc)
-                start = event_dt - timedelta(minutes=NEWS_BLACKOUT_PRE_MIN)
-                end = event_dt + timedelta(minutes=NEWS_BLACKOUT_POST_MIN)
-                if start <= now <= end:
-                    return True
-            return False
-        except Exception as exc:
-            # Fail CLOSED. The old body swallowed a NameError for months, so
-            # every gate call returned False while looking like it had checked
-            # the calendar. A broken calendar feed must not silently authorise
-            # entries into an unverified news window; an empty (but healthy)
-            # calendar is still treated as "no event", which is a legitimate
-            # state and does not halt trading.
-            logger.error("News blackout check failed for %s (%s: %s); "
-                         "failing CLOSED for this entry.",
-                         symbol, type(exc).__name__, exc)
-            return True
+        """Entry news blackout; see ``jarvis.market.news.is_entry_blackout`` (fails closed)."""
+        from jarvis.market.news import is_entry_blackout
+        return is_entry_blackout(symbol, now)
 
     def _get_same_symbol_cooldown(self, style: str = "SWING") -> float:
         st = str(style or "SWING").upper()
@@ -700,6 +690,12 @@ class JarvisOrchestrator:
                     for order in cancelled or []:
                         self._discard_pending_intent(order.get("ticket"))
 
+                # 4b. System monitor (loop stall, no-trade, rejection spike, analyst
+                # fallbacks, verifier health, forward-test exposure), every 60 s.
+                if now - float(getattr(self, "_last_monitor_at", 0.0)) >= 60.0:
+                    self._last_monitor_at = now
+                    self._run_system_monitor(now)
+
                 # 5. Autonomous LLM Governor Dynamic Telemetry Refresh
                 if int(now) % 180 < 10:
                     try:
@@ -711,6 +707,33 @@ class JarvisOrchestrator:
                 logger.error(f"Watchdog supervisor error: {e}", exc_info=True)
 
             time.sleep(10.0)
+
+    def _run_system_monitor(self, now: float) -> None:
+        """Evaluate the monitor checks into ``self.monitor_state`` (served by /api/monitor)."""
+        try:
+            from jarvis.config.settings import SETTINGS
+            from jarvis.observability import decision_journal as _dj, system_monitor as _sm
+            from jarvis.observability.instruments import ANALYST_FALLBACKS, DECISION_EVALUATIONS
+            from jarvis.risk.trade_guard import VERIFICATIONS
+            rows = list(_dj.RECENT)
+            acct = getattr(self.state_manager, "account", None)
+            last_exec = max(self._last_execution_time.values(), default=0.0)
+            self.monitor_state = _sm.run_checks(
+                now=now, heartbeat=self._last_heartbeat, rows=rows,
+                last_send=_sm.latest_send_ts(rows, fallback=last_exec or getattr(self, "_started_at", now)),
+                verifications=list(VERIFICATIONS),
+                positions=list(getattr(self.state_manager, "positions", None) or []),
+                equity=float(getattr(acct, "equity", 0.0) or 0.0),
+                max_portfolio_risk_pct=float(SETTINGS.risk.max_portfolio_risk_pct),
+                fallbacks=_sm.counter_total(ANALYST_FALLBACKS),
+                evaluations=_sm.counter_total(DECISION_EVALUATIONS),
+                cfg=SETTINGS.monitor)
+            # Advisory AI review of the same evidence (async, recommendations only).
+            from collections import Counter as _C
+            gate_stats = dict(_C(r.get("blocked_by") for r in rows if r.get("blocked_by")).most_common(15))
+            self.llm_controller.review_operations(self.monitor_state, gate_stats)
+        except Exception as e:
+            logger.debug(f"System monitor pass failed: {e}")
 
     def stop(self):
         """Clean shutdown of all engine workers."""
@@ -2137,6 +2160,7 @@ class JarvisOrchestrator:
                 and gate_passed
                 and decision.expected_value >= 0.40
                 and len(entry_dec.protection_failures) == 0
+                and _elite_bypass_allowed(symbol, entry_dec)
             )
             is_auth = bool(entry_dec.allowed) or is_elite_setup
             entry_override = is_auth
@@ -2321,7 +2345,7 @@ class JarvisOrchestrator:
         elif wants_entry and self._is_news_blackout(symbol, datetime.now(timezone.utc)):
             decision.decision = "WAIT"
             decision.execution_authorized = False
-            auth_res = {"authorized": False, "reason": "NEWS_BLACKOUT: High-impact macro news release active or within 10m pre / 15m post window."}
+            auth_res = {"authorized": False, "reason": f"NEWS_BLACKOUT: High-impact macro news release active or within {_news_pre_min()}m pre / {_news_post_min()}m post window."}
         elif _premium_cap_refused:
             decision.decision = "WAIT"
             decision.execution_authorized = False
@@ -2688,9 +2712,15 @@ class JarvisOrchestrator:
 
         # Autonomous Multi-Style Execution Dispatch over actionable ranked candidates
         if dispatch_candidates and not dry_run:
+            from jarvis.observability import decision_journal as _dj
             for candidate in dispatch_candidates:
                 d_action = getattr(candidate.decision_obj, "decision", "") if candidate.decision_obj else ""
                 failing_cnt = _unsoftened_failure_count(candidate.decision_obj)
+                # One GateTrace per attempt; risk_engine / execution_engine append to it.
+                _trace = _dj.GateTrace(str(candidate.symbol), str(candidate.trade_style or ""),
+                                       str(getattr(candidate, "bias", "") or ""))
+                if candidate.decision_obj is not None:
+                    candidate.decision_obj.gate_trace = _trace
 
                 is_exec_ready = _is_exec_ready(candidate, d_action, failing_cnt)
                 if not is_exec_ready and self._calibrated_route_allows(candidate):
@@ -2699,6 +2729,7 @@ class JarvisOrchestrator:
                     # below (vetoes, slots, cooldown, RiskEngine, news) still applies.
                     is_exec_ready = True
                     candidate.decision_obj.order_type = "MARKET"
+                    _trace.add("CALIBRATED_ROUTE", "PASS", f"legacy said {d_action}")
                     logger.info(f"CALIBRATED_ROUTE: {candidate.symbol} {candidate.trade_style} "
                                 f"{candidate.bias} allowed by the calibrated policy (legacy said {d_action}).")
 
@@ -2709,7 +2740,20 @@ class JarvisOrchestrator:
                             f"action={d_action}, actionable={candidate.is_actionable}, grade={candidate.setup_grade}, "
                             f"failing_cnt={failing_cnt}, ev={candidate.expected_value:.2f}R, rr={candidate.risk_reward_ratio:.2f}"
                         )
+                    _trace.reject("EXEC_READY", f"action={d_action} failing={failing_cnt} grade={candidate.setup_grade}",
+                                  value=failing_cnt)
+                    _dj.record_attempt(_trace)
                     continue
+                _trace.add("EXEC_READY", "PASS")
+                _hole = _promotion_hole(candidate.decision_obj, d_action)
+                if _hole:
+                    from jarvis.config.settings import SETTINGS as _S
+                    if _S.gates.promotion_hole_mode == "enforce":
+                        _trace.reject("PROMOTION_HOLE", _hole)
+                        _dj.record_attempt(_trace)
+                        continue
+                    if _S.gates.promotion_hole_mode == "shadow":
+                        _trace.add("PROMOTION_HOLE", "SHADOW_REJECT", _hole)
 
                 decision = candidate.decision_obj
                 sym = candidate.symbol
@@ -2719,10 +2763,9 @@ class JarvisOrchestrator:
                 _vetoes = getattr(decision, "dispatch_vetoes", None)
                 if _vetoes is None or _vetoes:
                     # None = the scan never computed the vetoes (early return / error): fail closed.
-                    from jarvis.observability import decision_journal as _dj
-                    _dj.record_dispatch({"symbol": sym, "style": candidate.trade_style,
-                                         "bias": candidate.bias, "status": "VETOED",
-                                         "vetoes": _vetoes if _vetoes is not None else ["UNKNOWN"]})
+                    _veto_list = _vetoes if _vetoes is not None else ["UNKNOWN"]
+                    _trace.reject("DISPATCH_VETOES", "; ".join(str(v) for v in _veto_list))
+                    _dj.record_attempt(_trace, status="VETOED", vetoes=_veto_list)
                     logger.info(
                         f"Arbiter selection {sym} ({candidate.trade_style}) vetoed at dispatch: "
                         f"{_vetoes if _vetoes else 'veto state unknown'}"
@@ -2750,7 +2793,10 @@ class JarvisOrchestrator:
 
                 if already_fired:
                     logger.debug(f"Arbiter candidate {canonical_sym} ({candidate.trade_style}) skipped: order already executing or cooldown active.")
+                    _trace.reject("DEDUP_COOLDOWN", "order already executing or same-symbol cooldown active")
+                    _dj.record_attempt(_trace)
                     continue
+                _trace.add("DISPATCH_VETOES", "PASS").add("DEDUP_COOLDOWN", "PASS")
 
                 account = self.state_manager.account or self.mt5_client.get_account_snapshot()
                 positions = self.state_manager.positions
@@ -2800,10 +2846,16 @@ class JarvisOrchestrator:
                                 f"RR={_judged_rr:.2f} < 2.00 — all-or-nothing book; "
                                 f"sub-2R uncompoundable. Skipping."
                             )
+                            _trace.reject("UNSPLIT_RR_GATE", "all-or-nothing min-lot book needs RR>=2",
+                                          value=round(float(_judged_rr), 2), threshold=2.0)
+                            _dj.record_attempt(_trace)
                             continue
                 except Exception as _unsplit_exc:
                     logger.warning(f"UNSPLIT_RR_GATE check failed for {sym}: {_unsplit_exc}; skipping (fail closed).")
+                    _trace.reject("UNSPLIT_RR_GATE", f"check failed (fail closed): {_unsplit_exc}")
+                    _dj.record_attempt(_trace)
                     continue
+                _trace.add("UNSPLIT_RR_GATE", "PASS")
 
                 cur_spread = ctx.volatility.current_spread_pips if ctx and hasattr(ctx, "volatility") else _spec.typical_spread_pips
 
@@ -2828,10 +2880,13 @@ class JarvisOrchestrator:
                     and getattr(decision.quality_gate, "passed", False)
                     and getattr(decision, "expected_value", 0.0) >= 0.40
                     and (not _arb_entry or len(_arb_entry.protection_failures) == 0)
+                    and _elite_bypass_allowed(canonical_sym, _arb_entry)
                 )
                 _arb_entry_override = (
                     None if _arb_entry is None else (bool(_arb_entry.allowed) or _is_elite)
                 )
+                if _arb_entry is not None and not _arb_entry.allowed and _is_elite:
+                    _trace.add("ELITE_BYPASS", "SKIP", "elite setup overrode the calibrated entry refusal")
 
                 with self._execution_lock:
                     already_executing = canonical_sym in self._execution_in_progress
@@ -2859,15 +2914,20 @@ class JarvisOrchestrator:
                     )
                     if (sim_sym_count + len(active_sym_pending)) >= 2:
                         return False
-                    pre_auth = self.risk_engine.authorize_execution(
-                        decision, account, sim_positions, sym_info,
-                        current_spread_pips=cur_spread,
-                        max_allowed_spread_pips=_spec.max_spread_pips,
-                        context=ctx,
-                        is_second_trade=(sim_sym_count == 1),
-                        pending_orders=all_pending_orders,
-                        entry_authorized_override=_arb_entry_override,
-                    )
+                    # A hypothetical post-flip check: keep it out of the real attempt's trace.
+                    decision.gate_trace = None
+                    try:
+                        pre_auth = self.risk_engine.authorize_execution(
+                            decision, account, sim_positions, sym_info,
+                            current_spread_pips=cur_spread,
+                            max_allowed_spread_pips=_spec.max_spread_pips,
+                            context=ctx,
+                            is_second_trade=(sim_sym_count == 1),
+                            pending_orders=all_pending_orders,
+                            entry_authorized_override=_arb_entry_override,
+                        )
+                    finally:
+                        decision.gate_trace = _trace
                     return bool(pre_auth.get("authorized"))
 
                 # Stop-and-Reverse (SAR) Protocol: If opposing position exists on this symbol, check if eligible to flip
@@ -2885,16 +2945,26 @@ class JarvisOrchestrator:
 
                 if already_executing:
                     logger.info(f"Arbiter skipping {canonical_sym}: execution already in progress.")
+                    _trace.reject("IN_PROCESS_LOCK", "execution already in progress")
+                    _dj.record_attempt(_trace)
                     continue
                 if (len(active_sym_positions) + len(active_sym_pending)) >= 2:
                     logger.info(f"Arbiter skipping {canonical_sym}: max symbol limit reached ({len(active_sym_positions)} pos, {len(active_sym_pending)} pending).")
+                    _trace.reject("HARD_SYMBOL_LIMIT", f"{len(active_sym_positions)} pos + {len(active_sym_pending)} pending",
+                                  value=len(active_sym_positions) + len(active_sym_pending), threshold=2)
+                    _dj.record_attempt(_trace)
                     continue
                 if len(active_sym_pending) >= 1:
                     logger.info(f"Arbiter skipping {canonical_sym}: pending order already resting.")
+                    _trace.reject("PENDING_ORDER_EXISTS", "pending order already resting")
+                    _dj.record_attempt(_trace)
                     continue
                 if cooldown_active and (len(active_sym_positions) + len(active_sym_pending)) == 0:
                     logger.info(f"Arbiter skipping {canonical_sym}: cooldown active.")
+                    _trace.reject("COOLDOWN_GUARD", "same-symbol cooldown active")
+                    _dj.record_attempt(_trace)
                     continue
+                _trace.add("SLOT_LIMITS", "PASS")
 
                 auth_res = self.risk_engine.authorize_execution(
                     decision, account, positions, sym_info,
@@ -2907,9 +2977,13 @@ class JarvisOrchestrator:
                 )
 
                 if auth_res.get("authorized"):
+                    _trace.add("RISK_ENGINE", "PASS", value=auth_res.get("lots"))
                     if self._is_news_blackout(candidate.symbol, datetime.now(timezone.utc)):
                         logger.info(f"📰 Arbiter selection {candidate.symbol} blocked by NEWS_BLACKOUT pre-trade gate.")
+                        _trace.reject("NEWS_BLACKOUT", "high-impact news window")
+                        _dj.record_attempt(_trace)
                         continue
+                    _trace.add("NEWS_BLACKOUT", "PASS")
                     decision.execution_authorized = True
                     lots = auth_res.get("lots", 0.01)
                     if account:
@@ -2938,9 +3012,9 @@ class JarvisOrchestrator:
                             )
                         logger.info(f"🚀 Autonomous Multi-Style Execution dispatched for {candidate.symbol} ({candidate.trade_style})")
                         exec_res = self.execution_engine.execute_decision(decision, lots)
-                        from jarvis.observability import decision_journal as _dj
-                        _dj.record_dispatch({
-                            "symbol": sym, "style": candidate.trade_style, "bias": candidate.bias,
+                        if (exec_res or {}).get("status") not in _dj.SENT_STATUSES and _trace.blocked_by() is None:
+                            _trace.reject("EXECUTION_ENGINE", str((exec_res or {}).get("reason") or (exec_res or {}).get("status")))
+                        _dj.record_attempt(_trace, **{
                             "status": (exec_res or {}).get("status"), "ticket": (exec_res or {}).get("ticket"),
                             "lots": lots, "grade": candidate.setup_grade, "ev": candidate.expected_value,
                             "rr": candidate.risk_reward_ratio, "promoted_from_wait": d_action == "WAIT",
@@ -2976,6 +3050,12 @@ class JarvisOrchestrator:
                     self._mark_risk_refusal(decision, auth_res)
                     reasons_disp = auth_res.get('reasons') or auth_res.get('reason') or 'Risk constraints'
                     logger.info(f"Arbiter selection {canonical_sym} ({candidate.trade_style}) withheld by risk engine: {reasons_disp}. Evaluating next ranked candidate...")
+                    if _trace.blocked_by() is None:
+                        _trace.reject("RISK_ENGINE", "; ".join(map(str, reasons_disp)) if isinstance(reasons_disp, list) else str(reasons_disp))
+                    _dj.record_attempt(_trace)
+
+        # Liveness: the watchdog's loop-stall check reads this (it was set once at boot).
+        self._last_heartbeat = time.time()
 
         # 3. Convert ranked opportunities to radar items for state manager and dashboard
         radar_results = [cand.to_radar_item() for cand in ranked_candidates]

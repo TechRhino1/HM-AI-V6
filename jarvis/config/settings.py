@@ -3,7 +3,7 @@ import os
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, Dict, List
 
 logger = logging.getLogger("JARVIS_Config")
 
@@ -133,12 +133,118 @@ class MLSettings:
     sgd_l2_regularization: float = 0.01
     brier_score_drift_threshold: float = 0.28
 
+# The one settings file whose writes are governed (computed at import, before anything can patch os.path).
+_LIVE_SETTINGS_PATH = os.path.normcase(os.path.abspath(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", "settings.json")))
+
+GATE_MODES = ("off", "shadow", "enforce")
+
+
+@dataclass
+class GateSettings:
+    """Rollout switches for the 2026-11-25 gate fixes (off | shadow | enforce).
+    shadow records SHADOW_REJECT on the GateTrace without blocking."""
+    rr_floor_mode: str = "shadow"
+    promotion_hole_mode: str = "shadow"
+    # Elite bypass of the calibrated entry policy (ai>=80): kept, but off until validated.
+    elite_bypass_enabled: bool = False
+
+
+@dataclass
+class VerifierSettings:
+    """Pre-send verification (TradeGuard.verify_pre_send). Fails closed on error/timeout."""
+    mode: str = "shadow"
+    budget_ms: float = 250.0
+    max_signal_age_s: float = 900.0
+    max_drift_atr: float = 0.5
+    min_sl_atr: float = 0.15
+    # Order-of-magnitude guard, not a band: structural H4/D1 stops measured 8-22x the
+    # primary-timeframe ATR on validated trades (2026-11-25 backtest), so 8 blocked 25%.
+    max_sl_atr: float = 30.0
+    sizing_tolerance: float = 0.10
+    conflict_window_s: float = 600.0
+    max_tick_age_s: float = 120.0
+
+
+@dataclass
+class MonitorSettings:
+    loop_stall_s: float = 180.0
+    no_trade_hours: float = 8.0
+    reject_spike_factor: float = 3.0
+    fallback_rate_warn: float = 0.25
+    verifier_fail_rate_warn: float = 0.05
+    forward_test_exposure_warn_pct: float = 50.0
+
+
+@dataclass
+class ForwardTestSettings:
+    # Forward tests pass the shared hard risk gates and count toward symbol caps.
+    gated: bool = True
+    count_toward_symbol_caps: bool = True
+
+
+@dataclass
+class GovernanceSettings:
+    # A governed config write moving a risk parameter more than this needs --approve.
+    max_auto_delta_pct: float = 20.0
+
+
+# (section, attr) -> (min, max) bounds. Out-of-bounds values keep the default.
+_BOUNDS = {
+    ("verifier", "budget_ms"): (20.0, 2000.0),
+    ("verifier", "max_signal_age_s"): (30.0, 7200.0),
+    ("verifier", "max_drift_atr"): (0.05, 3.0),
+    ("verifier", "min_sl_atr"): (0.0, 2.0),
+    ("verifier", "max_sl_atr"): (1.0, 60.0),
+    ("verifier", "sizing_tolerance"): (0.0, 0.5),
+    ("verifier", "conflict_window_s"): (0.0, 86400.0),
+    ("verifier", "max_tick_age_s"): (5.0, 3600.0),
+    ("monitor", "loop_stall_s"): (30.0, 3600.0),
+    ("monitor", "no_trade_hours"): (1.0, 168.0),
+    ("monitor", "reject_spike_factor"): (1.5, 20.0),
+    ("monitor", "fallback_rate_warn"): (0.01, 1.0),
+    ("monitor", "verifier_fail_rate_warn"): (0.001, 1.0),
+    ("monitor", "forward_test_exposure_warn_pct"): (5.0, 100.0),
+    ("governance", "max_auto_delta_pct"): (0.0, 100.0),
+}
+
+
+def _load_section(obj: Any, section: str, data: Dict[str, Any]) -> None:
+    """Typed, bounded load of one dataclass section; bad values keep the default."""
+    for key, raw in (data or {}).items():
+        if not hasattr(obj, key) or raw is None:
+            continue
+        default = getattr(obj, key)
+        try:
+            if isinstance(default, bool):
+                val: Any = raw if isinstance(raw, bool) else str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(default, (int, float)):
+                val = type(default)(raw)
+                lo, hi = _BOUNDS.get((section, key), (float("-inf"), float("inf")))
+                if not lo <= float(val) <= hi:
+                    logger.warning(f"Ignoring out-of-bounds {section}.{key}={raw!r} (allowed {lo}..{hi})")
+                    continue
+            else:
+                val = str(raw).strip().lower()
+                if key.endswith("mode") and val not in GATE_MODES:
+                    logger.warning(f"Ignoring invalid {section}.{key}={raw!r} (allowed {GATE_MODES})")
+                    continue
+            setattr(obj, key, val)
+        except (TypeError, ValueError) as exc:
+            logger.warning(f"Ignoring invalid {section}.{key}={raw!r}: {exc}")
+
+
 @dataclass
 class JarvisConfig:
     risk: RiskSettings = field(default_factory=RiskSettings)
     trading: TradingSettings = field(default_factory=TradingSettings)
     server: ServerSettings = field(default_factory=ServerSettings)
     ml: MLSettings = field(default_factory=MLSettings)
+    gates: GateSettings = field(default_factory=GateSettings)
+    verifier: VerifierSettings = field(default_factory=VerifierSettings)
+    monitor: MonitorSettings = field(default_factory=MonitorSettings)
+    forward_tests: ForwardTestSettings = field(default_factory=ForwardTestSettings)
+    governance: GovernanceSettings = field(default_factory=GovernanceSettings)
 
     @classmethod
     def load(cls) -> "JarvisConfig":
@@ -240,6 +346,12 @@ class JarvisConfig:
                             setattr(cfg.trading, _qk, _qcast(t_data[_qk]))
                         except (TypeError, ValueError) as exc:
                             logger.warning(f"Ignoring invalid {_qk}={t_data[_qk]!r}: {exc}")
+                for _section in ("gates", "verifier", "monitor", "forward_tests", "governance"):
+                    _sec = data.get(_section, {})
+                    if isinstance(_sec, dict):
+                        _load_section(getattr(cfg, _section), _section, _sec)
+                    else:
+                        logger.warning(f"Ignoring config section {_section!r}: expected an object")
                 m_data = data.get("ml", {})
                 ml_keys = (
                     ("sgd_learning_rate", "sgd_learning_rate", float),
@@ -313,10 +425,17 @@ def _persist_trading(key: str, value: object) -> bool:
             data["trading"] = {}
         data["trading"][key] = value
 
-        temp_path = json_path + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, json_path)
+        # Versioned + audited + rollback-able (model_registry "settings"); an
+        # operator/dashboard action is the approval, parameter bounds still apply.
+        if os.path.normcase(os.path.abspath(json_path)) == _LIVE_SETTINGS_PATH:
+            from jarvis.learning.model_registry import governed_write
+            governed_write("settings", json_path, json.dumps(data, indent=2),
+                           reason=f"persist trading.{key}", author="dashboard", approve=True)
+        else:  # a non-live path (tests/tools): plain atomic write, nothing registered
+            temp_path = json_path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, json_path)
         logger.info(f"💾 SETTINGS: Persisted trading.{key} to {json_path}")
         return True
     except Exception as e:

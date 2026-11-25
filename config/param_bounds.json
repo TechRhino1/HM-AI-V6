@@ -1,0 +1,37 @@
+{
+  "_doc": "Allowed [min, max] for governed config keys (model_registry.check_param_bounds). A change of more than governance.max_auto_delta_pct on any of these needs approval.",
+  "settings": {
+    "risk.max_risk_per_trade_pct": [
+      0.05,
+      2.0
+    ],
+    "risk.min_lot_max_risk_pct": [
+      0.1,
+      5.0
+    ],
+    "risk.max_portfolio_risk_pct": [
+      0.5,
+      10.0
+    ],
+    "risk.max_daily_loss_pct": [
+      0.5,
+      10.0
+    ],
+    "risk.max_weekly_loss_pct": [
+      1.0,
+      20.0
+    ],
+    "risk.max_drawdown_pct": [
+      2.0,
+      40.0
+    ],
+    "risk.max_open_positions": [
+      1,
+      10
+    ],
+    "trading.quarantine_expectancy_r": [
+      -1.0,
+      0.0
+    ]
+  }
+}

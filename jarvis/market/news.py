@@ -3610,3 +3610,70 @@ class LiveNewsEngine:
 
 GLOBAL_NEWS_ENGINE = LiveNewsEngine()
 
+
+# Single implementation of the entry news blackout; the orchestrator, the
+# pre-send verifier and forward tests all call this (moved from the orchestrator).
+def is_entry_blackout(symbol: str, now: datetime) -> bool:
+    """Institutional Mandate 4: Reject new entries inside major high-impact news windows.
+
+    Only events with an EXACT published time may block an entry. A TBA row
+    has no time at all, and an estimated row is a relative guess from a
+    feed; closing entries for a window that may not exist is a false halt,
+    which is both a lost opportunity and an unpredictable one.
+    """
+    try:
+        from jarvis.data.symbol_registry import resolve as _res
+
+
+        canon = _res(symbol).canonical.upper()
+        calendar = GLOBAL_NEWS_ENGINE.get_news_calendar(max_wait=0.2) or []
+
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        # Fail CLOSED when the feed gives no exact-time live rows (cold start, outage, or
+        # only estimated rows): an empty/fallback calendar used to authorise entries into NFP.
+        healthy = any(e.get("source") == "live_feed" and not e.get("is_fallback", False)
+                      and str(e.get("time_quality") or "") == "exact" for e in calendar)
+        if not healthy:
+            if canon in USD_AFFECTED and us_release_slot_active(now):
+                logger.warning("NEWS_FEED_DOWN: no exact-time calendar; blocking %s around a "
+                               "scheduled US release", symbol)
+                return True
+            return False
+
+        for e in calendar:
+            if str(e.get("impact", "")).upper() != "HIGH":
+                continue
+            if e.get("is_fallback", False) or str(e.get("source", "")) != "live_feed":
+                continue
+            if str(e.get("time_quality") or "") != "exact":
+                continue
+            pairs = {str(p).upper() for p in (e.get("affected_pairs") or [])}
+            if canon not in pairs:
+                continue
+            raw = e.get("timestamp_iso")
+            if not raw:
+                continue
+            try:
+                event_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            start = event_dt - timedelta(minutes=NEWS_BLACKOUT_PRE_MIN)
+            end = event_dt + timedelta(minutes=NEWS_BLACKOUT_POST_MIN)
+            if start <= now <= end:
+                return True
+        return False
+    except Exception as exc:
+        # Fail CLOSED. The old body swallowed a NameError for months, so
+        # every gate call returned False while looking like it had checked
+        # the calendar. A broken calendar feed must not silently authorise
+        # entries into an unverified news window; an empty (but healthy)
+        # calendar is still treated as "no event", which is a legitimate
+        # state and does not halt trading.
+        logger.error("News blackout check failed for %s (%s: %s); "
+                     "failing CLOSED for this entry.",
+                     symbol, type(exc).__name__, exc)
+        return True

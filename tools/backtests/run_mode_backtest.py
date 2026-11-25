@@ -184,6 +184,7 @@ def run_one(args: Dict[str, Any]) -> Dict[str, Any]:
             "elapsed_sec": round(elapsed, 1),
             "n_trades": len(trades),
             "rejection_stats": res.get("rejection_stats", {}),
+            "verifier_would_block": res.get("verifier_would_block", {}),
             "metrics": metrics,
             "trades": trades,
         }

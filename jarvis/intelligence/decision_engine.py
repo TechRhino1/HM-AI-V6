@@ -186,6 +186,8 @@ class DecisionEngine:
             self._quarantine_offline = bool(_is_offline())
         except Exception:
             self._quarantine_offline = False
+        # Set by the orchestrator to its mode; quarantine reads that ledger (plus demo).
+        self.execution_mode = "demo"
         self._quarantine_stats: dict = {}
         self._quarantine_loaded_at: float = 0.0
         if not self._quarantine_offline:
@@ -233,12 +235,16 @@ class DecisionEngine:
         if self._quarantine_offline:
             return False
         try:
-            from jarvis.execution.strategy_quarantine import is_quarantined
-            return is_quarantined(
-                str(symbol or "").upper().strip(),
-                str(strategy).upper().strip(),
-                min_trades=self._QUARANTINE_MIN_TRADES,
-                min_expectancy_r=self._QUARANTINE_MIN_EXPECTANCY_R
+            from jarvis.execution.strategy_quarantine import is_quarantined, ledger_modes
+            return any(
+                is_quarantined(
+                    str(symbol or "").upper().strip(),
+                    str(strategy).upper().strip(),
+                    min_trades=self._QUARANTINE_MIN_TRADES,
+                    min_expectancy_r=self._QUARANTINE_MIN_EXPECTANCY_R,
+                    execution_mode=m,
+                )
+                for m in ledger_modes(getattr(self, "execution_mode", "demo"))
             )
         except Exception:
             return False
