@@ -101,3 +101,29 @@ def test_forward_test_positions_do_not_use_symbol_slots():
     main = [pos(1, ""), pos(2, "")]
     assert any("Hard Max Exposure" in b for b in exp.check_exposure("EURUSD", main, acct)["breaches"])
     assert is_forward_test({"comment": "FT_X"}) and not is_forward_test({"comment": "JARVIS"})
+
+
+def _acct(eq):
+    return AccountSnapshot(login=1, server="demo", balance=eq, equity=eq, margin=5.0,
+                           free_margin=eq - 5.0, margin_level=10000.0, leverage=500)
+
+
+def _main(t, sym, price=1.0970):
+    return PositionSnapshot(ticket=t, symbol=sym, type="SELL", volume=0.01, open_price=price,
+                            current_price=price, sl=price * 1.01, tp=price * 0.98, profit=0.0, swap=0.0,
+                            commission=0.0, open_time=datetime.now(), magic=888999)
+
+
+def test_one_slot_is_always_held_for_gold():
+    """User directive 2026-11-26: other symbols may never take the last slot while gold has none."""
+    exp = ExposureManager(max_open_positions=3, max_portfolio_risk_pct=2.5)
+    book = [_main(1, "EURUSD"), _main(2, "GBPUSD#"), _main(3, "USDCHF")]          # $462: 4 slots
+    nongold = exp.check_exposure("NZDUSD", book, _acct(462.0))["breaches"]
+    assert any("Max Concurrent" in b and "reserved for XAUUSD" in b for b in nongold)
+    assert not any("Max Concurrent" in b for b in exp.check_exposure("XAUUSD", book, _acct(462.0))["breaches"])
+
+
+def test_reserved_slot_is_released_once_gold_holds_it():
+    exp = ExposureManager(max_open_positions=3, max_portfolio_risk_pct=2.5)
+    book = [_main(1, "GOLD.i#", 3600.0), _main(2, "EURUSD"), _main(3, "GBPUSD")]
+    assert not any("Max Concurrent" in b for b in exp.check_exposure("NZDUSD", book, _acct(462.0))["breaches"])
