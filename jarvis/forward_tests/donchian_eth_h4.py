@@ -135,8 +135,9 @@ class DonchianForwardTest:
             logger.info("%s_%s entry skipped: minimum lot exceeds the risk policy.", TAG, n_in)
             return
         order = "BUY" if side == 1 else "SELL"
-        res = client.send_market_order(SYMBOL, order, lots, sl_price=stop, tp_price=0.0,
-                                       comment=f"{TAG}_{n_in}", reference_price=close)
+        from jarvis.forward_tests.research_leads import gated_forward_entry
+        res = gated_forward_entry(self.orch, SYMBOL, order, lots, stop, 0.0, close,
+                                  comment=f"{TAG}_{n_in}", style=STYLE, strategy=STRATEGY)
         logger.info("%s_%s %s %.2f lots @~%.2f stop %.2f: %s", TAG, n_in, order, lots, close, stop, res)
         if res and res.get("status") in ("FILLED", "PARTIAL", "POSITION_CONFIRMED"):
             from jarvis.data import database

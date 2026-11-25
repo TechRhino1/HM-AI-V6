@@ -41,6 +41,18 @@ AI_FAILURE_BACKOFF_SEC = 600.0
 # rules still run every refresh and the last AI read is merged into them while it is this fresh.
 GOVERNOR_AI_INTERVAL_S = float(os.environ.get("JARVIS_GOVERNOR_AI_INTERVAL_S", "900") or 900)
 
+# Operations advisory (2026-11-25): an hourly AI review of monitor + gate statistics.
+# Recommendations only -- written to data/advisories/, never read by any trading path.
+ADVISORY_INTERVAL_S = float(os.environ.get("JARVIS_ADVISORY_INTERVAL_S", "3600") or 3600)
+_ADVISORY_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"recommendations": {"type": "array", "items": {"type": "object", "properties": {
+        "area": {"type": "string"}, "finding": {"type": "string"},
+        "recommendation": {"type": "string"}, "priority": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+    }, "required": ["area", "finding", "recommendation", "priority"]}}},
+    "required": ["recommendations"],
+}
+
 _GOVERNOR_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -189,6 +201,50 @@ class AutonomousLLMSystemController:
                               if self._ai_backoff_until > now else None),
             "refreshing": self._refreshing,
         }
+
+    def review_operations(self, monitor_state: Dict[str, Any], gate_stats: Dict[str, int]) -> bool:
+        """Start an async AI review of system health and gate statistics (advisory only).
+
+        Reuses the governor's provider and failure backoff; at most once per
+        ADVISORY_INTERVAL_S; never blocks the caller; with no provider it does
+        nothing (no invented advice). Returns True when a review was started.
+        """
+        now = time.time()
+        if self.provider is None or now < self._ai_backoff_until:
+            return False
+        if now - float(getattr(self, "_last_advisory_at", 0.0)) < ADVISORY_INTERVAL_S:
+            return False
+        self._last_advisory_at = now
+        threading.Thread(target=self._advisory_in_background, args=(monitor_state, gate_stats),
+                         daemon=True, name="llm_ops_advisory").start()
+        return True
+
+    def _advisory_in_background(self, monitor_state: Dict[str, Any], gate_stats: Dict[str, int]) -> None:
+        try:
+            prompt = (
+                "You review an automated FX/metals/crypto trading system's operations. Give at most 5 "
+                "concrete, evidence-based recommendations. Never recommend weakening a risk control "
+                "(drawdown, daily/weekly loss, position caps, stops) to trade more.\n"
+                f"Monitor checks: {json.dumps(monitor_state.get('checks', {}), default=str)[:3000]}\n"
+                f"Order attempts blocked by gate (recent): {json.dumps(gate_stats, default=str)[:1500]}"
+            )
+            data = self.provider.structured(prompt, json_schema=_ADVISORY_SCHEMA,
+                                            system="You are an institutional trading-operations reviewer. Advisory only.")
+            recs = (data or {}).get("recommendations") if isinstance(data, dict) else None
+            if not recs:
+                return
+            from jarvis.config.paths import DATA_DIR
+            row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "source": "LLM",
+                   "recommendations": recs[:5]}
+            out_dir = os.path.join(DATA_DIR, "advisories")
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, time.strftime("advisories_%Y%m%d.jsonl", time.gmtime())),
+                      "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, default=str) + "\n")
+            self.last_advisory = row
+        except Exception as e:
+            self._ai_backoff_until = time.time() + AI_FAILURE_BACKOFF_SEC
+            logger.warning(f"Operations advisory failed (backing off {AI_FAILURE_BACKOFF_SEC:.0f}s): {e}")
 
     def get_latest_directives(self, force_refresh: bool = False) -> GovernorDirectives:
         """

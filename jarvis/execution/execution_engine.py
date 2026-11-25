@@ -25,6 +25,11 @@ from jarvis.observability.instruments import ORDERS_SUBMITTED, ORDER_LATENCY
 from jarvis.data.symbol_registry import resolve as resolve_symbol_spec, volume_decimals
 
 
+def _RISK_SETTINGS_RR():
+    from jarvis.config.settings import SETTINGS
+    return SETTINGS
+
+
 
 logger = logging.getLogger("JARVIS_ExecutionEngine")
 
@@ -195,6 +200,93 @@ class ExecutionEngine:
 
 
     def execute_decision(
+        self,
+        decision: DecisionObject,
+        lots: float,
+        sym_spec: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Pre-send verification (fail closed), then dispatch. Every origin passes here."""
+        if decision.execution_authorized and lots > 0:
+            if sym_spec is None and hasattr(self.mt5_client, "get_symbol_trading_spec"):
+                sym_spec = self.mt5_client.get_symbol_trading_spec(decision.symbol) or {}
+            blocked = self._pre_send_verify(decision, lots, sym_spec)
+            if blocked is not None:
+                return blocked
+        res = self._execute_decision_impl(decision, lots, sym_spec)
+        if isinstance(res, dict) and res.get("status") in ("FILLED", "PARTIAL", "PLACED", "UNKNOWN", "POSITION_CONFIRMED"):
+            try:
+                from jarvis.risk.trade_guard import note_sent
+                note_sent(decision.symbol, getattr(decision, "bias", ""), str(getattr(decision, "origin", "") or "arbiter"))
+            except Exception:
+                pass
+        return res
+
+    def _pre_send_verify(self, decision: DecisionObject, lots: float,
+                         sym_spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Run TradeGuard.verify_pre_send. Returns a BLOCKED result in enforce mode, else None.
+
+        shadow mode records the verdict (GateTrace SHADOW_REJECT, metrics, VERIFICATIONS)
+        without blocking; any failure to even run the verifier is BLOCKED_RISK.
+        """
+        from jarvis.config.settings import SETTINGS
+        from jarvis.observability.decision_journal import trace_of
+        from jarvis.risk import trade_guard as _tg
+        cfg = SETTINGS.verifier
+        if cfg.mode == "off":
+            return None
+        state_mgr = self.state_manager or GLOBAL_STATE
+        origin = str(getattr(decision, "origin", "") or "arbiter")
+        try:
+            positions = list(getattr(state_mgr, "positions", None) or [])
+            if not positions and hasattr(self.mt5_client, "get_open_positions"):
+                positions = list(self.mt5_client.get_open_positions() or [])
+            acct = getattr(state_mgr, "account", None)
+            equity = float(getattr(acct, "equity", 0.0) or 0.0)
+            tick = self.mt5_client.get_tick(decision.symbol) if hasattr(self.mt5_client, "get_tick") else None
+            res = _tg.verify_pre_send(_tg.PreSendContext(
+                decision=decision, lots=float(lots), spec=dict(sym_spec or {}),
+                tick=tick if isinstance(tick, dict) else None, positions=positions,
+                equity=equity, origin=origin), cfg)
+        except Exception as exc:  # fail closed
+            res = {"outcome": _tg.BLOCKED_RISK, "ms": 0.0, "mode": cfg.mode,
+                   "reasons": [{"rule": "verifier_error", "ok": False, "detail": f"{type(exc).__name__}: {exc}"}]}
+        try:
+            from jarvis.observability.instruments import VERIFIER_RESULTS
+            VERIFIER_RESULTS.inc(outcome=res["outcome"], mode=cfg.mode)
+        except Exception:
+            pass
+        decision.verification = res
+        failed = [r for r in res.get("reasons", []) if not r.get("ok")]
+        detail = "; ".join(f"{r.get('rule')}: {r.get('detail')}" for r in failed)[:300]
+        _tg.VERIFICATIONS.append({"ts": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+                                  "symbol": decision.symbol, "side": getattr(decision, "bias", ""),
+                                  "origin": origin, "lots": lots, **res})
+        trace = trace_of(decision)
+        if res["outcome"] == _tg.APPROVED:
+            if trace is not None:
+                trace.add("PRE_SEND_VERIFIER", "PASS", ms=res.get("ms"))
+            return None
+        if cfg.mode != "enforce":
+            if trace is not None:
+                trace.add("PRE_SEND_VERIFIER", "SHADOW_REJECT", f"{res['outcome']}: {detail}", ms=res.get("ms"))
+            return None
+        if trace is not None:
+            trace.reject("PRE_SEND_VERIFIER", f"{res['outcome']}: {detail}", ms=res.get("ms"))
+        logger.warning("PRE_SEND_VERIFIER blocked %s %s: %s %s", decision.symbol, getattr(decision, "bias", ""),
+                       res["outcome"], detail)
+        try:
+            from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+            dispatch_alert(title="Order blocked by pre-send verifier",
+                           message=f"{decision.symbol} {getattr(decision, 'bias', '')}: {res['outcome']} - {detail}",
+                           severity=AlertSeverity.WARNING, source="PreSendVerifier",
+                           details={"origin": origin, "reasons": failed},
+                           event_key=f"verifier_{decision.symbol}_{res['outcome']}", debounce_seconds=300.0)
+        except Exception:
+            pass
+        ORDERS_SUBMITTED.inc(mode=self._execution_mode(), status="BLOCKED")
+        return {"status": "BLOCKED", "reason": f"VERIFIER_{res['outcome']}: {detail}"}
+
+    def _execute_decision_impl(
 
         self,
 
@@ -275,7 +367,7 @@ class ExecutionEngine:
 
         mode_code = getattr(mode, "value", str(mode))[:4].upper()
 
-        comment = f"HMA2_{style_code}_{strat_code}_{mode_code}"
+        comment = str(getattr(decision, "order_comment", "") or "") or f"HMA2_{style_code}_{strat_code}_{mode_code}"
 
 
 
@@ -439,6 +531,25 @@ class ExecutionEngine:
 
         final_rr = (final_reward / max(final_risk, 1e-6)) if final_risk > 0 else 0.0
 
+        # Single-source R:R floor (TradeGuard.rr_assessment), rolled out via gates.rr_floor_mode.
+        # shadow: record disagreements only; enforce: the single source decides.
+        try:
+            from jarvis.risk.trade_guard import TradeGuard as _TG
+            from jarvis.observability.decision_journal import trace_of as _trace_of
+            _rr = _TG.rr_assessment(decision)
+            _rr_mode = getattr(getattr(_RISK_SETTINGS_RR(), "gates", None), "rr_floor_mode", "shadow")
+            _legacy_ok = final_rr >= 1.30
+            if _rr_mode == "enforce" and not _rr["ok"]:
+                return {"status": "BLOCKED", "reason": f"RR_FLOOR: {_rr['rr']:.2f} < {_rr['floor']:.2f}"}
+            if _rr_mode == "shadow" and _rr["ok"] != _legacy_ok:
+                _t = _trace_of(decision)
+                if _t is not None:
+                    _t.add("RR_FLOOR_SINGLE_SOURCE", "SHADOW_REJECT" if not _rr["ok"] else "SKIP",
+                           f"single-source {'refuses' if not _rr['ok'] else 'allows'}; legacy 1.30 "
+                           f"{'allows' if _legacy_ok else 'refuses'}", value=round(_rr["rr"], 2),
+                           threshold=_rr["floor"])
+        except Exception as _rr_exc:
+            logger.debug("single-source R:R check skipped: %s", _rr_exc)
         if final_rr < 1.30:
 
             logger.error(f"🛑 REJECTED DISPATCH for {decision.symbol}: Final R:R ratio {final_rr:.2f}:1 is below 1.30:1 minimum!")

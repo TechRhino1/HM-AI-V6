@@ -99,6 +99,11 @@ class ParallelAnalystCluster:
                 logger.warning("Analyst %s failed or timed out after %.2fs (%s: %s) "
                                "-- substituting a NEUTRAL score-50 fallback.",
                                role_name, self.timeout_sec, type(exc).__name__, exc)
+                try:
+                    from jarvis.observability.instruments import ANALYST_FALLBACKS
+                    ANALYST_FALLBACKS.inc(analyst=str(role_name))
+                except Exception:
+                    pass
                 reports[role_name] = AnalystReport(
                     role=_analyst_role(role_name),
                     symbol=context.symbol,

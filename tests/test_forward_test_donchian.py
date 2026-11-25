@@ -27,7 +27,13 @@ def test_a_close_below_the_exit_channel_flags_a_long_exit():
 
 def _orch(mode="demo", positions=()):
     o = SimpleNamespace(mode=mode, mt5_client=MagicMock(), data_feed=MagicMock(),
-                        circuit_breaker=MagicMock(), drawdown_guard=MagicMock())
+                        circuit_breaker=MagicMock(), drawdown_guard=MagicMock(),
+                        # Forward entries now pass the shared hard gates + pre-send verifier
+                        # (2026-11-25); this test is about tagging/halts, so both approve.
+                        risk_engine=MagicMock(), execution_engine=MagicMock(),
+                        state_manager=SimpleNamespace(is_safe_mode=False))
+    o.risk_engine.authorize_forward_test.return_value = {"authorized": True, "lots": 0.02, "reasons": []}
+    o.execution_engine._pre_send_verify.return_value = None
     o.mt5_client.get_open_positions.return_value = list(positions)
     o.mt5_client.get_account_snapshot.return_value = SimpleNamespace(equity=545.0, balance=545.0, login=1, server="s")
     o.mt5_client.get_symbol_trading_spec.return_value = {"volume_min": 0.02, "volume_step": 0.01, "volume_max": 100,

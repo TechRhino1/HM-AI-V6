@@ -370,6 +370,7 @@ class BacktestEngine:
         effective_start = max(10, int(start_bar_idx if start_bar_idx is not None else 60))  # warmup bars
 
         skipped_min_lot = 0
+        verifier_would_block: Dict[str, int] = {}
         rejection_stats = {}
 
         for i in range(effective_start, total_bars - 1):
@@ -837,6 +838,24 @@ class BacktestEngine:
                         else:
                             lots = auth_res["lots"]
 
+                        # Pre-send verifier in SHADOW (backtest parity): tally the rules that would
+                        # block this entry live. Never changes the simulation. Live-only rules have no
+                        # input here (no tick, news off, signal age measured at the decision itself).
+                        try:
+                            from jarvis.risk import trade_guard as _tg
+                            _vres = _tg.verify_pre_send(_tg.PreSendContext(
+                                decision=decision, lots=float(lots), spec=dict(sym_info or {}),
+                                tick=None, positions=[], equity=float(balance), origin="backtest",
+                                now=getattr(decision, "timestamp", None), check_news=False))
+                            for _r in _vres["reasons"]:
+                                if not _r["ok"]:
+                                    verifier_would_block[_r["rule"]] = verifier_would_block.get(_r["rule"], 0) + 1
+                            verifier_would_block["_checked"] = verifier_would_block.get("_checked", 0) + 1
+                            if _vres["outcome"] != _tg.APPROVED:
+                                verifier_would_block["_would_block"] = verifier_would_block.get("_would_block", 0) + 1
+                        except Exception:
+                            verifier_would_block["_error"] = verifier_would_block.get("_error", 0) + 1
+
                         open_time_val = next_bar.get("time") if "time" in next_bar else bar_time
 
                         open_trade = {
@@ -911,6 +930,7 @@ class BacktestEngine:
             "trades": trades,
             "final_balance": balance,
             "rejection_stats": rejection_stats,
+            "verifier_would_block": verifier_would_block,
             "skipped_min_lot": skipped_min_lot,
             "dataset_version": ver,
         }

@@ -120,3 +120,135 @@ def active_path(name: str, seed_file: Optional[str] = None) -> Optional[str]:
 
 def versions(name: str) -> Dict[str, Any]:
     return _read(name)
+
+
+# ── Governed configuration files (2026-11-25) ───────────────────────────────
+# The JSON files that drive live trading (settings, calibrated profiles, devil-gate
+# calibration) used to be overwritten in place with no history. A governed write
+# freezes the current file as v1 on first use, registers the new content as a new
+# immutable version, checks parameter bounds, holds high-impact changes as PENDING
+# until approved, and only then replaces the live file atomically. Rollback =
+# deploy_version(name, older_version).
+
+def _get_path(doc: Any, dotted: str) -> Any:
+    cur = doc
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def load_param_bounds(path: Optional[str] = None) -> Dict[str, Any]:
+    if path is None:
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        path = os.path.join(base, "config", "param_bounds.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def check_param_bounds(name: str, old: Any, new: Any, bounds: Optional[Dict[str, Any]] = None,
+                       max_delta_pct: Optional[float] = None) -> Dict[str, list]:
+    """{"violations": [...], "high_impact": [...]} for the bounded keys of ``name``."""
+    if bounds is None:
+        bounds = load_param_bounds()
+    if max_delta_pct is None:
+        try:
+            from jarvis.config.settings import SETTINGS
+            max_delta_pct = float(SETTINGS.governance.max_auto_delta_pct)
+        except Exception:
+            max_delta_pct = 20.0
+    violations, high = [], []
+    for key, (lo, hi) in (bounds.get(name) or {}).items():
+        nv, ov = _get_path(new, key), _get_path(old, key)
+        if nv is None:
+            continue
+        try:
+            nvf = float(nv)
+        except (TypeError, ValueError):
+            violations.append(f"{key}={nv!r} is not numeric")
+            continue
+        if not float(lo) <= nvf <= float(hi):
+            violations.append(f"{key}={nvf} outside [{lo}, {hi}]")
+        if ov is not None:
+            try:
+                ovf = float(ov)
+                if ovf and abs(nvf - ovf) / abs(ovf) * 100.0 > max_delta_pct:
+                    high.append(f"{key}: {ovf} -> {nvf} (> {max_delta_pct:g}% change)")
+            except (TypeError, ValueError):
+                pass
+    return {"violations": violations, "high_impact": high}
+
+
+def _install(src: str, live_path: str) -> None:
+    tmp = live_path + ".governed.tmp"
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, stat.S_IREAD | stat.S_IWRITE)  # the frozen copy is read-only; the live file is not
+    os.replace(tmp, live_path)
+
+
+def deploy_version(name: str, version: str, live_path: str, reason: str, author: str = "operator") -> None:
+    """Install a registered version onto the live file and activate it (approve / rollback)."""
+    reg = _read(name)
+    if version not in reg["versions"]:
+        raise KeyError(f"{name} has no version {version}")
+    _install(os.path.join(_dir(name), reg["versions"][version]["file"]), live_path)
+    with _LOCK:
+        reg = _read(name)
+        reg["versions"][version]["status"] = "ACTIVE"
+        _write(name, reg)
+    activate(name, version, reason=reason, author=author)
+
+
+def governed_write(name: str, live_path: str, text: str, reason: str, author: str = "system",
+                   approve: bool = False, validation: Optional[Dict[str, Any]] = None,
+                   extra_high_impact: Optional[list] = None) -> Dict[str, Any]:
+    """Version, bound-check and (unless high-impact and unapproved) install ``text`` at ``live_path``.
+
+    Returns {"version", "status": ACTIVE | PENDING}. Raises ValueError on a bounds violation.
+    """
+    active_path(name, seed_file=live_path)  # bootstrap v1 from today's live file
+    try:
+        with open(live_path, "r", encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = {}
+    new = json.loads(text)
+    if new == old:  # no change: no new version, no churn (e.g. repeated refits)
+        info = active_info(name) or {}
+        return {"version": info.get("version"), "status": "UNCHANGED", "high_impact": []}
+    chk = check_param_bounds(name, old, new)
+    if chk["violations"]:
+        audit("governed_refused", model=name, reason=reason, author=author, violations=chk["violations"])
+        raise ValueError(f"{name}: parameter bounds violated: {chk['violations']}")
+    high = chk["high_impact"] + list(extra_high_impact or [])
+    tmp = live_path + ".candidate.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    try:
+        version = register(name, tmp, reason=reason, validation=validation, activate=False, author=author)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if high and not approve:
+        with _LOCK:
+            reg = _read(name)
+            reg["versions"][version]["status"] = "PENDING"
+            reg["versions"][version]["high_impact"] = high
+            _write(name, reg)
+        audit("pending", model=name, version=version, reason=reason, author=author, high_impact=high)
+        try:
+            from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+            dispatch_alert(title=f"Config change pending approval: {name} {version}",
+                           message="; ".join(high), severity=AlertSeverity.WARNING, source="Governance",
+                           event_key=f"governed_pending_{name}_{version}", debounce_seconds=60.0)
+        except Exception:
+            pass
+        return {"version": version, "status": "PENDING", "high_impact": high}
+    deploy_version(name, version, live_path, reason=reason, author=author)
+    return {"version": version, "status": "ACTIVE", "high_impact": high}

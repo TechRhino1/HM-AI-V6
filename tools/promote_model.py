@@ -36,6 +36,13 @@ if REPO not in sys.path:
 from jarvis.config.paths import resolve_db_path  # noqa: E402
 from jarvis.learning import model_registry as reg  # noqa: E402
 
+# Governed config files: rollback/approve must also install the frozen version on disk.
+GOVERNED = {
+    "settings": os.path.join(REPO, "config", "settings.json"),
+    "winrate_profiles": os.path.join(REPO, "config", "winrate_profiles.json"),
+    "devil_gate_calibration": os.path.join(REPO, "config", "devil_gate_calibration.json"),
+}
+
 
 def _closed_trades_since(created_iso: str):
     db = resolve_db_path("jarvis_trade_memory.db")
@@ -137,18 +144,32 @@ def main() -> int:
     r.add_argument("name")
     r.add_argument("version")
     r.add_argument("--approve", required=True)
+    ap_ = sub.add_parser("approve", help="install a PENDING governed config version")
+    ap_.add_argument("name", choices=sorted(GOVERNED))
+    ap_.add_argument("version")
+    ap_.add_argument("--reason", required=True)
     a = ap.parse_args()
 
     if a.cmd == "status":
-        for name in ("online_ml", "strategy_bandit"):
+        for name in ("online_ml", "strategy_bandit", *GOVERNED):
             v = reg.versions(name)
             print(name, "active:", v.get("active"))
             for k, meta in v.get("versions", {}).items():
-                print(f"  {k}  {meta['created']}  {meta['reason']}  passed={meta['validation'].get('passed', '-')}")
+                print(f"  {k}  {meta['created']}  {meta.get('status', '-'):7}  {meta['reason']}  "
+                      f"passed={meta.get('validation', {}).get('passed', '-')}")
+        return 0
+    if a.cmd == "approve":
+        reg.deploy_version(a.name, a.version, GOVERNED[a.name], reason=a.reason)
+        print(f"{a.name} {a.version} installed at {GOVERNED[a.name]} and activated.")
         return 0
     if a.cmd == "rollback":
-        reg.activate(a.name, a.version, reason=a.approve)
-        print(f"{a.name} -> {a.version} (restart the engine to load it).")
+        if a.name in GOVERNED:
+            reg.deploy_version(a.name, a.version, GOVERNED[a.name], reason=a.approve)
+            print(f"{a.name} -> {a.version}: file restored at {GOVERNED[a.name]} "
+                  "(settings need an engine restart; profiles hot-reload).")
+        else:
+            reg.activate(a.name, a.version, reason=a.approve)
+            print(f"{a.name} -> {a.version} (restart the engine to load it).")
         return 0
     if a.name == "online_ml":
         return promote_online_ml(a.min_trades, a.margin)

@@ -354,6 +354,17 @@ def expectancy_state(
     }
 
 
+def ledger_modes(execution_mode: Optional[str]) -> Tuple[str, ...]:
+    """Ledgers a quarantine/sizing check must consult for ``execution_mode``.
+
+    The decision engine and the risk engine used to read only the demo ledger,
+    even on a live account. They now read the account's own ledger AND demo:
+    a pair condemned in either stays condemned, so the fix can never loosen.
+    """
+    mode = str(execution_mode or "demo").lower()
+    return ("demo",) if mode == "demo" else (mode, "demo")
+
+
 def expectancy_risk_multiplier(
     symbol: str,
     strategy: str,

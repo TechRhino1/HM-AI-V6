@@ -38,6 +38,34 @@ DECISION_LATENCY: Histogram = _histogram(
     ("style",),
 )
 
+# ── Gates & verification ────────────────────────────────────────────────────
+#: One per gate verdict on an order attempt (arbiter, forward test or manual).
+#: `gate` is a fixed constant name at each call site, never a free-form reason,
+#: so the series count stays bounded. A REJECT-heavy gate that never sends is
+#: where "why is nothing trading" is answered.
+GATE_VERDICTS: Counter = _counter(
+    "jarvis_gate_verdicts_total",
+    "Gate verdicts on order attempts, by gate, verdict and origin.",
+    ("gate", "verdict", "origin"),
+    max_series=512,
+)
+
+#: One per analyst result replaced by its neutral fallback (timeout / error).
+#: A rising rate means the cluster is deciding on placeholders.
+ANALYST_FALLBACKS: Counter = _counter(
+    "jarvis_analyst_fallbacks_total",
+    "Analyst results replaced by a neutral fallback, by analyst.",
+    ("analyst",),
+)
+
+#: One per pre-send verification. `outcome` is APPROVED / REJECTED /
+#: NEEDS_ANALYSIS / BLOCKED_RISK; `mode` is shadow or enforce.
+VERIFIER_RESULTS: Counter = _counter(
+    "jarvis_verifier_results_total",
+    "Pre-send verifier outcomes, by outcome and mode.",
+    ("outcome", "mode"),
+)
+
 # ── Order submission ────────────────────────────────────────────────────────
 #: One per dispatch attempt, labelled by the broker result.
 #:

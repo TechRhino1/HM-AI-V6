@@ -137,8 +137,10 @@ def main() -> int:
               f"exp={m['exp']:+.4f}R PF={m['pf']:5.2f} DD={m['dd']:5.2f}% -> "
               f"{'PASS (gate will ADMIT)' if passes else 'FAIL (gate will REFUSE)'}")
 
-    with open(PROFILE_PATH, "w") as _f:
-        json.dump(_doc, _f, indent=2)
+    from jarvis.learning.model_registry import governed_write
+    _res = governed_write("winrate_profiles", str(PROFILE_PATH), json.dumps(_doc, indent=2),
+                          reason="calibrate_geometry.py", author="calibration", approve=True)
+    print(f"governed write -> winrate_profiles {_res['version']} ({_res['status']})")
     print("-" * 104)
     print(f"updated {changed} profiles -> {PROFILE_PATH}")
     admitted = sum(1 for p in profiles.values()

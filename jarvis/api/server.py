@@ -683,6 +683,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     for s in configured_syms
                 }
                 self._send_json(snap)
+            elif path in ("/api/monitor", "/api/gates/stats", "/api/decisions", "/api/verifier/recent"):
+                self._send_monitoring(path, query)
             elif path == "/api/alerts":
                 # `alerts`/`count` are the system (observability) alerts as before; `rules` are user market alert rules.
                 from jarvis.observability.alerting import ALERT_MANAGER
@@ -1828,6 +1830,32 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"status": "FAILED", "reason": risk_err, "error": risk_err}, status_code=200)
                     return
 
+                # Operator override: verified in SHADOW only (never blocks) and journaled
+                # as origin=manual so manual orders are traceable next to the engine's.
+                _manual_trace = None
+                try:
+                    from types import SimpleNamespace as _NS
+                    from datetime import datetime as _dt, timezone as _tz
+                    from jarvis.risk import trade_guard as _tg
+                    from jarvis.observability import decision_journal as _dj
+                    _manual_trace = _dj.GateTrace(sym, "MANUAL", str(action).upper(), origin="manual")
+                    _acct = self.mt5_client.get_account_snapshot()
+                    _vres = _tg.verify_pre_send(_tg.PreSendContext(
+                        decision=_NS(symbol=sym, bias=str(action).upper(),
+                                     entry_price=float(current_price or 0.0) or float(sl),
+                                     stop_loss=float(sl), take_profit=float(tp), trade_style="MANUAL",
+                                     order_type="MARKET", timestamp=_dt.now(_tz.utc), dispatch_vetoes=[],
+                                     context=None),
+                        lots=float(lots), spec=self.mt5_client.get_symbol_trading_spec(sym) or {},
+                        tick=self.mt5_client.get_tick(sym) if hasattr(self.mt5_client, "get_tick") else None,
+                        positions=list(self.mt5_client.get_open_positions() or []),
+                        equity=float(getattr(_acct, "equity", 0.0) or 0.0), origin="manual"))
+                    _manual_trace.add("PRE_SEND_VERIFIER",
+                                      "PASS" if _vres["outcome"] == _tg.APPROVED else "SHADOW_REJECT",
+                                      "; ".join(f"{r['rule']}: {r['detail']}" for r in _vres["reasons"] if not r["ok"]),
+                                      ms=_vres["ms"])
+                except Exception as _mv_exc:
+                    logger.debug("manual-order shadow verification skipped: %s", _mv_exc)
                 res = self.mt5_client.send_market_order(
                     symbol=sym,
                     order_type=action,
@@ -1837,6 +1865,13 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     comment=comment,
                     reference_price=current_price
                 )
+                if _manual_trace is not None:
+                    try:
+                        from jarvis.observability import decision_journal as _dj
+                        _dj.record_attempt(_manual_trace, status=(res or {}).get("status"),
+                                           ticket=(res or {}).get("ticket"), lots=lots)
+                    except Exception:
+                        pass
                 if res and res.get("status") in ("FILLED", "PARTIAL"):
                     try:
                         from jarvis.data.database import TRADE_DB
@@ -1967,6 +2002,57 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
         from jarvis.data.database import TRADE_DB
         return TRADE_DB.db_path
 
+    def _send_monitoring(self, path: str, query: Dict[str, list]) -> None:
+        """Read-only monitoring surface for the dashboard (2026-11-25 plan, Phase 7)."""
+        import time as _t
+        from dataclasses import asdict
+        from jarvis.observability import decision_journal as _dj, system_monitor as _sm
+
+        def _q(name: str, default: str = "") -> str:
+            return (query.get(name, [default])[0] or default).strip()
+
+        def _num(name: str, default: float, lo: float, hi: float) -> float:
+            try:
+                return max(lo, min(hi, float(_q(name, str(default)))))
+            except ValueError:
+                return default
+
+        orch = getattr(self, "orchestrator", None)
+        if path == "/api/monitor":
+            llm = getattr(orch, "llm_controller", None)
+            self._send_json({
+                "monitor": getattr(orch, "monitor_state", {}) or {},
+                "position_monitor": (orch._position_monitor_status()
+                                     if hasattr(orch, "_position_monitor_status") else None),
+                "advisory": getattr(llm, "last_advisory", None),
+                "config": {"verifier": asdict(SETTINGS.verifier), "gates": asdict(SETTINGS.gates),
+                           "forward_tests": asdict(SETTINGS.forward_tests)},
+            })
+        elif path == "/api/gates/stats":
+            from jarvis.observability.instruments import GATE_VERDICTS
+            hours = _num("hours", 24.0, 0.25, 168.0)
+            since = _t.time() - hours * 3600.0
+            from jarvis.config.paths import DATA_DIR
+            rows = _sm.read_decisions(os.path.join(DATA_DIR, "decisions"), since=since, limit=1000,
+                                      origin=_q("origin"))
+            if not rows:  # no journal file in the window (e.g. offline): fall back to memory
+                rows = list(_dj.RECENT)
+            stats = _sm.gate_stats(rows, hours, _t.time(), origin=_q("origin") or None)
+            stats["verdicts_since_start"] = _sm.verdict_counts(GATE_VERDICTS)[:60]
+            self._send_json(stats)
+        elif path == "/api/decisions":
+            from jarvis.config.paths import DATA_DIR
+            hours = _num("hours", 24.0, 0.25, 720.0)
+            rows = _sm.read_decisions(os.path.join(DATA_DIR, "decisions"), since=_t.time() - hours * 3600.0,
+                                      symbol=_q("symbol"), origin=_q("origin"), blocked_by=_q("blocked_by"),
+                                      limit=int(_num("limit", 200, 1, 1000)))
+            self._send_json({"rows": rows, "count": len(rows)})
+        else:  # /api/verifier/recent
+            from jarvis.risk.trade_guard import VERIFICATIONS
+            n = int(_num("limit", 100, 1, 1000))
+            rows = list(VERIFICATIONS)[-n:][::-1]
+            self._send_json({"mode": SETTINGS.verifier.mode, "rows": rows, "count": len(rows)})
+
     def _send_health(self):
         """Liveness/readiness probe for ``/health`` and ``/ready``.
 
@@ -2008,13 +2094,19 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
 
         lock_stale = bool(broker_lock.get("held")) and \
             float(broker_lock.get("age_sec") or 0.0) > self._HEALTH_LOCK_STALE_SEC
+        # Orchestration-loop liveness from the watchdog's monitor (a stalled loop
+        # trades nothing while every other probe still looks green).
+        loop = ((getattr(getattr(self, "orchestrator", None), "monitor_state", None) or {})
+                .get("checks", {}).get("loop_heartbeat"))
+        loop_stalled = bool(loop and loop.get("status") == "CRITICAL")
         ok = (db_ok and not lock_stale and not bool(guard.get("wedged"))
-              and not lock_failed and not guard_failed)
+              and not lock_failed and not guard_failed and not loop_stalled)
         self._send_json({
             "status": "ok" if ok else "degraded",
             "broker_lock": broker_lock,
             "guard": guard,
             "db": db_ok,
+            "loop": loop,
             "ts": datetime.now(timezone.utc).isoformat(),
         }, status_code=200 if ok else 503)
 

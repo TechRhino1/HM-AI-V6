@@ -105,8 +105,10 @@ def main() -> int:
               f"exp={exp:+.4f}R PF={pf:5.2f} DD={dd:5.2f}% -> "
               f"{'ADMIT' if passes else 'REFUSE: ' + prof['gate_fail_reason']}")
 
-    with open(PROFILE_PATH, "w", encoding="utf-8") as _f:
-        json.dump(doc, _f, indent=2)
+    from jarvis.learning.model_registry import governed_write
+    _res = governed_write("winrate_profiles", str(PROFILE_PATH), json.dumps(doc, indent=2),
+                          reason="engine_backed_calibration.py", author="calibration", approve=True)
+    print(f"governed write -> winrate_profiles {_res['version']} ({_res['status']})")
     print("-" * 100)
     print(f"engine-backed OOS written for {len(profiles)} symbols; {admitted} admitted")
     print()

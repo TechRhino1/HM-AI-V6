@@ -297,7 +297,14 @@ def main() -> int:
         print("no devil scan found; run with --scan")
         return 2
     doc = calibrate(frames)
-    Path(args.out).write_text(json.dumps(doc, indent=2, default=str), encoding="utf-8")
+    _text = json.dumps(doc, indent=2, default=str)
+    if Path(args.out).resolve().name == "devil_gate_calibration.json":
+        from jarvis.learning.model_registry import governed_write
+        _res = governed_write("devil_gate_calibration", str(Path(args.out).resolve()), _text,
+                              reason="calibrate_devil_gate", author="calibration", approve=True)
+        print(f"governed write -> devil_gate_calibration {_res['version']} ({_res['status']})")
+    else:
+        Path(args.out).write_text(_text, encoding="utf-8")
     for g, v in doc["groups"].items():
         wf = v["walk_forward"]
         print(f"{g:7s} n={v['n']:6d} current OOS {wf['current']}  calibrated OOS {wf['calibrated']}  "
