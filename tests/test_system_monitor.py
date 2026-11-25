@@ -118,3 +118,11 @@ def test_run_checks_includes_the_position_monitor():
                         equity=1000.0, max_portfolio_risk_pct=2.5, fallbacks=0, evaluations=10, cfg=CFG,
                         alert=False, position_monitor=_pm(thread_alive=False))
     assert out["checks"]["position_monitor"]["status"] == sm.CRITICAL and out["status"] == sm.CRITICAL
+
+
+def test_first_watchdog_monitor_pass_waits_one_interval_after_start():
+    """At t=0 the position monitor has not ticked yet; checking then raised a false CRITICAL."""
+    import inspect
+    from jarvis.application.orchestrator import JarvisOrchestrator
+    src = inspect.getsource(JarvisOrchestrator.__init__)
+    assert "self._last_monitor_at: float = self._started_at" in src
