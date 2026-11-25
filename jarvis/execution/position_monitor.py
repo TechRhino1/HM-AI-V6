@@ -1323,7 +1323,7 @@ class PositionMonitorEngine:
             if pos.ticket not in self._initial_risk_dist:
                 self._recover_open_state(pos, atr, pip_size)
             # ── 0. Partial Profit-Taking (§B-2 / §B-3, Suppressed in Grace Period) ──
-            if not in_grace_period and (not is_manual or effective_manual_mode in ("AUTO_PILOT", "FULL")) and pos.ticket not in self._partially_closed_tickets and pos.volume >= 0.02:
+            if not in_grace_period and (not is_manual or effective_manual_mode in ("AUTO_PILOT", "FULL")) and pos.ticket not in self._partially_closed_tickets:  # split checked at the broker's min lot/step below
                 decision_obj = self.state_manager.latest_decisions.get(symbol)
                 pos_style = self._extract_position_trade_style(pos, atr=atr)
                 reg_name = (regime.primary_regime.value if hasattr(regime, "primary_regime") else str(regime)) if regime else None
