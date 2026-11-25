@@ -35,6 +35,18 @@ DYN_MAX_SYMBOLS = 8
 DYN_MAX_USD = 3
 
 
+def _deployment_refusal(symbol: str) -> Optional[str]:
+    """The execution-time deployment gate (holdout / expectancy). Fails open: the
+    risk engine enforces the same gate on every order, so an error here only
+    loses the pre-filter, never a safety check."""
+    try:
+        from jarvis.backtesting.exit_geometry import deployment_refusal
+        return deployment_refusal(symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Auto-tune: deployment gate unavailable for %s: %s", symbol, exc)
+        return None
+
+
 def dynamic_edge(n: int, live_r: float, prior_r: float, k: float = DYN_K) -> float:
     """Live mean R shrunk toward the calibrated prior; n=0 returns the prior."""
     return (n * live_r + k * prior_r) / (n + k)
@@ -414,13 +426,23 @@ class AutoTuneEngine:
                     "reason": f"High Confluence Setup (Grade {c['grade']} | Conf {c['confluence']:.0f} | {c['regime']})"
                 })
 
+        # Never activate a symbol the execution gate will refuse anyway. The risk
+        # engine rejects every deployment-refused symbol, so selecting them by a
+        # different edge score left the bot scanning 8 symbols it could not trade.
+        refused = {s: r for s in selected_symbols if (r := _deployment_refusal(s))}
+        if refused:
+            selected_symbols -= set(refused)
+            for d in tuning_details:
+                if d.get("symbol") in refused and d.get("status") == "ACTIVATED":
+                    d.update(status="DEACTIVATED", reason=refused[d["symbol"]])
+
         # Ensure active universe is never completely empty
         if not selected_symbols:
-            # Fallback to liquid anchors
-            for anchor in ("XAUUSD", "EURUSD", "BTCUSD"):
-                if anchor in _REGISTRY:
-                    selected_symbols.add(anchor)
-                    tuning_details.append({"symbol": anchor, "status": "ACTIVATED", "reason": "Default liquid anchor guarantee"})
+            # Fallback to liquid anchors the gate allows; only if none pass, the old anchors.
+            anchors = [a for a in ("XAUUSD", "EURUSD", "BTCUSD") if a in _REGISTRY]
+            for anchor in ([a for a in anchors if not _deployment_refusal(a)] or anchors):
+                selected_symbols.add(anchor)
+                tuning_details.append({"symbol": anchor, "status": "ACTIVATED", "reason": "Default liquid anchor guarantee"})
 
         active_list = sorted(list(selected_symbols))
         summary = f"Auto-Tuned {len(active_list)} active symbols under {profile} profile ({len(active_list)} activated, {len(candidates) - len(active_list)} filtered)."

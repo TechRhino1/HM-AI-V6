@@ -135,3 +135,46 @@ def test_backtest_engine_no_longer_drops_h4_d1_context():
     import inspect
     from jarvis.backtesting import engine
     assert "full_df_h4 = None\n            full_df_d1 = None" not in inspect.getsource(engine)
+
+
+def test_auto_tune_never_activates_a_symbol_the_deployment_gate_refuses():
+    """Auto-tune picked 8 symbols the execution gate refused while EURUSD (allowed) sat idle."""
+    from jarvis.intelligence.auto_tune_engine import AutoTuneEngine
+    def gate(sym):  # only EURUSD passes, as on 2026-11-25
+        return None if sym == "EURUSD" else "HOLDOUT_GATE: test"
+    state = MagicMock()
+    state.allowed_symbols = ["XAUUSD", "GBPUSD", "EURUSD"]
+    state.radar_opportunities = [
+        {"symbol": s, "setup_grade": "GRADE A", "confluence_score": 70.0, "win_prob": 62.0,
+         "expected_value": 1.2, "regime": "TRENDING"} for s in state.allowed_symbols
+    ]
+    mt5 = MagicMock()
+    mt5.get_symbol_trading_spec.return_value = {"spread": 10, "digits": 5, "point": 0.00001}
+    with patch("jarvis.intelligence.auto_tune_engine._deployment_refusal", gate), \
+         patch("jarvis.intelligence.auto_tune_engine._is_weekend_gap", return_value=False), \
+         patch("jarvis.intelligence.auto_tune_engine.SessionEngine.get_market_trading_status",
+               return_value={"is_open": True, "current_session": "LONDON"}):
+        res = AutoTuneEngine.tune_universe(orchestrator=MagicMock(), state_manager=state,
+                                           mt5_client=mt5, mode="BALANCED")
+    assert res["active_symbols"] == ["EURUSD"]
+    why = {d["symbol"]: d for d in res["details"]}
+    assert why["XAUUSD"]["status"] == "DEACTIVATED" and "HOLDOUT_GATE" in why["XAUUSD"]["reason"]
+
+
+def test_auto_tune_universe_is_never_empty_when_the_gate_refuses_everything():
+    from jarvis.intelligence.auto_tune_engine import AutoTuneEngine
+    state = MagicMock()
+    state.allowed_symbols = ["XAUUSD"]
+    state.radar_opportunities = [{"symbol": "XAUUSD", "setup_grade": "GRADE A", "confluence_score": 70.0,
+                                  "win_prob": 62.0, "expected_value": 1.2, "regime": "TRENDING"}]
+    mt5 = MagicMock()
+    mt5.get_symbol_trading_spec.return_value = {"spread": 10, "digits": 5, "point": 0.00001}
+    def gate(sym):
+        return "HOLDOUT_GATE: test"
+    with patch("jarvis.intelligence.auto_tune_engine._deployment_refusal", gate), \
+         patch("jarvis.intelligence.auto_tune_engine._is_weekend_gap", return_value=False), \
+         patch("jarvis.intelligence.auto_tune_engine.SessionEngine.get_market_trading_status",
+               return_value={"is_open": True, "current_session": "LONDON"}):
+        res = AutoTuneEngine.tune_universe(orchestrator=MagicMock(), state_manager=state,
+                                           mt5_client=mt5, mode="BALANCED")
+    assert res["active_symbols"] == ["BTCUSD", "EURUSD", "XAUUSD"]  # old anchors; orders still gated
