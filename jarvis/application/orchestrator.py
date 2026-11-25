@@ -342,6 +342,9 @@ class JarvisOrchestrator:
         self._watchdog_thread: Optional[threading.Thread] = None
         self._last_heartbeat: float = time.time()
         self._started_at: float = self._last_heartbeat
+        # First system-monitor pass one interval after start: at t=0 the position
+        # monitor has not ticked yet, which raised a false "not ticking" CRITICAL.
+        self._last_monitor_at: float = self._started_at
         self.monitor_state: Dict[str, Any] = {}
 
     def apply_execution_mode(self, new_mode: str) -> Dict[str, Any]:
