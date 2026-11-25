@@ -289,6 +289,10 @@ def simulate_exit_geometry(
         h = high[j]
         lo = low[j]
         a = float(atr[j]) if atr is not None else 0.0
+        # The stop resting when this bar OPENED. BE/trail below ratchet off this
+        # bar's high/close; testing that new level against this bar's low assumed
+        # the high printed first (same-bar look-ahead). Matches engine.py.
+        bar_start_sl = current_sl
 
         # Track excursions on the whole move from entry.
         fav = (h - fill) * direction
@@ -357,9 +361,9 @@ def simulate_exit_geometry(
                     current_sl = trail_sl
 
         # ── 4. Stop test FIRST (conservative intrabar ordering) ─────────────
-        stop_hit = (lo <= current_sl) if is_buy else (h >= current_sl)
+        stop_hit = (lo <= bar_start_sl) if is_buy else (h >= bar_start_sl)
         if stop_hit:
-            exit_price = current_sl - direction * slippage_price_equiv
+            exit_price = bar_start_sl - direction * slippage_price_equiv
             remaining_r = (exit_price - fill) * direction * inv_risk
             booked_r += remaining_r * remaining_pct
             exit_reason = "BE_SL" if be_locked else ("TRAIL_SL" if trail_active else "SL")

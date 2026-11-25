@@ -240,6 +240,6 @@ class PositionSizer:
         final_lots = min(max_vol, max(min_vol, min_vol + steps * vol_step))
 
 
-        digits = max(0, min(4, int(round(-math.log10(vol_step))))) if vol_step < 1.0 else 0
-        return round(final_lots, digits)
+        from jarvis.data.symbol_registry import volume_decimals
+        return round(final_lots, volume_decimals(vol_step))
 

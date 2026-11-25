@@ -357,3 +357,13 @@ def get_dollar_risk_per_price_unit(symbol: str, symbol_info: Optional[Dict[str, 
         return spec.pip_value_per_lot / spec.pip_size
     return spec.contract_size
 
+
+
+def volume_decimals(step: float) -> int:
+    """Decimal places of a broker volume step (0.01 -> 2, 0.5 -> 1, 0.001 -> 3, 1 -> 0).
+
+    ``round(-log10(step))`` and ``2 if step<=0.01 else ...`` both mis-handle
+    steps like 0.5 / 0.05 / 0.001, rounding an on-step lot UP past the risk budget.
+    """
+    s = f"{float(step):.8f}".rstrip("0")
+    return len(s.split(".")[1]) if "." in s else 0

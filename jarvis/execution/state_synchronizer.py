@@ -2,6 +2,7 @@
 HM Algo 2.0 — Strict MT5 State Synchronization & Reconciliation Engine.
 Guarantees real-time consistency between broker terminal state and internal application memory.
 """
+import contextlib
 import time
 import logging
 import threading
@@ -95,7 +96,17 @@ class MT5StateSynchronizer:
         """Performs a single atomic synchronization pass and returns reconciliation report."""
         try:
             account = self.mt5_client.get_account_snapshot()
-            positions = self.mt5_client.get_open_positions()
+            # Read + flag under the client's (re-entrant) lock, or another thread's
+            # successful read could flip last_positions_ok between the two.
+            with (getattr(self.mt5_client, "_lock", None) or contextlib.nullcontext()):
+                positions = self.mt5_client.get_open_positions()
+                read_ok = getattr(self.mt5_client, "last_positions_ok", True)
+            if not read_ok:
+                # A failed read is not "flat": publishing it emptied the book and
+                # fired POSITION_CLOSED for every ticket, so the per-symbol limits
+                # saw 0 positions. Keep the last known state.
+                logger.warning("State sync skipped: broker position read failed.")
+                return {"status": "SKIPPED", "reason": "positions_read_failed"}
 
             self.state_manager.update_account(account)
             self.state_manager.update_positions(positions)

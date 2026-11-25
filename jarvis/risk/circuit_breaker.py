@@ -368,7 +368,14 @@ class CircuitBreaker:
             cooldown_seconds = self._get_adaptive_cooldown()
             
             if elapsed >= cooldown_seconds:
+                # Keep the loss streak across a served cooldown (capped one below
+                # the hard limit so trading can resume as a reduced-size probe).
+                # A full reset() here meant losing FASTER restored 1.0x size sooner.
+                # A win clears it.
+                streak = min(self.consecutive_losses, max(0, self.consecutive_loss_limit - 1))
                 self.reset()
+                self.consecutive_losses = streak
+                self._save_state()
                 return {"active": False, "reason": ""}
             return {
                 "active": True,
