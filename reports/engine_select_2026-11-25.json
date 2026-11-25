@@ -1,0 +1,218 @@
+{
+  "meta": {
+    "train": [
+      "2025-05-21",
+      "2026-05-21"
+    ],
+    "holdout_start": "2026-05-24",
+    "base_profiles": "data/signals/holdout/winrate_profiles_train_to_2026-05-21.json",
+    "variants": 11,
+    "n_trials_holdout": 4,
+    "min_train_trades": 30,
+    "min_train_pf": 1.05,
+    "data": "MT5 terminal real H1 bars",
+    "elapsed_seconds": 4220.3
+  },
+  "symbols": [
+    {
+      "symbol": "AUDUSD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "BTCUSD",
+      "candidates": 11,
+      "selected": "tp2.5_be1.0_mb48",
+      "train": {
+        "trades": 134,
+        "win_rate": 57.46,
+        "expectancy_r": 0.2713,
+        "t_stat": 3.0089,
+        "profit_factor": 1.92,
+        "max_drawdown_r": 4.1323,
+        "max_drawdown_pct": 1.07,
+        "net_profit": 830.07,
+        "window": "2025-05-21 00:00:00+00:00 -> 2026-05-20 23:00:00+00:00"
+      },
+      "dsr": 0.6714,
+      "holdout": {
+        "trades": 120,
+        "win_rate": 55.0,
+        "expectancy_r": 0.1408,
+        "t_stat": 1.4777,
+        "profit_factor": 1.42,
+        "max_drawdown_r": 12.0067,
+        "max_drawdown_pct": 2.71,
+        "net_profit": 350.5,
+        "window": "2026-05-24 00:00:00+00:00 -> 2026-11-24 19:00:00+00:00"
+      },
+      "passes": true
+    },
+    {
+      "symbol": "ETHUSD",
+      "candidates": 11,
+      "selected": "tp1.5_beNone_mb48",
+      "train": {
+        "trades": 303,
+        "win_rate": 53.14,
+        "expectancy_r": 0.092,
+        "t_stat": 1.8122,
+        "profit_factor": 1.25,
+        "max_drawdown_r": 13.8819,
+        "max_drawdown_pct": 2.38,
+        "net_profit": 507.96,
+        "window": "2025-05-21 00:00:00+00:00 -> 2026-05-20 23:00:00+00:00"
+      },
+      "dsr": 0.0977,
+      "holdout": {
+        "trades": 151,
+        "win_rate": 43.71,
+        "expectancy_r": -0.0174,
+        "t_stat": -0.2506,
+        "profit_factor": 0.78,
+        "max_drawdown_r": 16.4045,
+        "max_drawdown_pct": 4.64,
+        "net_profit": -253.58,
+        "window": "2026-05-24 00:00:00+00:00 -> 2026-11-24 19:00:00+00:00"
+      },
+      "passes": false
+    },
+    {
+      "symbol": "EURUSD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "GBPUSD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "GER40",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "NAS100",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "NZDUSD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "SOLUSD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "UK100",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "US30",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "USDCAD",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "USDCHF",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "USDJPY",
+      "candidates": 11,
+      "selected": null,
+      "train": {},
+      "passes": false
+    },
+    {
+      "symbol": "XAGUSD",
+      "candidates": 11,
+      "selected": "tp2.0_beNone_mb48",
+      "train": {
+        "trades": 742,
+        "win_rate": 45.28,
+        "expectancy_r": 0.1088,
+        "t_stat": 2.2995,
+        "profit_factor": 1.2,
+        "max_drawdown_r": 21.4709,
+        "max_drawdown_pct": 7.33,
+        "net_profit": 3041.45,
+        "window": "2025-05-21 00:00:00+00:00 -> 2026-05-20 23:00:00+00:00"
+      },
+      "dsr": 0.0051,
+      "holdout": {
+        "trades": 312,
+        "win_rate": 39.42,
+        "expectancy_r": -0.1066,
+        "t_stat": -1.6116,
+        "profit_factor": 0.82,
+        "max_drawdown_r": 47.9788,
+        "max_drawdown_pct": 18.78,
+        "net_profit": -1343.8,
+        "window": "2026-05-24 22:00:00+00:00 -> 2026-11-24 19:00:00+00:00"
+      },
+      "passes": false
+    },
+    {
+      "symbol": "XAUUSD",
+      "candidates": 11,
+      "selected": "tp2.0_be1.0_mb48",
+      "train": {
+        "trades": 1248,
+        "win_rate": 47.6,
+        "expectancy_r": 0.0194,
+        "t_stat": 0.5815,
+        "profit_factor": 1.08,
+        "max_drawdown_r": 23.5737,
+        "max_drawdown_pct": 3.78,
+        "net_profit": 937.3,
+        "window": "2025-05-21 00:00:00+00:00 -> 2026-05-20 23:00:00+00:00"
+      },
+      "dsr": 0.4574,
+      "holdout": {
+        "trades": 656,
+        "win_rate": 47.71,
+        "expectancy_r": 0.0444,
+        "t_stat": 0.9461,
+        "profit_factor": 1.08,
+        "max_drawdown_r": 27.6044,
+        "max_drawdown_pct": 4.84,
+        "net_profit": 462.97,
+        "window": "2026-05-24 22:00:00+00:00 -> 2026-11-24 19:00:00+00:00"
+      },
+      "passes": true
+    }
+  ]
+}

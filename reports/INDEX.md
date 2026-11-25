@@ -5,6 +5,7 @@ Runtime inputs that must stay at their paths: `trade_quality_audit_365d.json` (h
 
 | Date | Report | Title | Status |
 |---|---|---|---|
+| 2026-11-25 | [ENGINE_SELECT_AUDIT_2026-11-25.md](ENGINE_SELECT_AUDIT_2026-11-25.md) | Audit + engine-in-the-loop per-symbol calibration, 6-month blind holdout — 2026-11-25 |  |
 | 2026-11-17 | [TRADE_STARVATION_ROOT_CAUSE_2026-11-17.md](TRADE_STARVATION_ROOT_CAUSE_2026-11-17.md) | Why so few trades, and would more trades make money? (2026-11-17) |  |
 | 2026-11-17 | [SMC_ENTRY_EXIT_RESEARCH_2026-11-17.md](SMC_ENTRY_EXIT_RESEARCH_2026-11-17.md) | SMC/ICT entry, multi-timeframe bias and regime-switched exits: research (2026-11-17) |  |
 | 2026-11-17 | [RANGE_AND_TRAILING_RESEARCH_2026-11-17.md](RANGE_AND_TRAILING_RESEARCH_2026-11-17.md) | Range S/R trading and the institutional trailing stop: research (2026-11-17) |  |

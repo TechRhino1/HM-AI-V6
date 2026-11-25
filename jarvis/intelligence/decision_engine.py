@@ -414,7 +414,7 @@ class DecisionEngine:
             # "or is_intraday" sent every D1-bull/H1-bear conflict into CASE A (BUY), while the
             # mirror conflict also landed in CASE A via the clause above -> a structural long lean.
             or (d1_anchor_bias == "BULLISH" and htf_bias != "BEARISH")
-            or (is_bull_regime and not (htf_bias == "BEARISH" and (d1_anchor_bias == "BEARISH" and not is_intraday)))
+            or (is_bull_regime and not (htf_bias == "BEARISH" and (d1_anchor_bias == "BEARISH" and not is_intraday) and trend_score < 30.0))
             or mtf_score >= 25.0
         ):
             # 0. Intermarket Crypto Lead-Lag Guard: Never buy ETH when ETH/BTC ratio is breaking down
@@ -442,14 +442,16 @@ class DecisionEngine:
             if dp_zone in ("DISCOUNT", "EQUILIBRIUM") and (has_bull_sweep or bull_votes >= 1 or is_bull_regime):
                 return "BUY"
             if ((htf_bias == "BULLISH" or d1_anchor_bias == "BULLISH") and (bull_votes >= 1 or not is_intraday)):
+                if is_bear_regime or trend_score <= -20.0:
+                    return "HOLD"
                 return "BUY"
             return "HOLD"
 
         # CASE B: Strong Bearish Macro / Structure / Regime
         elif (
-            (htf_bias == "BEARISH" and (d1_anchor_bias != "BULLISH" or is_intraday))
-            or (d1_anchor_bias == "BEARISH" and htf_bias != "BULLISH")
-            or (is_bear_regime and not (htf_bias == "BULLISH" and (d1_anchor_bias == "BULLISH" and not is_intraday)))
+            (htf_bias == "BEARISH" and (d1_anchor_bias != "BULLISH" or is_intraday) and not (is_bull_regime and trend_score >= 30.0))
+            or (d1_anchor_bias == "BEARISH" and htf_bias != "BULLISH" and not (is_bull_regime and trend_score >= 30.0))
+            or (is_bear_regime and not (htf_bias == "BULLISH" and (d1_anchor_bias == "BULLISH" and not is_intraday) and trend_score > -30.0))
             or mtf_score <= -25.0
         ):
             if bull_votes >= 3 and bull_votes > bear_votes and trend_score >= 0.0:
@@ -474,6 +476,8 @@ class DecisionEngine:
             if dp_zone in ("PREMIUM", "EQUILIBRIUM") and (has_bear_sweep or bear_votes >= 1 or is_bear_regime):
                 return "SELL"
             if ((htf_bias == "BEARISH" or d1_anchor_bias == "BEARISH") and (bear_votes >= 1 or not is_intraday)):
+                if is_bull_regime or trend_score >= 20.0:
+                    return "HOLD"
                 return "SELL"
             return "HOLD"
 
@@ -927,7 +931,14 @@ class DecisionEngine:
         mtf_counter_trend = False
         if tentative_bias == "BUY":
             d1_veto = (d1_anchor_bias == "BEARISH" and ("SWING" in t_style_check or mom_ts <= 0.0))
-            if macro_bias == "BEARISH" or (context_bias == "BEARISH" and mom_ts <= -15.0) or d1_veto or mom_ts <= -15.0:
+            # On strong intraday momentum breakout (Bullish BOS on execution timeframe, or trend_score >= 30),
+            # allow DAY_TRADING / SCALP buy even if lagging H4/D1 hasn't flipped yet
+            has_intraday_breakout = (
+                ("DAY" in t_style_check or "SCALP" in t_style_check)
+                and (getattr(context.structure, "bos_type", "") == "BULLISH" or getattr(context.structure, "choch_type", "") == "BULLISH" or mom_ts >= 30.0)
+                and context_bias in ("BULLISH", "NEUTRAL")
+            )
+            if (macro_bias == "BEARISH" and not has_intraday_breakout) or (context_bias == "BEARISH" and mom_ts <= -15.0) or (d1_veto and not has_intraday_breakout) or mom_ts <= -15.0:
                 if not is_validated_reversal:
                     mtf_counter_trend = True
         elif tentative_bias == "SELL":
@@ -1104,12 +1115,12 @@ class DecisionEngine:
                 if (macro_bias == "BEARISH" or d1_anchor_bias == "BEARISH") and not is_validated_reversal and ts <= -15.0:
                     gold_trend_following_valid = False
 
-            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK", "BREAKDOWN", "MOMENTUM_CONTINUATION", "STRUCTURE"):
+            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK", "BREAKDOWN", "MOMENTUM_CONTINUATION", "STRUCTURE", "BREAKOUT"):
                 if tentative_bias == "BUY":
-                    if not (sweep_confirmed or st_zone in ("DISCOUNT", "EQUILIBRIUM") or bos_active):
+                    if not (sweep_confirmed or st_zone in ("DISCOUNT", "EQUILIBRIUM") or bos_active or ts >= 35.0):
                         gold_trend_following_valid = False
                 elif tentative_bias == "SELL":
-                    has_gold_sell_confluence = (sweep_confirmed or st_zone in ("PREMIUM", "EQUILIBRIUM") or bos_active)
+                    has_gold_sell_confluence = (sweep_confirmed or st_zone in ("PREMIUM", "EQUILIBRIUM") or bos_active or ts <= -35.0)
                     if (macro_bias == "BULLISH" or d1_anchor_bias == "BULLISH") and not (sweep_confirmed or (bos_active and ts <= -10.0) or is_validated_reversal):
                         gold_trend_following_valid = False
                     elif not has_gold_sell_confluence:
@@ -2101,27 +2112,30 @@ class DecisionEngine:
             has_bull_choch = getattr(st, "choch_type", "") == "BULLISH"
             has_bear_choch = getattr(st, "choch_type", "") == "BEARISH"
             rsi_val_eval = getattr(context.momentum, "rsi", 50.0) if hasattr(context, "momentum") else 50.0
-            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT")
+            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "MOMENTUM_CONTINUATION")
             has_fvg_ob = bool(getattr(st, "fair_value_gaps", None) or getattr(st, "order_blocks", None))
-            strong_metals_trend = abs(trend_score_val) >= 50.0
+            strong_metals_trend = abs(trend_score_val) >= 45.0
+            has_breakout = best_strategy in ("BREAKOUT", "MOMENTUM_CONTINUATION") or getattr(st, "bos", False)
 
             if tentative_bias == "BUY":
                 if is_trend_pullback or strong_metals_trend or has_fvg_ob:
-                    if st.discount_premium_zone == "PREMIUM" or rsi_val_eval > 70.0:
+                    if (st.discount_premium_zone == "PREMIUM" and trend_score_val < 45.0 and not has_breakout) or rsi_val_eval > 78.0:
                         premium_discount_valid = False
                 else:
                     if st.discount_premium_zone != "DISCOUNT" and not has_bull_choch:
-                        premium_discount_valid = False
-                    elif st.discount_premium_zone == "PREMIUM" or rsi_val_eval > 70.0:
+                        if not (st.discount_premium_zone == "EQUILIBRIUM" or (trend_score_val >= 50.0 and rsi_val_eval <= 75.0)):
+                            premium_discount_valid = False
+                    elif (st.discount_premium_zone == "PREMIUM" and trend_score_val < 50.0) or rsi_val_eval > 78.0:
                         premium_discount_valid = False
             elif tentative_bias == "SELL":
                 if is_trend_pullback or strong_metals_trend or has_fvg_ob:
-                    if st.discount_premium_zone == "DISCOUNT" and rsi_val_eval < 30.0:
+                    if (st.discount_premium_zone == "DISCOUNT" and trend_score_val > -45.0 and not has_breakout) or rsi_val_eval < 22.0:
                         premium_discount_valid = False
                 else:
                     if st.discount_premium_zone != "PREMIUM" and not has_bear_choch:
-                        premium_discount_valid = False
-                    elif st.discount_premium_zone == "DISCOUNT" and rsi_val_eval < 30.0:
+                        if not (st.discount_premium_zone == "EQUILIBRIUM" or (trend_score_val <= -50.0 and rsi_val_eval >= 25.0)):
+                            premium_discount_valid = False
+                    elif (st.discount_premium_zone == "DISCOUNT" and trend_score_val > -50.0) or rsi_val_eval < 22.0:
                         premium_discount_valid = False
         else:
             if tentative_bias == "BUY" and st.discount_premium_zone == "PREMIUM" and trend_score_val < 50:

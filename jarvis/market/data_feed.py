@@ -134,6 +134,25 @@ def _is_weekend_gap(now_utc: float) -> bool:
     return False
 
 
+def _is_daily_rollover_gap(now_utc: float, offset_sec: int = 0) -> bool:
+    """True when broker clock sits in the weekday daily maintenance rollover pause (metals/forex).
+
+    XMGlobal and most MT5 brokers halt trading for daily rollover maintenance between
+    23:59 and 01:05 broker server time (~21:58 to 23:06 UTC for EET/UTC+2).
+    During this ~66-minute window on Monday-Friday nights, ticks are paused.
+    Bars legitimately freeze, so classifying them as STALE produces false alarms
+    and blocks the orchestrator.
+    """
+    broker_epoch = now_utc + float(offset_sec)
+    moment = datetime.fromtimestamp(broker_epoch, tz=timezone.utc)
+    weekday, hour, minute = moment.weekday(), moment.hour, moment.minute
+    # Weekdays: Mon=0 through Fri=4. (Friday after 21:00 UTC is handled by weekend gap)
+    if weekday in (0, 1, 2, 3, 4):
+        if (hour == 23 and minute >= 57) or (hour == 0) or (hour == 1 and minute < 6):
+            return True
+    return False
+
+
 def classify_bar_freshness(
     last_bar_epoch: Optional[float],
     timeframe: str,
@@ -183,7 +202,7 @@ def classify_bar_freshness(
     tol_threshold = max(bar_sec * tol, 360.0) if tf_upper == "M1" else (bar_sec * tol)
     if effective_age <= tol_threshold:
         return FRESH, age
-    if _is_weekend_gap(now):
+    if _is_weekend_gap(now) or _is_daily_rollover_gap(now, offset_sec=offset_sec):
         return MARKET_CLOSED, age
     return STALE, age
 

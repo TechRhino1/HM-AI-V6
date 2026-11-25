@@ -1378,9 +1378,23 @@ class PositionMonitorEngine:
                             elif pos.type == "SELL" and (new_sl == 0 or cushion_sl < new_sl) and cushion_sl > c_price:
                                 new_sl = cushion_sl
                                 actions.append(f"PARTIAL_DERISK_SL@{new_sl:.4f}")
-                    # else: unsplittable at the broker min lot. Do NOT mark the partial taken:
-                    # evaluate_exit (partial_executable=False) then applies its fallback stop-lock,
-                    # which marking it "taken" used to suppress (neither partial nor lock happened).
+                    else:
+                        # Unsplittable at broker min lot (e.g. 0.01 lot position).
+                        # Synthetic profit lock: ratchet SL to lock +0.20R cushion (or breakeven + buffer)
+                        # so gains at TP1/Fast-cash R do not round-trip back into a full loss.
+                        cushion_dist = risk_dist_init * 0.20
+                        synth_sl = round(
+                            pos.open_price + cushion_dist if pos.type == "BUY" else pos.open_price - cushion_dist,
+                            digits,
+                        )
+                        if pos.type == "BUY" and synth_sl > new_sl and synth_sl < c_price:
+                            new_sl = synth_sl
+                            actions.append(f"SYNTH_PROFIT_LOCK_SL@{new_sl:.4f}")
+                            self._partially_closed_tickets.add(pos.ticket)
+                        elif pos.type == "SELL" and (new_sl == 0 or synth_sl < new_sl) and synth_sl > c_price:
+                            new_sl = synth_sl
+                            actions.append(f"SYNTH_PROFIT_LOCK_SL@{new_sl:.4f}")
+                            self._partially_closed_tickets.add(pos.ticket)
 
             # ── 1.5 Adversarial Order Flow Shield (Suppressed in Grace Period) ────
             # The institutional lock (trading.exit_mode) manages the stop by one measured rule only.
