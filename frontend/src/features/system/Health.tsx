@@ -8,15 +8,19 @@ interface Advisory { ts: string; recommendations: { area: string; finding: strin
 interface MonitorResp {
   monitor: { status?: Level; checked_at?: string; checks?: Record<string, Check> };
   advisory?: Advisory | null;
+  monitor_actions?: MonitorAction[];
   config: { verifier: Record<string, unknown>; gates: Record<string, unknown>; forward_tests: Record<string, unknown> };
 }
+interface MonitorAction { ts: string; ticket: number; symbol: string; side: string; rule: string; action: string;
+  status: string; detail?: string; old_sl?: number | null; new_sl?: number | null; reason?: string }
 interface VerifierRow { ts: string; symbol: string; side: string; origin: string; outcome: string; ms: number; mode: string;
   reasons: { rule: string; ok: boolean; detail?: string }[] }
 
 const TONE: Record<Level, "up" | "warn" | "down"> = { OK: "up", WARN: "warn", CRITICAL: "down" };
 const LABEL: Record<string, string> = {
   loop_heartbeat: "Orchestration loop", position_monitor: "Position monitor (open trades)", no_trade: "Order flow", rejection_spike: "Rejection rate",
-  analyst_fallbacks: "Analyst fallbacks", verifier_health: "Pre-send verifier", forward_test_exposure: "Forward-test exposure",
+  analyst_fallbacks: "Analyst fallbacks", currency_exposure: "Correlated currency risk",
+  stops_and_gap_risk: "Broker stops & gap risk", verifier_health: "Pre-send verifier", forward_test_exposure: "Forward-test exposure",
 };
 const OUTCOME_TONE: Record<string, "up" | "warn" | "down" | "flat"> = {
   APPROVED: "up", REJECTED: "warn", NEEDS_ANALYSIS: "flat", BLOCKED_RISK: "down",
@@ -65,6 +69,26 @@ export function Health() {
                   <td><Badge tone={OUTCOME_TONE[r.outcome] || "flat"}>{r.outcome.toLowerCase().replace("_", " ")}</Badge></td>
                   <td>{r.reasons.filter((x) => !x.ok).map((x) => `${x.rule}: ${x.detail ?? ""}`).join("; ") || "—"}</td>
                   <td className="num">{fixed(r.ms, 1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title="Position monitor actions" sub="Every stop/target change and close on open trades, plus SHADOW verdicts from layers that only record until the replay proves them.">
+        {!mon.data?.monitor_actions?.length ? <Empty title="No monitor actions yet" /> : (
+          <table className="table">
+            <thead><tr><th>When</th><th>Position</th><th>Rule</th><th>Action</th><th>Status</th><th>Detail</th></tr></thead>
+            <tbody>
+              {mon.data.monitor_actions.map((a, i) => (
+                <tr key={i}>
+                  <td>{ago(a.ts)}</td>
+                  <td>#{a.ticket} {a.symbol} {a.side}</td>
+                  <td>{a.rule}</td>
+                  <td>{a.action}</td>
+                  <td><Badge tone={a.status === "SHADOW" ? "warn" : a.status === "MODIFIED" || a.status === "ENFORCE" ? "up" : "flat"}>{String(a.status || "").toLowerCase()}</Badge></td>
+                  <td>{a.new_sl != null ? `SL ${a.old_sl ?? "—"} → ${a.new_sl}` : a.detail || ""}{a.reason ? ` (${a.reason})` : ""}</td>
                 </tr>
               ))}
             </tbody>

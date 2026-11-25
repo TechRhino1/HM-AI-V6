@@ -715,7 +715,7 @@ class JarvisOrchestrator:
             return None
         st = pm.get_status()
         return {k: st.get(k) for k in ("running", "thread_alive", "last_tick_at", "tick_errors",
-                                       "last_tick_error", "monitored_symbols")}
+                                       "last_tick_error", "last_tick_ms", "monitored_symbols")}
 
     def _run_system_monitor(self, now: float) -> None:
         """Evaluate the monitor checks into ``self.monitor_state`` (served by /api/monitor)."""

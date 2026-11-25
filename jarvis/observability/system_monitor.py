@@ -50,6 +50,81 @@ def check_position_monitor(now: float, status: Optional[Dict[str, Any]], open_po
                       + (f" (last: {status.get('last_tick_error')})" if errs else "")}
 
 
+def _legs(symbol: str):
+    """Currency legs of a symbol: (base, quote). Non-FX instruments map to (symbol, USD)."""
+    try:
+        from jarvis.data.symbol_registry import resolve
+        canon = resolve(symbol).canonical.upper()
+    except Exception:
+        canon = str(symbol).upper()
+    if len(canon) == 6 and canon.isalpha():
+        return canon[:3], canon[3:]
+    return canon, "USD"
+
+
+def position_risk_usd(p: Any) -> float:
+    from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit
+    sl = float(getattr(p, "sl", 0.0) or 0.0)
+    if sl <= 0:
+        return 0.0
+    dist = (p.open_price - sl) if str(p.type).upper() == "BUY" else (sl - p.open_price)
+    return max(0.0, dist) * float(p.volume) * get_dollar_risk_per_price_unit(p.symbol)
+
+
+def currency_exposure(positions: Iterable[Any]) -> Dict[str, Dict[str, float]]:
+    """Risk-to-stop per currency and direction across ALL open positions (bot + FT + manual).
+    A BUY is long the base / short the quote; same-direction risk on a currency adds up."""
+    out: Dict[str, Dict[str, float]] = {}
+    for p in positions:
+        risk = position_risk_usd(p)
+        if risk <= 0:
+            continue
+        base, quote = _legs(p.symbol)
+        buy = str(p.type).upper() == "BUY"
+        for ccy, side in ((base, "long" if buy else "short"), (quote, "short" if buy else "long")):
+            row = out.setdefault(ccy, {"long": 0.0, "short": 0.0})
+            row[side] += risk
+    return out
+
+
+def check_currency_exposure(positions: Iterable[Any], equity: float, cap_pct: float) -> Dict[str, Any]:
+    exp = currency_exposure(positions)
+    if equity <= 0 or not exp:
+        return {"status": OK, "value": 0.0, "threshold": cap_pct, "detail": "no open risk", "currencies": {}}
+    worst_ccy, worst = None, 0.0
+    for ccy, row in exp.items():
+        directional = max(row["long"], row["short"])
+        if directional > worst:
+            worst_ccy, worst = ccy, directional
+    pct = worst / equity * 100.0
+    side = "long" if exp[worst_ccy]["long"] >= exp[worst_ccy]["short"] else "short"
+    return {"status": WARN if pct > cap_pct else OK, "value": round(pct, 2), "threshold": cap_pct,
+            "detail": f"largest same-direction currency risk: {side} {worst_ccy} ${worst:.2f} ({pct:.2f}% of equity)",
+            "currencies": {c: {k: round(v, 2) for k, v in r.items()} for c, r in exp.items()}}
+
+
+def check_stops_and_gap(positions: Iterable[Any], equity: float, now: float) -> Dict[str, Any]:
+    """Any open position without a broker stop is CRITICAL. Also reports the gap-adjusted
+    worst case: from Friday 20:00 UTC non-crypto stops are assumed to gap to 3x distance."""
+    from jarvis.data.symbol_registry import resolve
+    positions = list(positions)
+    naked = [p.ticket for p in positions if float(getattr(p, "sl", 0.0) or 0.0) <= 0]
+    moment = datetime.fromtimestamp(now, timezone.utc)
+    weekend_risk = moment.weekday() == 4 and moment.hour >= 20 or moment.weekday() in (5, 6)
+    worst = 0.0
+    for p in positions:
+        r = position_risk_usd(p)
+        try:
+            crypto = bool(getattr(resolve(p.symbol), "is_crypto", False))
+        except Exception:
+            crypto = False
+        worst += r * (3.0 if weekend_risk and not crypto else 1.0)
+    pct = worst / equity * 100.0 if equity > 0 else 0.0
+    return {"status": CRITICAL if naked else OK, "value": round(pct, 2), "threshold": None,
+            "detail": (f"{len(naked)} position(s) WITHOUT a broker stop: {naked}; " if naked else "all positions have a broker stop; ")
+            + f"worst case to stops {'(gap-adjusted x3) ' if weekend_risk else ''}${worst:.2f} ({pct:.2f}% of equity)"}
+
+
 def check_no_trade(now: float, rows: List[Dict[str, Any]], last_send: float, cfg: Any) -> Dict[str, Any]:
     horizon = cfg.no_trade_hours * 3600.0
     idle = now - last_send if last_send else None
@@ -120,6 +195,8 @@ def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last
         "analyst_fallbacks": check_rate("analyst fallbacks per evaluation", fallbacks, evaluations, cfg.fallback_rate_warn),
         "verifier_health": check_verifier(verifications, cfg),
         "forward_test_exposure": check_forward_exposure(positions, equity, max_portfolio_risk_pct, cfg),
+        "currency_exposure": check_currency_exposure(positions, equity, max_portfolio_risk_pct),
+        "stops_and_gap_risk": check_stops_and_gap(positions, equity, now),
     }
     worst = CRITICAL if any(c["status"] == CRITICAL for c in checks.values()) else (
         WARN if any(c["status"] == WARN for c in checks.values()) else OK)

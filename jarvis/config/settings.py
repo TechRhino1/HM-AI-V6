@@ -179,6 +179,20 @@ class MonitorSettings:
 
 
 @dataclass
+class MonitorLayerSettings:
+    """Unproven position-monitor exits (off | shadow | enforce). shadow = record the
+    "would have" action, do nothing. Re-enable only after the M1 replay proves a layer
+    (EXIT_LOCK_RESEARCH 2026-11-24: the extra layers cost ~40R; NEWS N2 rejected
+    pre-release de-risking). The crypto hold list is exempt from all of them."""
+    news_floor: str = "shadow"
+    news_bank: str = "shadow"
+    weekend_floor: str = "shadow"
+    weekend_bank: str = "shadow"
+    tp_zone_harvest: str = "shadow"
+    scalp_stagnation: str = "shadow"
+
+
+@dataclass
 class ForwardTestSettings:
     # Forward tests pass the shared hard risk gates and count toward symbol caps.
     gated: bool = True
@@ -229,7 +243,7 @@ def _load_section(obj: Any, section: str, data: Dict[str, Any]) -> None:
                     continue
             else:
                 val = str(raw).strip().lower()
-                if key.endswith("mode") and val not in GATE_MODES:
+                if (key.endswith("mode") or section == "monitor_layers") and val not in GATE_MODES:
                     logger.warning(f"Ignoring invalid {section}.{key}={raw!r} (allowed {GATE_MODES})")
                     continue
             setattr(obj, key, val)
@@ -248,6 +262,7 @@ class JarvisConfig:
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
     forward_tests: ForwardTestSettings = field(default_factory=ForwardTestSettings)
     governance: GovernanceSettings = field(default_factory=GovernanceSettings)
+    monitor_layers: MonitorLayerSettings = field(default_factory=MonitorLayerSettings)
 
     @classmethod
     def load(cls) -> "JarvisConfig":
@@ -349,7 +364,7 @@ class JarvisConfig:
                             setattr(cfg.trading, _qk, _qcast(t_data[_qk]))
                         except (TypeError, ValueError) as exc:
                             logger.warning(f"Ignoring invalid {_qk}={t_data[_qk]!r}: {exc}")
-                for _section in ("gates", "verifier", "monitor", "forward_tests", "governance"):
+                for _section in ("gates", "verifier", "monitor", "forward_tests", "governance", "monitor_layers"):
                     _sec = data.get(_section, {})
                     if isinstance(_sec, dict):
                         _load_section(getattr(cfg, _section), _section, _sec)
