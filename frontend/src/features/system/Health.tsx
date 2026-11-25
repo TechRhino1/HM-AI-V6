@@ -15,7 +15,7 @@ interface VerifierRow { ts: string; symbol: string; side: string; origin: string
 
 const TONE: Record<Level, "up" | "warn" | "down"> = { OK: "up", WARN: "warn", CRITICAL: "down" };
 const LABEL: Record<string, string> = {
-  loop_heartbeat: "Orchestration loop", no_trade: "Order flow", rejection_spike: "Rejection rate",
+  loop_heartbeat: "Orchestration loop", position_monitor: "Position monitor (open trades)", no_trade: "Order flow", rejection_spike: "Rejection rate",
   analyst_fallbacks: "Analyst fallbacks", verifier_health: "Pre-send verifier", forward_test_exposure: "Forward-test exposure",
 };
 const OUTCOME_TONE: Record<string, "up" | "warn" | "down" | "flat"> = {

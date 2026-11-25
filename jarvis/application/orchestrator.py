@@ -708,6 +708,15 @@ class JarvisOrchestrator:
 
             time.sleep(10.0)
 
+    def _position_monitor_status(self) -> Optional[Dict[str, Any]]:
+        """Heartbeat fields of the position monitor (without its per-ticket maps)."""
+        pm = getattr(self, "position_monitor", None)
+        if pm is None or not hasattr(pm, "get_status"):
+            return None
+        st = pm.get_status()
+        return {k: st.get(k) for k in ("running", "thread_alive", "last_tick_at", "tick_errors",
+                                       "last_tick_error", "monitored_symbols")}
+
     def _run_system_monitor(self, now: float) -> None:
         """Evaluate the monitor checks into ``self.monitor_state`` (served by /api/monitor)."""
         try:
@@ -727,7 +736,9 @@ class JarvisOrchestrator:
                 max_portfolio_risk_pct=float(SETTINGS.risk.max_portfolio_risk_pct),
                 fallbacks=_sm.counter_total(ANALYST_FALLBACKS),
                 evaluations=_sm.counter_total(DECISION_EVALUATIONS),
-                cfg=SETTINGS.monitor)
+                cfg=SETTINGS.monitor,
+                position_monitor=self._position_monitor_status(),
+                has_position_monitor=getattr(self, "position_monitor", None) is not None)
             # Advisory AI review of the same evidence (async, recommendations only).
             from collections import Counter as _C
             gate_stats = dict(_C(r.get("blocked_by") for r in rows if r.get("blocked_by")).most_common(15))

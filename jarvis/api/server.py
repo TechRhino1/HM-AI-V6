@@ -2022,6 +2022,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             llm = getattr(orch, "llm_controller", None)
             self._send_json({
                 "monitor": getattr(orch, "monitor_state", {}) or {},
+                "position_monitor": (orch._position_monitor_status()
+                                     if hasattr(orch, "_position_monitor_status") else None),
                 "advisory": getattr(llm, "last_advisory", None),
                 "config": {"verifier": asdict(SETTINGS.verifier), "gates": asdict(SETTINGS.gates),
                            "forward_tests": asdict(SETTINGS.forward_tests)},

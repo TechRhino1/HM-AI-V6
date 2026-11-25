@@ -75,6 +75,10 @@ User decisions:
   - forward-test exposure as a share of the risk budget.
 
   Results go through debounced `dispatch_alert`. `/health` and `/ready` return 503 on a stalled loop.
+- **Position-monitor heartbeat** (added after a live check found no proof-of-life for the 2 s position manager, which is silent while idle):
+  - `PositionMonitorEngine` records `last_tick_at` / `tick_errors` every tick, even when the tick raises.
+  - The watchdog reports CRITICAL if the thread is dead or hasn't ticked for `monitor.position_monitor_stall_s` (30 s), and WARN on tick errors or when there are open trades with no monitor.
+  - The status is shown in `/api/monitor` and in System → Health.
 - **Advisory.** `llm_controller.review_operations`: hourly, background, reuses the governor provider and backoff. It writes `data/advisories/*.jsonl`, which nothing on the trading path reads, and does nothing without a provider.
 
 ## 5. Governance

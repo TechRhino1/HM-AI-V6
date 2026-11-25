@@ -165,6 +165,10 @@ class PositionMonitorEngine:
 
         self._running       = False
         self._thread: Optional[threading.Thread] = None
+        # Proof of life: the monitor logs nothing while idle, so the watchdog reads these.
+        self.last_tick_at: float = 0.0
+        self.tick_errors: int = 0
+        self.last_tick_error: str = ""
 
         # Per-symbol context cache  {symbol: (context, fetched_at)}
         self._ctx_cache: Dict[str, tuple] = {}
@@ -291,7 +295,10 @@ class PositionMonitorEngine:
             try:
                 self._run_monitor_tick()
             except Exception as e:
+                self.tick_errors += 1
+                self.last_tick_error = f"{type(e).__name__}: {e}"[:200]
                 logger.error(f"PositionMonitor tick error: {e}", exc_info=True)
+            self.last_tick_at = time.time()  # a completed tick, ok or not
             elapsed = time.monotonic() - start
             sleep_time = max(0.0, MONITOR_INTERVAL_SEC - elapsed)
             time.sleep(sleep_time)
@@ -2725,6 +2732,10 @@ class PositionMonitorEngine:
     def get_status(self) -> Dict[str, Any]:
         return {
             "running": self._running,
+            "thread_alive": bool(self._thread and self._thread.is_alive()),
+            "last_tick_at": self.last_tick_at,
+            "tick_errors": self.tick_errors,
+            "last_tick_error": self.last_tick_error,
             "monitored_symbols": list(self._ctx_cache.keys()),
             "last_actions": dict(self._last_action),
             "milestones": dict(self._position_milestones),

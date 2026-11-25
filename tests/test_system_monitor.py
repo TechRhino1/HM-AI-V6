@@ -76,3 +76,45 @@ def test_advisory_needs_a_provider_and_respects_backoff_and_interval():
         assert ctl.review_operations({"checks": {}}, {"X": 1}) is True
         assert ctl.review_operations({"checks": {}}, {"X": 1}) is False  # hourly at most
     th.return_value.start.assert_called_once()
+
+
+def _pm(**kw):
+    base = {"running": True, "thread_alive": True, "last_tick_at": NOW - 2, "tick_errors": 0, "last_tick_error": ""}
+    base.update(kw)
+    return base
+
+
+def test_position_monitor_heartbeat_states():
+    assert sm.check_position_monitor(NOW, _pm(), 6, CFG)["status"] == sm.OK
+    assert sm.check_position_monitor(NOW, _pm(last_tick_at=NOW - 300), 6, CFG)["status"] == sm.CRITICAL
+    assert sm.check_position_monitor(NOW, _pm(thread_alive=False), 6, CFG)["status"] == sm.CRITICAL
+    assert sm.check_position_monitor(NOW, _pm(last_tick_at=0.0), 6, CFG)["status"] == sm.CRITICAL
+    out = sm.check_position_monitor(NOW, _pm(tick_errors=3, last_tick_error="KeyError: x"), 6, CFG)
+    assert out["status"] == sm.WARN and "KeyError" in out["detail"]
+    assert sm.check_position_monitor(NOW, None, 6, CFG)["status"] == sm.WARN   # open trades, no monitor
+    assert sm.check_position_monitor(NOW, None, 0, CFG)["status"] == sm.OK
+
+
+def test_monitor_loop_records_a_heartbeat_even_when_a_tick_raises():
+    from jarvis.execution.position_monitor import PositionMonitorEngine
+    pm = object.__new__(PositionMonitorEngine)
+    pm.last_tick_at, pm.tick_errors, pm.last_tick_error = 0.0, 0, ""
+    pm._running = True
+
+    def boom():
+        pm._running = False  # one iteration
+        raise RuntimeError("broker hiccup")
+
+    pm._run_monitor_tick = boom
+    with patch("time.sleep"):
+        pm._monitor_loop()
+    assert pm.last_tick_at > 0 and pm.tick_errors == 1 and "broker hiccup" in pm.last_tick_error
+
+
+def test_run_checks_includes_the_position_monitor():
+    out = sm.run_checks(now=NOW, heartbeat=NOW - 5, rows=[], last_send=NOW - 60, verifications=[],
+                        positions=[SimpleNamespace(symbol="EURUSD", type="SELL", volume=0.01, open_price=1.1,
+                                                   sl=1.11, comment="")],
+                        equity=1000.0, max_portfolio_risk_pct=2.5, fallbacks=0, evaluations=10, cfg=CFG,
+                        alert=False, position_monitor=_pm(thread_alive=False))
+    assert out["checks"]["position_monitor"]["status"] == sm.CRITICAL and out["status"] == sm.CRITICAL

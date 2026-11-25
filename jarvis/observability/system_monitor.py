@@ -28,6 +28,28 @@ def check_loop(now: float, heartbeat: float, cfg: Any) -> Dict[str, Any]:
             "detail": "orchestration loop heartbeat age (s)"}
 
 
+def check_position_monitor(now: float, status: Optional[Dict[str, Any]], open_positions: int,
+                           cfg: Any) -> Dict[str, Any]:
+    """Is the 2-second position manager alive? It is silent while idle, so check its heartbeat."""
+    if status is None:
+        return {"status": WARN if open_positions else OK, "value": None, "threshold": None,
+                "detail": "position monitor not running (orchestrator inline trailing only)"
+                          + (f"; {open_positions} open position(s)" if open_positions else "")}
+    if not status.get("running") or not status.get("thread_alive"):
+        return {"status": CRITICAL, "value": None, "threshold": None,
+                "detail": "position monitor thread is not running: open trades are not being managed"}
+    last = float(status.get("last_tick_at") or 0.0)
+    age = now - last if last else None
+    if age is None or age > cfg.position_monitor_stall_s:
+        return {"status": CRITICAL, "value": None if age is None else round(age, 1),
+                "threshold": cfg.position_monitor_stall_s,
+                "detail": "position monitor has not completed a tick" + ("" if age is None else f" for {age:.0f}s")}
+    errs = int(status.get("tick_errors") or 0)
+    return {"status": WARN if errs else OK, "value": round(age, 1), "threshold": cfg.position_monitor_stall_s,
+            "detail": f"last tick {age:.0f}s ago; {errs} tick error(s) since start"
+                      + (f" (last: {status.get('last_tick_error')})" if errs else "")}
+
+
 def check_no_trade(now: float, rows: List[Dict[str, Any]], last_send: float, cfg: Any) -> Dict[str, Any]:
     horizon = cfg.no_trade_hours * 3600.0
     idle = now - last_send if last_send else None
@@ -86,9 +108,13 @@ def check_forward_exposure(positions: Iterable[Any], equity: float, max_portfoli
 def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last_send: float,
                verifications: Iterable[Dict[str, Any]], positions: Iterable[Any], equity: float,
                max_portfolio_risk_pct: float, fallbacks: float, evaluations: float, cfg: Any,
-               alert: bool = True) -> Dict[str, Any]:
+               alert: bool = True, position_monitor: Optional[Dict[str, Any]] = None,
+               has_position_monitor: bool = True) -> Dict[str, Any]:
+    positions = list(positions)
     checks = {
         "loop_heartbeat": check_loop(now, heartbeat, cfg),
+        "position_monitor": check_position_monitor(now, position_monitor if has_position_monitor else None,
+                                                   len(positions), cfg),
         "no_trade": check_no_trade(now, rows, last_send, cfg),
         "rejection_spike": check_reject_spike(now, rows, cfg),
         "analyst_fallbacks": check_rate("analyst fallbacks per evaluation", fallbacks, evaluations, cfg.fallback_rate_warn),

@@ -169,6 +169,8 @@ class VerifierSettings:
 @dataclass
 class MonitorSettings:
     loop_stall_s: float = 180.0
+    # Position monitor ticks every 2 s; this long without a tick means management stopped.
+    position_monitor_stall_s: float = 30.0
     no_trade_hours: float = 8.0
     reject_spike_factor: float = 3.0
     fallback_rate_warn: float = 0.25
@@ -200,6 +202,7 @@ _BOUNDS = {
     ("verifier", "conflict_window_s"): (0.0, 86400.0),
     ("verifier", "max_tick_age_s"): (5.0, 3600.0),
     ("monitor", "loop_stall_s"): (30.0, 3600.0),
+    ("monitor", "position_monitor_stall_s"): (6.0, 600.0),
     ("monitor", "no_trade_hours"): (1.0, 168.0),
     ("monitor", "reject_spike_factor"): (1.5, 20.0),
     ("monitor", "fallback_rate_warn"): (0.01, 1.0),
