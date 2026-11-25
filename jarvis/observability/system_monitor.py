@@ -180,11 +180,44 @@ def check_forward_exposure(positions: Iterable[Any], equity: float, max_portfoli
             "detail": f"forward-test open risk ${risk:.2f} as % of the portfolio risk budget"}
 
 
+def check_live_drift(live_r: Optional[Dict[str, List[float]]], profiles: Optional[Dict[str, Any]],
+                     quarantine_r: float = -0.15, min_n: int = 20) -> Dict[str, Any]:
+    """Live realised R per symbol vs the calibrated out-of-sample expectancy it was deployed on.
+
+    WARN when the live mean sits more than 2 standard errors below the profile's OOS figure;
+    CRITICAL when it is also below the quarantine bar. ``live_r`` is {symbol: [R, ...]}."""
+    if not live_r or not profiles:
+        return {"status": OK, "detail": "no live closes or calibrated profiles to compare", "symbols": {}}
+    out: Dict[str, Any] = {}
+    worst = OK
+    for sym, rs in live_r.items():
+        prof = profiles.get(sym)
+        if prof is None or len(rs) < min_n:
+            continue
+        n = len(rs)
+        mean = sum(rs) / n
+        sd = (sum((r - mean) ** 2 for r in rs) / (n - 1)) ** 0.5
+        se = sd / n ** 0.5
+        oos = float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
+        st = OK
+        if mean < oos - 2.0 * se:
+            st = CRITICAL if mean < quarantine_r else WARN
+        out[sym] = {"status": st, "n": n, "live_r": round(mean, 3), "se": round(se, 3), "oos_r": round(oos, 3)}
+        if st == CRITICAL or (st == WARN and worst == OK):
+            worst = st
+    bad = {k: v for k, v in out.items() if v["status"] != OK}
+    detail = ("live expectancy below calibration: " + ", ".join(
+        f"{k} {v['live_r']:+.2f}R vs OOS {v['oos_r']:+.2f}R (n={v['n']})" for k, v in bad.items())
+              if bad else f"{len(out)} symbol(s) within 2 SE of their calibrated expectancy")
+    return {"status": worst, "detail": detail, "symbols": out}
+
+
 def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last_send: float,
                verifications: Iterable[Dict[str, Any]], positions: Iterable[Any], equity: float,
                max_portfolio_risk_pct: float, fallbacks: float, evaluations: float, cfg: Any,
                alert: bool = True, position_monitor: Optional[Dict[str, Any]] = None,
-               has_position_monitor: bool = True) -> Dict[str, Any]:
+               has_position_monitor: bool = True, live_r: Optional[Dict[str, List[float]]] = None,
+               profiles: Optional[Dict[str, Any]] = None, quarantine_r: float = -0.15) -> Dict[str, Any]:
     positions = list(positions)
     checks = {
         "loop_heartbeat": check_loop(now, heartbeat, cfg),
@@ -197,6 +230,7 @@ def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last
         "forward_test_exposure": check_forward_exposure(positions, equity, max_portfolio_risk_pct, cfg),
         "currency_exposure": check_currency_exposure(positions, equity, max_portfolio_risk_pct),
         "stops_and_gap_risk": check_stops_and_gap(positions, equity, now),
+        "live_vs_calibrated": check_live_drift(live_r, profiles, quarantine_r),
     }
     worst = CRITICAL if any(c["status"] == CRITICAL for c in checks.values()) else (
         WARN if any(c["status"] == WARN for c in checks.values()) else OK)

@@ -417,6 +417,9 @@ class ExecutionEngine:
         if _fixed_r and planned_sl_dist > 0 and decision.bias in ("BUY", "SELL"):
             decision.take_profit = decision.entry_price + (1 if decision.bias == "BUY" else -1) * _fixed_r * planned_sl_dist
             decision.risk_reward_ratio = _fixed_r
+            # Keep the distances in sync, or the post-fill re-anchor restores the pre-rewrite TP.
+            decision.sl_distance = planned_sl_dist
+            decision.tp_distance = _fixed_r * planned_sl_dist
         executable_tp_dist = abs(decision.take_profit - decision.entry_price) if decision.take_profit > 0 else 0.0
 
 

@@ -117,3 +117,28 @@ class TestDecisionObjectSchema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_purged_kfold_embargoes_training_on_both_sides_of_the_test_block():
+    """2026-11-26 gold audit: train ran right up to the test start, so trade labels leaked in."""
+    from jarvis.learning.walk_forward import PurgedKFold
+    kf = PurgedKFold(n_splits=5, embargo_frac=0.1)  # fold 100, embargo 10
+    for tr, te in kf.split(500):
+        if te[0] > 0:
+            assert not set(range(te[0] - 10, te[0])) & set(tr)
+        assert not set(range(te[-1] + 1, te[-1] + 11)) & set(tr)
+
+
+def test_threshold_optimize_sees_probabilities_not_outcomes():
+    import numpy as np
+    from jarvis.learning.walk_forward import threshold_optimize
+    y = np.array([1, 0, 1, 0, 1, 1, 0, 1])
+    probs = np.array([0.9, 0.2, 0.8, 0.3, 0.7, 0.6, 0.4, 0.9])
+    seen = []
+
+    def decide(thr, p):
+        seen.append(p)
+        return np.where(p >= thr, 1.0, 0.0)
+
+    threshold_optimize([0.5], decide, y, probs, min_precision=0.0)
+    assert seen[0] is probs

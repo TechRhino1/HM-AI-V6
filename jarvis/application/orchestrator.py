@@ -42,7 +42,7 @@ from jarvis.risk.account_tier import get_max_lot_cap
 from jarvis.config.settings import verify_execution_mode, SETTINGS
 from jarvis.config.paths import mode_scoped_db_path
 from jarvis.market.sessions import SessionEngine
-from jarvis.execution.entry_policy import evaluate_entry
+from jarvis.execution.entry_policy import EntryDecision, evaluate_entry
 from jarvis.intelligence.gate_policy import canonical_gate
 from jarvis.intelligence.opportunity_arbiter import (is_exec_ready as _is_exec_ready,
                                                      unsoftened_failure_count as _unsoftened_failure_count)
@@ -720,6 +720,18 @@ class JarvisOrchestrator:
         return {k: st.get(k) for k in ("running", "thread_alive", "last_tick_at", "tick_errors",
                                        "last_tick_error", "last_tick_ms", "monitored_symbols")}
 
+    def _live_drift_inputs(self) -> Dict[str, Any]:
+        """Live R per symbol (all strategies pooled) and the calibrated profiles it is judged against."""
+        try:
+            from jarvis.execution import strategy_quarantine as _sq
+            details = _sq._load_full(None, self.mode)[1]
+            live_r = {sym: rs for (sym, strat), rs in details.items() if strat == _sq.SYMBOL_POOL}
+            return {"live_r": live_r, "profiles": dict(getattr(self, "_wr_profiles", None) or {}),
+                    "quarantine_r": _sq._cfg_threshold()}
+        except Exception as exc:
+            logger.debug("live drift inputs unavailable: %s", exc)
+            return {}
+
     def _run_system_monitor(self, now: float) -> None:
         """Evaluate the monitor checks into ``self.monitor_state`` (served by /api/monitor)."""
         try:
@@ -741,7 +753,8 @@ class JarvisOrchestrator:
                 evaluations=_sm.counter_total(DECISION_EVALUATIONS),
                 cfg=SETTINGS.monitor,
                 position_monitor=self._position_monitor_status(),
-                has_position_monitor=getattr(self, "position_monitor", None) is not None)
+                has_position_monitor=getattr(self, "position_monitor", None) is not None,
+                **self._live_drift_inputs())
             # Advisory AI review of the same evidence (async, recommendations only).
             from collections import Counter as _C
             gate_stats = dict(_C(r.get("blocked_by") for r in rows if r.get("blocked_by")).most_common(15))
@@ -1341,8 +1354,9 @@ class JarvisOrchestrator:
             st = expectancy_state(_resolve_sym(symbol).canonical, strat, execution_mode=self.mode)
             if st.get("quarantined"):
                 return f"STRATEGY_QUARANTINE: {strat} n={st['n']} exp={float(st['expectancy_r']):+.2f}R"
-        except Exception as exc:  # fails open like the module itself: other governors still apply
-            logger.debug("Strategy quarantine check failed for %s: %s", symbol, exc)
+        except Exception as exc:  # fail closed: an unverifiable ledger is not a clean bill
+            logger.warning("Strategy quarantine check failed for %s: %s", symbol, exc)
+            return f"STRATEGY_QUARANTINE: check failed ({type(exc).__name__})"
         return ""
 
     def _dispatch_vetoes(self, symbol, prof, profile_lookup_failed, is_session_blackout,
@@ -1517,6 +1531,12 @@ class JarvisOrchestrator:
         # model_confidence). max(confidence, ai_score/100) was looser than anything validated.
         attr = _CALIBRATED_SCORE_ATTR.get(getattr(profile, "score_col", "score"), "model_confidence")
         score_val = float(getattr(decision, attr, 0.0) or 0.0)
+        # Same verdict as the risk engine (holdout included), so the route never says PASS
+        # for a symbol authorize_execution will refuse.
+        from jarvis.backtesting.exit_geometry import deployment_refusal
+        refusal = deployment_refusal(symbol)
+        if refusal:
+            return EntryDecision(allowed=False, reason=refusal, score=score_val, regime=regime_name)
         return evaluate_entry(
             quality_gate=getattr(decision, "quality_gate", None),
             score=score_val,
@@ -2248,7 +2268,7 @@ class JarvisOrchestrator:
             try:
                 _p_window = getattr(_prof, "allowed_utc_hours", None)
                 _raw_p_floor = float(getattr(_prof, "premium_out_of_window_min_ai_score", 0.0) or 0.0)
-                _p_floor = min(_raw_p_floor, 68.0) if _raw_p_floor > 0 else 65.0
+                _p_floor = _raw_p_floor if _raw_p_floor > 0 else 65.0  # the profile's floor (gold 85), never clamped down
                 _now_h = datetime.now(timezone.utc).hour
                 _in_window = bool(_p_window and _p_window[0] <= _now_h < _p_window[1])
                 _p_score = float(getattr(decision, "ai_score", 0.0) or 0.0)
@@ -2277,7 +2297,10 @@ class JarvisOrchestrator:
                             symbol, _post_cap, _p_score, _p_floor,
                         )
             except Exception as _cap_exc:
-                logger.debug("premium cap gate failed open: %s", _cap_exc)
+                # Fail closed: an unverifiable daily cap must not grant an extra entry.
+                _premium_offwindow_elite = False
+                _premium_cap_refused = True
+                logger.warning("premium cap gate failed closed: %s", _cap_exc)
 
         # ── Institutional Stop-and-Reverse (SAR) / Position Flip Protocol ───────
         if not dry_run and wants_entry and decision.decision == "EXECUTE":
@@ -2346,7 +2369,7 @@ class JarvisOrchestrator:
             decision.decision = "WAIT"
             decision.execution_authorized = False
             auth_res = {"authorized": False, "reason": f"PENDING_ORDER_EXISTS: Symbol {symbol} already has an active pending order."}
-        elif cooldown_active and (len(active_sym_positions) + len(active_sym_pending)) == 0 and wants_entry:
+        elif cooldown_active and wants_entry:  # also while a position is open: stacked same-symbol entries lost (2026-11 gold audit)
             remaining = int(style_cd - (time.time() - last_exec_time))
             decision.decision = "WAIT"
             decision.execution_authorized = False
@@ -2973,7 +2996,7 @@ class JarvisOrchestrator:
                     _trace.reject("PENDING_ORDER_EXISTS", "pending order already resting")
                     _dj.record_attempt(_trace)
                     continue
-                if cooldown_active and (len(active_sym_positions) + len(active_sym_pending)) == 0:
+                if cooldown_active:  # applies with a position open too; a flip clears it above
                     logger.info(f"Arbiter skipping {canonical_sym}: cooldown active.")
                     _trace.reject("COOLDOWN_GUARD", "same-symbol cooldown active")
                     _dj.record_attempt(_trace)
