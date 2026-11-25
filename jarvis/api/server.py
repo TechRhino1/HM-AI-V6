@@ -2025,6 +2025,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 "position_monitor": (orch._position_monitor_status()
                                      if hasattr(orch, "_position_monitor_status") else None),
                 "advisory": getattr(llm, "last_advisory", None),
+                "monitor_actions": list(_dj.MONITOR_ACTIONS)[-60:][::-1],
                 "config": {"verifier": asdict(SETTINGS.verifier), "gates": asdict(SETTINGS.gates),
                            "forward_tests": asdict(SETTINGS.forward_tests)},
             })

@@ -24,6 +24,19 @@ from jarvis.intelligence.dynamic_levels import DynamicRiskAndLevelsEngine
 from jarvis.execution.position_monitor import PositionMonitorEngine, JARVIS_MAGIC_NUMBER
 
 import pytest as _pytest
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _registry_layers_enforced(monkeypatch):
+    """These tests check the layer MECHANICS; production defaults them to shadow
+    (config monitor_layers, 2026-11-25), so enforce them here."""
+    from jarvis.config.settings import SETTINGS
+    for _layer in ("news_floor", "news_bank", "weekend_floor", "weekend_bank", "tp_zone_harvest", "scalp_stagnation"):
+        monkeypatch.setattr(SETTINGS.monitor_layers, _layer, "enforce")
+
 # Gold is the sample symbol for the managed-exit mechanics tested here.
 pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
 

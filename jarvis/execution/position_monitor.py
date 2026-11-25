@@ -165,6 +165,13 @@ class PositionMonitorEngine:
 
         self._running       = False
         self._thread: Optional[threading.Thread] = None
+        # Phase-1 (2026-11-25) per-ticket state: M1 peak refresh time, modify backoff.
+        self._bar_peak_at: Dict[int, float] = {}
+        self._modify_backoff: Dict[int, Tuple[float, int]] = {}   # ticket -> (retry_after_ts, failures)
+        self._modify_times: Dict[int, List[float]] = {}           # ticket -> recent modify send times
+        self._margin_ladder_at: float = 0.0
+        self._layer_last: Dict[Tuple[int, str], Tuple] = {}
+        self.last_tick_ms: float = 0.0
         # Proof of life: the monitor logs nothing while idle, so the watchdog reads these.
         self.last_tick_at: float = 0.0
         self.tick_errors: int = 0
@@ -299,6 +306,7 @@ class PositionMonitorEngine:
                 self.last_tick_error = f"{type(e).__name__}: {e}"[:200]
                 logger.error(f"PositionMonitor tick error: {e}", exc_info=True)
             self.last_tick_at = time.time()  # a completed tick, ok or not
+            self.last_tick_ms = (time.monotonic() - start) * 1000.0
             elapsed = time.monotonic() - start
             sleep_time = max(0.0, MONITOR_INTERVAL_SEC - elapsed)
             time.sleep(sleep_time)
@@ -342,6 +350,13 @@ class PositionMonitorEngine:
         self._lowest_adverse_price = {t: v for t, v in self._lowest_adverse_price.items() if t in active_tickets}
         self._position_milestones = {t: v for t, v in self._position_milestones.items() if t in active_tickets}
         self._manual_trade_modes = {t: m for t, m in self._manual_trade_modes.items() if t in active_tickets}
+        self._layer_last = {k: v for k, v in getattr(self, "_layer_last", {}).items() if k[0] in active_tickets}
+        for _name in ("_initial_tp", "_initial_risk_usd", "_entry_ml_prob", "_last_modify_time", "_bar_peak_at",
+                      "_modify_backoff", "_modify_times", "_peak_mfe", "_peak_mae"):
+            _d = getattr(self, _name, None)
+            if isinstance(_d, dict):
+                for _t in [t for t in _d if t not in active_tickets]:
+                    _d.pop(_t, None)
 
         # D19 — a closed ticket's excursions are the ONLY record of its path, so
         # they are retired into a bounded map instead of dropped here. Dropping
@@ -355,6 +370,9 @@ class PositionMonitorEngine:
 
         # ── Institutional position protocols (event window / weekend / margin) ──
         self._apply_position_protocols(positions, account, equity, balance)
+
+        # ── Portfolio-level protections (2026-11-25): also cover forward tests ──
+        self._apply_portfolio_protections(positions, emergency_brake)
 
         # ── Per-position management ─────────────────────────────────────────
         for pos in positions:
@@ -391,7 +409,59 @@ class PositionMonitorEngine:
                         return self._manual_trade_modes[ticket]
         return getattr(self, "manual_mode", MANUAL_MANAGEMENT_MODE)
 
+    # Exit reasons owned by a registry layer (jarvis.config.settings.MonitorLayerSettings).
+    LAYER_OF_REASON = {"NEWS_EVENT_BANK": "news_bank", "WEEKEND_BANK": "weekend_bank",
+                       "TP_ZONE_HARVEST": "tp_zone_harvest", "SCALP_STAGNATION": "scalp_stagnation"}
+    WEEKEND_LAYERS = ("weekend_floor", "weekend_bank")
+
+    def _layer_gate(self, pos: PositionSnapshot, layer: str, action: str, detail: str = "") -> bool:
+        """True when ``layer`` may act on ``pos`` now; records the verdict either way.
+
+        off -> nothing; shadow -> a SHADOW record ("would have <action>") and no action;
+        enforce -> an ENFORCE record and the action. The crypto hold list is exempt from
+        every registry layer (it holds to its original stop/target by research), and crypto
+        is exempt from the weekend layers (it trades through the weekend).
+        """
+        try:
+            from jarvis.config.settings import SETTINGS
+            from jarvis.data.symbol_registry import resolve as _res
+            spec = _res(pos.symbol)
+            canon = spec.canonical.upper()
+            hold = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+            if canon in hold:
+                return False
+            if layer in self.WEEKEND_LAYERS and (getattr(spec, "is_crypto", False)
+                                                 or str(getattr(spec, "asset_class", "")).upper() == "CRYPTO"):
+                return False
+            mode = str(getattr(SETTINGS.monitor_layers, layer, "shadow")).lower()
+        except Exception:
+            mode = "shadow"  # unknown state: record, never act
+        if mode == "off":
+            return False
+        key = (pos.ticket, layer, action, detail)
+        if self._layer_last.get((pos.ticket, layer)) != key:
+            self._layer_last[(pos.ticket, layer)] = key
+            self._record_action(pos, rule=layer, kind=action, detail=detail,
+                                status="ENFORCE" if mode == "enforce" else "SHADOW")
+        return mode == "enforce"
+
+    def _record_action(self, pos: PositionSnapshot, rule: str, kind: str, detail: str = "",
+                       status: str = "", old_sl: Optional[float] = None, new_sl: Optional[float] = None,
+                       reason: str = "") -> None:
+        """Audit trail of every monitor action (and shadow verdict) -> decision journal."""
+        try:
+            from jarvis.observability import decision_journal as _dj
+            _dj.record_monitor({"ticket": pos.ticket, "symbol": pos.symbol, "side": pos.type,
+                                "comment": pos.comment, "rule": rule, "action": kind, "detail": detail,
+                                "status": status, "old_sl": old_sl, "new_sl": new_sl, "reason": reason,
+                                "price": getattr(pos, "current_price", None)})
+        except Exception:
+            pass
+
     def _execute_exit(self, pos: PositionSnapshot, reason: str) -> bool:
+        _layer = self.LAYER_OF_REASON.get(str(reason or "").upper())
+        if _layer and not self._layer_gate(pos, _layer, "CLOSE", reason):
+            return False  # registry layer off/shadow: verdict recorded, position untouched
         if self._is_manual_trade(pos):
             eff_mode = self.get_manual_mode(pos.ticket)
             if eff_mode in ("AUTO_PILOT", "FULL"):
@@ -538,9 +608,10 @@ class PositionMonitorEngine:
                                 f"r={current_r:.2f}R -> SL {pos.sl:.{digits}f} -> {floor:.{digits}f} "
                                 "(pre-release protection floor)."
                             )
-                            res = self.mt5_client.modify_position(pos.ticket, sl=floor, tp=pos.tp)
-                            if res and res.get("status") in ("MODIFIED", "SUCCESS", True):
-                                self._last_action[pos.ticket] = action_key
+                            if self._layer_gate(pos, "news_floor", "SL", f"{floor:.{digits}f}"):
+                                res = self.mt5_client.modify_position(pos.ticket, sl=floor, tp=pos.tp)
+                                if res and res.get("status") in ("MODIFIED", "SUCCESS", True):
+                                    self._last_action[pos.ticket] = action_key
                         continue
 
                 # 2. Weekend floor (Friday UTC evening)
@@ -570,9 +641,10 @@ class PositionMonitorEngine:
                                 f"r={current_r:.2f}R -> SL {pos.sl:.{digits}f} -> {floor:.{digits}f} "
                                 "(breakeven floor against the weekend gap)."
                             )
-                            res = self.mt5_client.modify_position(pos.ticket, sl=floor, tp=pos.tp)
-                            if res and res.get("status") in ("MODIFIED", "SUCCESS", True):
-                                self._last_action[pos.ticket] = action_key
+                            if self._layer_gate(pos, "weekend_floor", "SL", f"{floor:.{digits}f}"):
+                                res = self.mt5_client.modify_position(pos.ticket, sl=floor, tp=pos.tp)
+                                if res and res.get("status") in ("MODIFIED", "SUCCESS", True):
+                                    self._last_action[pos.ticket] = action_key
 
             except Exception as e:
                 logger.error(f"Position protocol error for #{pos.ticket}: {e}", exc_info=True)
@@ -654,6 +726,8 @@ class PositionMonitorEngine:
     def _apply_margin_ladder(self, positions, margin_level):
         try:
             if margin_level > 0 and margin_level < MARGIN_LEVEL_FLATTEN:
+                if time.time() - self._margin_ladder_at < 60.0:
+                    return  # one close per minute: let margin recompute before the next
                 algo = [p for p in positions if (not self._is_manual_trade(p)) or (self.get_manual_mode(p.ticket) in ('AUTO_PILOT', 'FULL'))]
                 worst = min(algo, key=lambda p: p.profit) if algo else None
                 if worst is not None and worst.profit < 0:
@@ -661,6 +735,7 @@ class PositionMonitorEngine:
                         f"🪜 MARGIN_LADDER: margin_level={margin_level:.0f}% < {MARGIN_LEVEL_FLATTEN:.0f}% — "
                         f"closing largest floating loser #{worst.ticket} ({worst.symbol})."
                     )
+                    self._margin_ladder_at = time.time()
                     _res = self.mt5_client.close_position(worst.ticket)
                     if _res and _res.get("status") in ("CLOSED", "PARTIALLY_CLOSED"):
                         from jarvis.data import database
@@ -668,7 +743,7 @@ class PositionMonitorEngine:
             elif margin_level > 0 and margin_level < MARGIN_LEVEL_TIGHTEN:
                 logger.warning(
                     f"🪜 MARGIN_LADDER: margin_level={margin_level:.0f}% < {MARGIN_LEVEL_TIGHTEN:.0f}% — "
-                    "flagging breakeven floor on algo positions (handled by the loop below via modify visits)."
+                    "alert only (no automatic action below the flatten level)."
                 )
         except Exception as e:
             logger.debug(f"Margin ladder skipped: {e}")
@@ -920,6 +995,86 @@ class PositionMonitorEngine:
         self._initial_risk_dist[pos.ticket] = dist
         return dist
 
+    # ── Phase-1 helpers ─────────────────────────────────────────────────────
+    BAR_PEAK_REFRESH_SEC = 60.0
+    MODIFY_MAX_PER_MIN = 6
+    MODIFY_BACKOFF_MAX_SEC = 300.0
+
+    def _fold_bar_extremes(self, pos: PositionSnapshot, symbol: str) -> None:
+        """Widen the stored excursion extremes with M1 high/low of bars opened after entry.
+
+        At most once per BAR_PEAK_REFRESH_SEC per ticket. M1 prices are bid; for a SELL the
+        favourable low is raised by the current spread (closing side = ask), so the peak is
+        never overstated. Fails quietly: the sampled peak remains the lower bound.
+        """
+        now = time.time()
+        if now - self._bar_peak_at.get(pos.ticket, 0.0) < self.BAR_PEAK_REFRESH_SEC or not self.data_feed:
+            return
+        self._bar_peak_at[pos.ticket] = now
+        try:
+            import pandas as pd
+            opened = pd.Timestamp(pos.open_time, tz="UTC")
+            minutes = int(max(2, min(1440, (pd.Timestamp.now(tz="UTC") - opened).total_seconds() // 60 + 2)))
+            df = self.data_feed.fetch_rates(symbol, timeframe="M1", num_bars=minutes, include_current_bar=True)
+            if df is None or len(df) == 0 or "high" not in df or "low" not in df:
+                return
+            t = pd.to_datetime(df["time"], utc=True)
+            after = df[t > opened]
+            if len(after) == 0:
+                return
+            hi, lo = float(after["high"].max()), float(after["low"].min())
+            spread_px = 0.0
+            if "spread" in after and float(after["spread"].iloc[-1] or 0) > 0:
+                pt = float((self.mt5_client.get_symbol_trading_spec(pos.symbol) or {}).get("point", 0.0) or 0.0)
+                spread_px = float(after["spread"].iloc[-1]) * pt
+            if pos.type == "BUY":
+                self._highest_favorable_price[pos.ticket] = max(self._highest_favorable_price.get(pos.ticket, pos.open_price), hi)
+                self._lowest_adverse_price[pos.ticket] = min(self._lowest_adverse_price.get(pos.ticket, pos.open_price), lo)
+            else:
+                fav = lo + spread_px
+                self._highest_favorable_price[pos.ticket] = min(self._highest_favorable_price.get(pos.ticket, pos.open_price), fav)
+                self._lowest_adverse_price[pos.ticket] = max(self._lowest_adverse_price.get(pos.ticket, pos.open_price), hi + spread_px)
+        except Exception as e:
+            logger.debug(f"bar-peak fold skipped for #{pos.ticket}: {e}")
+
+    def _one_way_vs_broker(self, pos: PositionSnapshot, new_sl: float, digits: int) -> float:
+        """Clamp a candidate SL so it is never looser than the broker's latest stop."""
+        try:
+            live = self.mt5_client.get_open_positions(pos.symbol) or []
+            broker_sl = next((float(p.sl) for p in live if getattr(p, "ticket", None) == pos.ticket), 0.0)
+        except Exception:
+            broker_sl = 0.0
+        known = [x for x in (broker_sl, float(pos.sl or 0.0)) if x > 0]
+        if not known or new_sl <= 0:
+            return new_sl
+        ref = max(known) if pos.type == "BUY" else min(known)
+        return round(max(new_sl, ref), digits) if pos.type == "BUY" else round(min(new_sl, ref), digits)
+
+    def _modify_allowed(self, ticket: int) -> bool:
+        now = time.time()
+        until, _ = self._modify_backoff.get(ticket, (0.0, 0))
+        if now < until:
+            return False
+        recent = [t for t in self._modify_times.get(ticket, []) if now - t < 60.0]
+        self._modify_times[ticket] = recent
+        return len(recent) < self.MODIFY_MAX_PER_MIN
+
+    def _note_modify_result(self, ticket: int, res: Optional[Dict[str, Any]]) -> None:
+        """Record a send; exponential backoff on failure (a failed modify was re-sent every 2 s)."""
+        now = time.time()
+        self._modify_times.setdefault(ticket, []).append(now)
+        status = (res or {}).get("status")
+        reason = str((res or {}).get("reason", ""))
+        if status == "MODIFIED" or "No changes" in reason:
+            self._modify_backoff.pop(ticket, None)
+            return
+        _, fails = self._modify_backoff.get(ticket, (0.0, 0))
+        fails += 1
+        frozen = "frozen" in reason.lower() or "freeze" in reason.lower()
+        delay = min(self.MODIFY_BACKOFF_MAX_SEC, (10.0 if frozen else 4.0) * (2 ** (fails - 1)))
+        self._modify_backoff[ticket] = (now + delay, fails)
+        logger.warning(f"Modify #{ticket} failed ({reason or status}); backing off {delay:.0f}s (failure {fails}).")
+
     def _recover_open_state(self, pos: PositionSnapshot, atr: float, pip_size: float) -> None:
         """Rebuild 1R and the partial-taken flag from the broker on first sight.
 
@@ -1055,6 +1210,12 @@ class PositionMonitorEngine:
         if (str(pos.type).upper() == "SELL" and isinstance(_ask, (int, float)) and isinstance(_bid, (int, float))
                 and _ask > _bid > 0):
             c_price = float(c_price) + (float(_ask) - float(_bid))
+        # Prefer the broker's own position price: MT5 reports it on the CLOSING side
+        # (bid for a BUY, ask for a SELL) and the synchronizer refreshes it every 1 s,
+        # while ctx.current_price is a bar close behind a 10 s context + 8 s rates cache.
+        _live_px = getattr(pos, "current_price", None)
+        if isinstance(_live_px, (int, float)) and _live_px > 0:
+            c_price = float(_live_px)
         atr     = ctx.volatility.atr if ctx.volatility.atr > 0 else (c_price * 0.005)
         spread  = ctx.volatility.current_spread_pips
 
@@ -1131,9 +1292,12 @@ class PositionMonitorEngine:
                                 self._ensure_valid_initial_sl_dist(pos, target_sl, atr, pip_size)
                                 self._initial_tp[pos.ticket] = target_tp
 
-        if spread > (typical_spread * SPREAD_BLOWOUT_MULT):
-            logger.warning(f"⚠️ Spread blowout {spread:.1f} pips on #{pos.ticket} — skipping modification.")
-            return
+        # A blowout used to `return` here, freezing peak tracking and the trail exactly
+        # when the market moved fastest. Now the policy keeps running and only the broker
+        # send is deferred (see dispatch); the broker-side stop still protects meanwhile.
+        spread_blowout = spread > (typical_spread * SPREAD_BLOWOUT_MULT)
+        if spread_blowout:
+            logger.warning(f"⚠️ Spread blowout {spread:.1f} pips on #{pos.ticket} — deferring modifications.")
 
         # ── 180s Post-Entry Discretionary Grace Period (Spec v2.1 Refinement 3, 30s for scalps) ──
         open_dur_sec = self._get_position_duration_sec(pos)
@@ -1144,12 +1308,18 @@ class PositionMonitorEngine:
         # ─────────────────────────────────────────────────────────────────────
         # EMERGENCY BRAKE: tighten everything to breakeven
         # ─────────────────────────────────────────────────────────────────────
+        brake_floor = None
         if emergency_brake:
             new_sl = self._emergency_breakeven(pos, c_price, atr, new_sl)
             if new_sl != pos.sl:
+                brake_floor = new_sl
                 actions.append(f"EMERGENCY_BRAKE→BE@{new_sl:.4f}")
 
-        else:
+        # The brake used to REPLACE everything below (no evaluate_exit, no peak tracking),
+        # freezing the trail during the worst moments. The policy now always runs; the
+        # brake's breakeven is re-applied afterwards as a one-way floor.
+        _run_policy = True
+        if _run_policy:
             if pos.ticket not in self._initial_risk_dist:
                 self._recover_open_state(pos, atr, pip_size)
             # ── 0. Partial Profit-Taking (§B-2 / §B-3, Suppressed in Grace Period) ──
@@ -1214,7 +1384,11 @@ class PositionMonitorEngine:
 
             # ── 1.5 Adversarial Order Flow Shield (Suppressed in Grace Period) ────
             # The institutional lock (trading.exit_mode) manages the stop by one measured rule only.
-            _lock = getattr(self._exit_policy.get(pos.ticket), "lock_floor_r", None) is not None
+            # Lock mode read from config too: the per-ticket policy is created further below,
+            # so on a ticket's first tick the shield used to act in lock mode.
+            from jarvis.config.settings import SETTINGS as _S
+            _lock = (getattr(self._exit_policy.get(pos.ticket), "lock_floor_r", None) is not None
+                     or str(getattr(_S.trading, "exit_mode", "")).lower() == "institutional_lock")
             if not in_grace_period and not _lock:
                 shield_triggered, shield_action = self._check_adversarial_order_flow_shield(pos, ctx, c_price, atr, digits)
                 if shield_triggered:
@@ -1292,6 +1466,11 @@ class PositionMonitorEngine:
                     "tp3_r": tp3_dist / _rd,
                     "status": "OPEN"
                 }
+
+            # Fold real M1 high/low since entry into the excursion (the research the lock
+            # was tuned on replayed M1 bars; a 2 s sample misses spikes, and a restart
+            # used to reset the peak to the open price).
+            self._fold_bar_extremes(pos, canon_sym)
 
             # Track the running favourable excursion in price units.
             if pos.type == "BUY":
@@ -1801,6 +1980,10 @@ class PositionMonitorEngine:
                 )
                 new_sl = pos.sl
 
+        # Brake floor is one-way on top of whatever the policy produced.
+        if brake_floor is not None and brake_floor > 0:
+            new_sl = max(new_sl, brake_floor) if pos.type == "BUY" else (min(new_sl, brake_floor) if new_sl > 0 else brake_floor)
+
         # ── Apply modifications if SL changes by >= 1.0 pip or TP changes by >= 2.0 pips ────
         sl_pip_diff = abs(new_sl - pos.sl) / (pip_size if pip_size > 0 else 1.0)
         sl_changed = (sl_pip_diff >= 1.0) or (pos.sl == 0 and new_sl > 0)
@@ -1813,10 +1996,21 @@ class PositionMonitorEngine:
         elif sl_changed or tp_changed:
             new_sl = round(new_sl, digits)
             new_tp = round(new_tp, digits)
+            # Loosen-proof: an earlier step this tick (news/weekend floor, brake) may have
+            # moved the broker stop; never send anything looser than the broker's latest SL.
+            new_sl = self._one_way_vs_broker(pos, new_sl, digits)
             action_key = f"{new_sl:.{digits}f}_{new_tp:.{digits}f}"
-            if self._last_action.get(pos.ticket) != action_key:
+            if spread_blowout:
+                pass  # deferred: re-evaluated next tick once the spread normalises
+            elif not self._modify_allowed(pos.ticket):
+                pass  # backing off after failures / per-ticket rate cap
+            elif self._last_action.get(pos.ticket) != action_key:
                 res = self.mt5_client.modify_position(pos.ticket, sl=new_sl, tp=new_tp)
                 status = res.get("status") if res else "FAILED"
+                self._note_modify_result(pos.ticket, res)
+                self._record_action(pos, rule=",".join(actions) or "policy", kind="SL/TP",
+                                    status=str(status), old_sl=pos.sl, new_sl=new_sl,
+                                    reason=str((res or {}).get("reason", "")))
                 if status == "MODIFIED":
                     # Trailing / break-even / de-risk history, one row per change.
                     from jarvis.data import database
@@ -2500,6 +2694,78 @@ class PositionMonitorEngine:
 
     # ─── Emergency Breakeven ───────────────────────────────────────────────────
 
+    def _apply_portfolio_protections(self, positions: List[PositionSnapshot], emergency_brake: bool) -> None:
+        """Protections that apply to EVERY algo position, forward tests included.
+
+        1. Missing broker stop -> place an emergency SL (EMERGENCY_SL_ATR_MULT x ATR):
+           the broker-side stop is the real protection while the bot or terminal is down.
+        2. Emergency brake (floating DD >= FLOAT_DD_EMERGENCY_PCT): forward-test positions in
+           profit get the same breakeven floor as bot positions. Their own exits are untouched
+           otherwise (they follow pre-registered research rules).
+        Manual trades are left to their own mode.
+        """
+        for pos in positions:
+            try:
+                if self._is_manual_trade(pos):
+                    continue
+                is_ft = str(getattr(pos, "comment", "") or "").startswith("FT_")
+                if float(pos.sl or 0.0) <= 0:
+                    self._place_emergency_stop(pos)
+                elif emergency_brake and is_ft:
+                    ctx = self._get_context(self._canon(pos.symbol), self._style_of(pos))
+                    atr = float(getattr(getattr(ctx, "volatility", None), "atr", 0.0) or 0.0) if ctx else 0.0
+                    if atr <= 0:
+                        continue
+                    target = self._emergency_breakeven(pos, float(pos.current_price), atr, float(pos.sl))
+                    target = self._one_way_vs_broker(pos, target, self._digits(pos.symbol))
+                    if abs(target - float(pos.sl)) > 1e-12 and self._modify_allowed(pos.ticket):
+                        res = self.mt5_client.modify_position(pos.ticket, sl=target, tp=pos.tp)
+                        self._note_modify_result(pos.ticket, res)
+                        self._record_action(pos, rule="EMERGENCY_BRAKE_FT", kind="SL",
+                                            status=str((res or {}).get("status")), old_sl=pos.sl, new_sl=target,
+                                            reason=str((res or {}).get("reason", "")))
+            except Exception as e:
+                logger.error(f"Portfolio protection error for #{pos.ticket}: {e}", exc_info=True)
+
+    def _place_emergency_stop(self, pos: PositionSnapshot) -> None:
+        if not self._modify_allowed(pos.ticket):
+            return
+        ctx = self._get_context(self._canon(pos.symbol), self._style_of(pos))
+        atr = float(getattr(getattr(ctx, "volatility", None), "atr", 0.0) or 0.0) if ctx else 0.0
+        if atr <= 0:
+            logger.error(f"🚨 MISSING_SL: #{pos.ticket} ({pos.symbol}) has no broker stop and no ATR to place one.")
+            return
+        dist = EMERGENCY_SL_ATR_MULT * atr
+        sl = round(pos.open_price - dist if pos.type == "BUY" else pos.open_price + dist, self._digits(pos.symbol))
+        px = float(pos.current_price or pos.open_price)
+        # Already beyond that level: protect from the current price instead of an instant stop-out.
+        if (pos.type == "BUY" and sl >= px) or (pos.type == "SELL" and sl <= px):
+            sl = round(px - dist if pos.type == "BUY" else px + dist, self._digits(pos.symbol))
+        logger.error(f"🚨 MISSING_SL: #{pos.ticket} ({pos.symbol} {pos.type}) had no broker stop; placing {sl}.")
+        res = self.mt5_client.modify_position(pos.ticket, sl=sl, tp=pos.tp)
+        self._note_modify_result(pos.ticket, res)
+        self._record_action(pos, rule="MISSING_SL_EMERGENCY", kind="SL", status=str((res or {}).get("status")),
+                            old_sl=pos.sl, new_sl=sl, reason=str((res or {}).get("reason", "")))
+
+    def _canon(self, symbol: str) -> str:
+        try:
+            from jarvis.data.symbol_registry import resolve as _res
+            return _res(symbol).canonical
+        except Exception:
+            return symbol
+
+    def _style_of(self, pos: PositionSnapshot) -> str:
+        try:
+            return self._extract_position_trade_style(pos)
+        except Exception:
+            return "SWING"
+
+    def _digits(self, symbol: str) -> int:
+        try:
+            return int((self.mt5_client.get_symbol_trading_spec(symbol) or {}).get("digits", 5) or 5)
+        except Exception:
+            return 5
+
     def _emergency_breakeven(
         self,
         pos: PositionSnapshot,
@@ -2736,6 +3002,7 @@ class PositionMonitorEngine:
             "last_tick_at": self.last_tick_at,
             "tick_errors": self.tick_errors,
             "last_tick_error": self.last_tick_error,
+            "last_tick_ms": round(self.last_tick_ms, 1),
             "monitored_symbols": list(self._ctx_cache.keys()),
             "last_actions": dict(self._last_action),
             "milestones": dict(self._position_milestones),

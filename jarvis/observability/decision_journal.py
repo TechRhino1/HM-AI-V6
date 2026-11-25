@@ -178,6 +178,29 @@ def record_dispatch(row: Dict[str, Any]) -> None:
         logger.warning("decision journal dispatch write failed: %s", e)
 
 
+#: Last position-monitor actions (enforced and shadow) for the API.
+MONITOR_ACTIONS: Deque[Dict[str, Any]] = deque(maxlen=2000)
+
+
+def record_monitor(row: Dict[str, Any]) -> None:
+    """Journal one position-monitor action (kind=monitor): SL/TP change, close, or a
+    SHADOW "would have" verdict. Never raises into the monitor loop."""
+    try:
+        out = {"kind": "monitor", **row, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        with _LOCK:
+            MONITOR_ACTIONS.append(out)
+        from jarvis.config.runtime import is_offline
+        if is_offline():
+            return
+        with _LOCK:
+            os.makedirs(_dir(), exist_ok=True)
+            path = os.path.join(_dir(), time.strftime("decisions_%Y%m%d.jsonl", time.gmtime()))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(out, default=str) + "\n")
+    except Exception as e:
+        logger.warning("decision journal monitor write failed: %s", e)
+
+
 def record_auto(row: Dict[str, Any]) -> None:
     """Journal one Trade Style AUTO verdict for a symbol (tagged kind=auto); written only when that
     symbol's verdict changes, so a quiet symbol doesn't add a row every cycle."""
