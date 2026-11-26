@@ -47,3 +47,27 @@ def test_live_ignores_the_backtest_exit_override(monkeypatch):
     monkeypatch.setattr(SETTINGS.trading, "exit_mode", "legacy", raising=False)
     monkeypatch.setenv("JARVIS_BACKTEST_EXIT_MODE", "institutional_lock")
     assert ExitPolicy.for_symbol("EURUSD", trade_style="DAY_TRADING").lock_floor_r is None
+
+
+def test_signal_frames_read_closed_bars_only(monkeypatch):
+    """R5: the primary (and intraday setup) frame used to include the forming bar, so live
+    signals repainted mid-bar while the backtest read closed bars. Price rides in attrs."""
+    import pandas as pd
+    from jarvis.market.data_feed import DataFeedEngine
+
+    def fake_rates(self, symbol, timeframe="H1", num_bars=300, include_current_bar=False):
+        n = num_bars
+        df = pd.DataFrame({"time": pd.date_range("2026-11-01", periods=n, freq="5min"),
+                           "open": range(n), "high": range(n), "low": range(n),
+                           "close": [float(i) for i in range(n)], "volume": [1] * n})
+        df.attrs = {"data_source": "LIVE_MT5"}
+        return df
+
+    monkeypatch.setattr(DataFeedEngine, "fetch_rates", fake_rates)
+    feed = DataFeedEngine.__new__(DataFeedEngine)
+    for style in ("SCALP", "DAY_TRADING", "SWING"):
+        mtf = feed.fetch_multi_timeframe("XAUUSD", trade_style=style, num_bars=50)
+        for role, frame in mtf.items():
+            assert len(frame) == 50 and float(frame["close"].iloc[-1]) == 49.0, (style, role)  # forming bar 50 dropped
+            assert frame.attrs["last_price"] == 50.0  # the live price is still available
+            assert frame.attrs["data_source"] == "LIVE_MT5"  # freshness/provenance stamps survive

@@ -268,7 +268,10 @@ class MarketContextEngine:
         if live_spread_pips is not None and float(live_spread_pips) > 0:
             effective_spread_pips = float(live_spread_pips)
 
-        latest_close = float(df_primary["close"].iloc[-1]) if not df_primary.empty else 0.0
+        # Signals read closed bars; the price is the live (forming-bar) close when the feed carries it.
+        _live_px = (getattr(df_primary, "attrs", None) or {}).get("last_price")
+        latest_close = (float(_live_px) if _live_px else
+                        (float(df_primary["close"].iloc[-1]) if not df_primary.empty else 0.0))
         bid = latest_close
         ask = latest_close + (effective_spread_pips * _spec.pip_size)
 
