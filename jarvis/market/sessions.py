@@ -247,6 +247,33 @@ class SessionEngine:
                 "reason": "Global Forex & Spot Metals markets are closed on weekends (Friday 21:00 UTC to Sunday 21:00 UTC / Saturday 02:30 AM IST to Monday 02:30 AM IST)."
             }
         else:
+            # Check weekday daily rollover break on spot metals (XM / MT5 server 23:59-01:05 EET = ~21:58-23:06 UTC)
+            is_metals = any(k in sym_upper for k in ["XAU", "GOLD", "XAG", "SILVER"])
+            if is_metals and weekday in (0, 1, 2, 3, 4):
+                if (hour == 21 and dt.minute >= 58) or hour == 22 or (hour == 23 and dt.minute < 6):
+                    target_date = dt.date()
+                    next_open_utc = datetime(target_date.year, target_date.month, target_date.day, 23, 6, 0, tzinfo=timezone.utc)
+                    if next_open_utc < dt:
+                        next_open_utc += timedelta(days=1)
+                    diff_sec = max(0, (next_open_utc - dt).total_seconds())
+                    mins = max(1, int((diff_sec + 59) // 60))
+                    next_open_ist_dt = next_open_utc.astimezone(IST_TZ)
+                    next_open_ist_str = next_open_ist_dt.strftime("%I:%M %p IST")
+                    return {
+                        "symbol": symbol,
+                        "is_open": False,
+                        "market_type": "FOREX_METALS_24_5",
+                        "status": "CLOSED_DAILY_ROLLOVER",
+                        "status_badge": "🟡 DAILY ROLLOVER BREAK",
+                        "status_text": f"Spot Metals in daily rollover break. Re-opens {next_open_ist_str} (in {mins}m).",
+                        "next_event": f"Re-opens {next_open_ist_str}",
+                        "next_open_ist": next_open_ist_str,
+                        "next_open_utc": next_open_utc.isoformat(),
+                        "countdown_seconds": int(diff_sec),
+                        "countdown_formatted": f"{mins}m",
+                        "reason": "Broker pauses trading on Spot Metals daily between 23:59 and 01:05 server time for maintenance and rollover."
+                    }
+
             # Market is open on weekdays
             days_to_friday = (4 - weekday) % 7
             target_date = dt.date() + timedelta(days=days_to_friday)

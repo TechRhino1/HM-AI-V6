@@ -60,7 +60,10 @@ class DevilAdvocateAnalyst:
 
         if rsi_overextended:
             flags.append("rsi_overextended")
-            penalty_score += 12.0
+            # In a strong momentum trend (|trend_score| >= 50), high RSI is confirmation of trend strength,
+            # so apply a modest caution penalty (6.0) rather than a heavy barrier (12.0)
+            rsi_penalty = 6.0 if abs(mom.trend_score) >= 50.0 else 12.0
+            penalty_score += rsi_penalty
             threats.append(f"Overextended {proposed_bias} entry with RSI at {mom.rsi:.1f}.")
 
         if adx_strong_counter:
@@ -74,9 +77,13 @@ class DevilAdvocateAnalyst:
             threats.append(f"Adverse RSI divergence warning against {proposed_bias} impulse.")
 
         if unfavorable_zone:
-            flags.append("unfavorable_zone")
-            penalty_score += 10.0
-            threats.append(f"Attempting {proposed_bias} in unfavorable {st.discount_premium_zone} zone relative to equilibrium.")
+            # During strong trend continuation / breakout (|trend_score| >= 35.0 or BOS),
+            # entering in Premium for BUY or Discount for SELL is the norm, not a critical threat.
+            is_strong_trend_or_breakout = (abs(mom.trend_score) >= 35.0) or getattr(st, "bos", False)
+            if not is_strong_trend_or_breakout:
+                flags.append("unfavorable_zone")
+                penalty_score += 10.0
+                threats.append(f"Attempting {proposed_bias} in unfavorable {st.discount_premium_zone} zone relative to equilibrium.")
 
         if trend_broken:
             flags.append("trend_broken")
@@ -85,8 +92,9 @@ class DevilAdvocateAnalyst:
 
         if htf_conflict:
             macro_bias = mtf.get("H4") or mtf.get("D1")
+            htf_penalty = 6.0 if abs(mom.trend_score) >= 40.0 else 12.0
             flags.append("htf_conflict")
-            penalty_score += 12.0
+            penalty_score += htf_penalty
             threats.append(f"Higher timeframe structural conflict: Macro timeframe is {macro_bias}.")
 
         # ── 2. Deep Liquidity Sweep & Order Book Traps ──────────────────────────────
