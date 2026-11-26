@@ -11,6 +11,11 @@ engine's per-symbol slots (risk.exposure.is_forward_test).
    Stop: the opposite side of the range. Skipped when the range is < 0.3 or > 3 ATR14.
    Exit: 1.5R target, or a 6-bar time stop. One trade per session per day.
 2. FT_AVW - anchored-VWAP stretch reversion (session VWAP fades in quiet tape).
+3. IMOM (research only, 2026-11-27) - market intraday momentum on cash indices (Gao, Han, Li &
+   Zhou 2018; Baltussen, Da, Lammers & Martens 2021): the return from the cash open to the start
+   of the last full cash hour predicts that last hour. H1 bars, local session clock (DST-aware):
+   signal at the close of the second-to-last full cash hour, trade the last one in the sign of
+   the rest-of-day return, exit at its close. Stop 1 ATR14 (for R only). Not forward-tested.
    VWAP anchored at 00:00 UTC on tick volume. Signal when the close first stretches more than
    1.5 ATR14 from VWAP after 03:00 UTC while ADX14 < 20 (no trend). Fade toward VWAP.
    Stop: 1 ATR beyond the entry. Exit: 1.5R target, or an 8-bar time stop.
@@ -113,7 +118,38 @@ def avwap_signals(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return out
 
 
-SIGNALS = {"ORB": (orb_signals, ORB_TP_R, ORB_MAX_BARS), "AVWAP": (avwap_signals, AVW_TP_R, AVW_MAX_BARS)}
+# Cash sessions (local tz, first full H1 bar hour, last full H1 bar hour) for intraday momentum.
+IMOM_SESSIONS = {"US30": ("America/New_York", 10, 15), "NAS100": ("America/New_York", 10, 15),
+                 "US500": ("America/New_York", 10, 15), "GER40": ("Europe/Berlin", 9, 16),
+                 "UK100": ("Europe/London", 8, 15)}
+IMOM_STOP_ATR, IMOM_TP_R, IMOM_MAX_BARS = 1.0, 10.0, 1
+
+
+def imom_signals(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Intraday-momentum signals for the index named in df.attrs["symbol"] (others: none)."""
+    sess = IMOM_SESSIONS.get(str((getattr(df, "attrs", None) or {}).get("symbol", "")).upper())
+    if sess is None:
+        return []
+    tz, first_h, last_h = sess
+    local = pd.to_datetime(df["time"], utc=True).dt.tz_convert(tz)
+    hour, day = local.dt.hour.to_numpy(), local.dt.date.to_numpy()
+    o, c = df["open"].to_numpy(float), df["close"].to_numpy(float)
+    atr = atr14(df)
+    out, open_i = [], {}
+    for i in range(len(c)):
+        if hour[i] == first_h:
+            open_i[day[i]] = i
+        # bar i is the second-to-last full cash hour; the trade fills at the next bar's open
+        if hour[i] == last_h - 1 and day[i] in open_i and i + 1 < len(c) and hour[i + 1] == last_h                 and day[i + 1] == day[i] and atr[i] > 0:
+            ret = c[i] - o[open_i[day[i]]]
+            if ret != 0:
+                side = 1 if ret > 0 else -1
+                out.append({"i": i, "side": side, "stop": c[i] - side * IMOM_STOP_ATR * atr[i]})
+    return out
+
+
+SIGNALS = {"ORB": (orb_signals, ORB_TP_R, ORB_MAX_BARS), "AVWAP": (avwap_signals, AVW_TP_R, AVW_MAX_BARS),
+           "IMOM": (imom_signals, IMOM_TP_R, IMOM_MAX_BARS)}
 
 
 def to_candidates(df: pd.DataFrame, sigs: List[Dict[str, Any]], symbol: str, strategy: str,
