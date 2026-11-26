@@ -16,7 +16,7 @@ def bars():
     return pd.read_parquet(REAL).reset_index(drop=True).iloc[-3000:].reset_index(drop=True)
 
 
-@pytest.mark.parametrize("kind", list(sl.SIGNALS))
+@pytest.mark.parametrize("kind", [k for k in sl.SIGNALS if k != "IMOM"])  # IMOM: index-only, below
 def test_signals_are_causal(bars, kind):
     # What the live router sees on a truncated history must equal the full-history signal there.
     fn = sl.SIGNALS[kind][0]
@@ -26,6 +26,24 @@ def test_signals_are_causal(bars, kind):
         last = fn(bars.iloc[: k + 1].reset_index(drop=True))
         assert last and last[-1]["i"] == k and last[-1]["side"] == full[k]["side"]
         assert abs(last[-1]["stop"] - full[k]["stop"]) < 1e-9
+
+
+def test_imom_signals_are_causal_on_a_real_index():
+    path = os.path.join("data", "market", "real", "GER40", "GER40_H1_730d.parquet")
+    if not os.path.exists(path):
+        pytest.skip("no real GER40 bars")
+    df = pd.read_parquet(path).reset_index(drop=True).iloc[-3000:].reset_index(drop=True)
+    df.attrs["symbol"] = "GER40"
+    full = {s["i"]: s for s in sl.imom_signals(df)}
+    assert len(full) >= 50
+    for k in list(full)[:: max(1, len(full) // 15)]:
+        part = df.iloc[: k + 2].reset_index(drop=True)  # the signal needs bar k+1 to exist (the traded hour)
+        part.attrs["symbol"] = "GER40"
+        last = sl.imom_signals(part)
+        assert last and last[-1]["i"] == k and last[-1]["side"] == full[k]["side"]
+    eur = df.copy()
+    eur.attrs["symbol"] = "EURUSD"
+    assert sl.imom_signals(eur) == []  # not an index: no session, no signal
 
 
 def test_stops_sit_on_the_losing_side(bars):
