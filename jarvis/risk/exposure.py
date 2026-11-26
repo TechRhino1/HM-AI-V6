@@ -10,6 +10,7 @@ from jarvis.data.symbol_registry import resolve as resolve_symbol
 BASE_MAX_TRADES_PER_SYMBOL = 1        # Soft limit: Standard baseline
 AI_ADAPTIVE_MAX_TRADES_PER_SYMBOL = 2 # Adaptive limit: Allowed if all 15 conditions pass
 HARD_MAX_TRADES_PER_SYMBOL = 2        # Hard ceiling: Never exceeded under any circumstances
+RESERVED_SYMBOL = "XAUUSD"            # one concurrent slot is always held for gold (user directive 2026-11-26)
 MAX_PORTFOLIO_RISK_PCT = 2.5          # Hard ceiling for total combined open monetary risk
 
 
@@ -220,8 +221,15 @@ class ExposureManager:
                 effective_max_open_positions = max(self.max_open_positions, 4)
 
         max_total_ceiling = effective_max_open_positions + 2
+        # Hold one slot for gold so a gold entry is never crowded out; once gold holds it, it is used.
+        reserve_note = ""
+        if target_canon != RESERVED_SYMBOL and not any(
+                self.resolve_canonical(p.symbol) == RESERVED_SYMBOL for p in main_positions):
+            effective_max_open_positions = max(1, effective_max_open_positions - 1)
+            max_total_ceiling = max(1, max_total_ceiling - 1)
+            reserve_note = f"; 1 slot reserved for {RESERVED_SYMBOL}"
         if len(active_risk_positions) >= effective_max_open_positions or len(main_positions) >= max_total_ceiling:
-            breaches.append(f"Max Concurrent Positions reached ({len(active_risk_positions)} active risk / {len(main_positions)} total >= {effective_max_open_positions} allowed).")
+            breaches.append(f"Max Concurrent Positions reached ({len(active_risk_positions)} active risk / {len(main_positions)} total >= {effective_max_open_positions} allowed{reserve_note}).")
 
         # 2. Per-Symbol Exposure (Soft Limit = 1, Hard Limit = 2)
         # FT positions keep their own book: they count in portfolio risk, not in symbol slots.

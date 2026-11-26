@@ -143,14 +143,16 @@ def test_exposure_manager_nano_account():
             magic=100001
         )
     ]
-    # Check 2nd position (total 2) -> Allowed
+    # Check 2nd position (total 2) -> allowed for gold; the 2nd slot is reserved for XAUUSD (2026-11-26)
     res1 = exp.check_exposure(
-        symbol="GBPUSD",
+        symbol="XAUUSD",
         positions=positions,
         account=acct,
         incoming_risk_usd=3.00
     )
-    assert res1["passed"] is True
+    assert not any("Max Concurrent" in b for b in res1["breaches"])
+    res1b = exp.check_exposure(symbol="GBPUSD", positions=positions, account=acct, incoming_risk_usd=3.00)
+    assert any("reserved for XAUUSD" in b for b in res1b["breaches"])
 
     # Check 3rd position (total 3) -> Blocked for nano account (< $250 equity has max 2 positions)
     positions.append(
