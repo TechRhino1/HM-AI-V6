@@ -349,9 +349,7 @@ class BacktestEngine:
         mtf_prepared = self._prepare_mtf(mtf_source, role_tf) if role_tf else {}
 
         spec = resolve_symbol(symbol)
-        spread_dist = spread_pips * spec.pip_size
         actual_slippage_delta = self.slippage_pips * spec.pip_size
-        cost_price_equiv = self.slippage_pips * spec.pip_size / 2.0  # half-spread as cost basis
         # Bar length of the frame being stepped. It was hard-coded to 60, so an M5
         # run aged trades 12x too fast (the 90-min scalp time stop fired after
         # 2 bars). Bar-counted limits below were calibrated on H1 and are scaled
@@ -613,6 +611,10 @@ class BacktestEngine:
                     closed = True
 
                 if closed:
+                    # Stop and time exits are market fills and take adverse slippage; a TP is a
+                    # resting limit and fills at its price (2026-11-26 gold audit: stops were free).
+                    if result != "TP":
+                        exit_price -= actual_slippage_delta if open_trade["type"] == "BUY" else -actual_slippage_delta
                     pips = ((exit_price - open_trade["entry"]) if open_trade["type"] == "BUY"
                             else (open_trade["entry"] - exit_price)) / spec.pip_size
                     pnl_raw = pips * spec.pip_value_per_lot * open_trade["lots"]

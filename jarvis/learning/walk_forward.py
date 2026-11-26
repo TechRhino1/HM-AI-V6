@@ -39,8 +39,9 @@ class PurgedKFold:
             test = idx[start: max(start, end - embargo)]
             if len(test) == 0:
                 continue
-            # train = everything outside test, purging the embargo zone adjacent
-            train = np.concatenate([idx[:start], idx[end:]])
+            # train = everything outside test, minus an embargo on BOTH sides: samples just
+            # before the test block carry labels (trade lives) that run into it.
+            train = np.concatenate([idx[:max(0, start - embargo)], idx[end:]])
             if len(train) == 0:
                 continue
             splits.append((train, test))
@@ -128,6 +129,7 @@ def threshold_optimize(
     candidates: Iterable[float],
     decide_fn: Callable[[float, np.ndarray], np.ndarray],
     y: np.ndarray,
+    probs: np.ndarray,
     min_precision: float = 0.55,
 ) -> Dict[str, Any]:
     """Pick the decision threshold maximizing OOS Sharpe subject to a precision floor.
@@ -138,8 +140,7 @@ def threshold_optimize(
     ydir = np.where(y >= 0.5, 1.0, -1.0)
     best = {"threshold": None, "sharpe": -np.inf, "precision": 0.0}
     for thr in candidates:
-        bets = decide_fn(thr, None) if False else decide_fn(thr, y)
-        # bets shape must match; caller returns signed bets via probs internally
+        bets = decide_fn(thr, probs)  # the model's probabilities, never the outcomes (look-ahead)
         if bets is None or len(bets) != len(y):
             continue
         active = bets != 0

@@ -503,8 +503,8 @@ def deployment_refusal(symbol: str) -> Optional[str]:
         from jarvis.config.settings import SETTINGS
         if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001 - fail closed: unreadable settings never authorise a trade
+        return f"DEPLOYMENT_GATE_UNVERIFIED: settings unavailable ({type(exc).__name__})"
     prof = live_profile(symbol)
     if prof is None:
         return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"

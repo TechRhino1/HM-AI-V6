@@ -84,7 +84,8 @@ def test_quarantined_pair_is_vetoed_in_the_orchestrator_mode(_):
                return_value={"quarantined": False, "n": 30, "expectancy_r": 0.2}):
         assert _vetoes(o, strategy="TREND_PULLBACK") == []
     with patch("jarvis.execution.strategy_quarantine.expectancy_state", side_effect=RuntimeError("db")):
-        assert _vetoes(o, strategy="TREND_PULLBACK") == []  # fails open; other governors still apply
+        assert _vetoes(o, strategy="TREND_PULLBACK") == [
+                "STRATEGY_QUARANTINE: check failed (RuntimeError)"]  # fails closed
 
 
 def test_calibrated_route_candidate_still_honours_the_quarantine_veto():

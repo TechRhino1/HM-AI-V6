@@ -54,6 +54,9 @@ def main():
     if cmd in ["start", "launch", "run"]:
         import threading
         mode = sys.argv[2] if len(sys.argv) > 2 else "paper"
+        # Same single-engine lock as HM_start/main: a second engine would duplicate orders.
+        from jarvis.common.single_instance import acquire_engine_lock
+        acquire_engine_lock(mode)
         orchestrator = JarvisOrchestrator(mode=mode)
         
         if os.name != 'nt':

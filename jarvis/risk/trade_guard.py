@@ -294,8 +294,9 @@ def _r_sizing(c, cfg):
     risk_usd = float(c.lots) * dpu * abs(float(d.entry_price) - float(d.stop_loss))
     pct = float(SETTINGS.risk.max_risk_per_trade_pct)
     vol_min = float(c.spec.get("volume_min", 0.01) or 0.01)
-    if float(c.lots) <= vol_min + 1e-9:  # a minimum lot may use the min-lot allowance
-        pct = max(pct, float(SETTINGS.risk.min_lot_max_risk_pct))
+    if float(c.lots) <= vol_min + 1e-9:  # a minimum lot may use the executor's min-lot allowance
+        from jarvis.risk.account_tier import min_lot_risk_cap
+        pct = max(pct, min_lot_risk_cap(c.equity, d.symbol, str(getattr(d, "trade_style", "") or ""))[1])
     budget = c.equity * pct / 100.0 * (1.0 + cfg.sizing_tolerance)
     return risk_usd <= budget, _RISK, round(risk_usd, 2), round(budget, 2), "order risk $ vs budget"
 
