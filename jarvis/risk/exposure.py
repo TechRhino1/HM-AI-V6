@@ -112,10 +112,14 @@ class ExposureManager:
         target_symbol: str,
         target_bias: str,
         positions: List[PositionSnapshot],
-        max_same_currency_direction: int = 3
+        max_same_currency_direction: int = 3,
+        max_same_group_direction: int = 1,
     ) -> Dict[str, Any]:
         """
-        Calculates net directional currency exposure (e.g. USD Short across EURUSD, GBPUSD, AUDUSD).
+        Calculates net directional currency exposure (e.g. USD Short across EURUSD, GBPUSD, AUDUSD),
+        and counts each correlated group (metals, crypto, equity indices) as ONE bet per direction:
+        gold+silver, BTC+ETH+SOL and the four cash indices move together, so a second same-way
+        position in a group doubles one risk rather than diversifying it.
         """
         # Map common symbols to currency exposures (Base, Quote)
         currency_map = {
@@ -139,8 +143,12 @@ class ExposureManager:
 
         # Net directional tallies: currency -> count (positive = Long, negative = Short)
         net_dir: Dict[str, int] = {}
+        group_of = {"XAUUSD": "METALS", "XAGUSD": "METALS",
+                    "BTCUSD": "CRYPTO", "ETHUSD": "CRYPTO", "SOLUSD": "CRYPTO",
+                    "US30": "EQ_BETA", "NAS100": "EQ_BETA", "GER40": "EQ_BETA", "UK100": "EQ_BETA"}
+        group_dir: Dict[str, int] = {}
 
-        def _add_exposure(sym: str, bias: str):
+        def _add_exposure(sym: str, bias: str, grouped: bool = True):
             canon = resolve_symbol(sym).canonical
             if canon in currency_map:
                 base, quote = currency_map[canon]
@@ -150,12 +158,20 @@ class ExposureManager:
                 else:
                     net_dir[base] = net_dir.get(base, 0) - 1
                     net_dir[quote] = net_dir.get(quote, 0) + 1
+            if grouped and canon in group_of:
+                g = group_of[canon]
+                group_dir[g] = group_dir.get(g, 0) + (1 if bias.upper() in ("BUY", "LONG", "0") else -1)
 
         for p in positions:
             if is_forward_test(p):  # FT_ research positions are not engine exposure (ADAPTIVE_GATE_12)
                 continue
             p_bias = getattr(p, "side", getattr(p, "type", "BUY"))
-            _add_exposure(p.symbol, p_bias)
+            # A runner whose stop is at breakeven or better carries no risk: it does not use up
+            # its group's one bet (same rule as get_active_risk_positions_for_symbol).
+            _sl, _op = float(getattr(p, "sl", 0) or 0), float(getattr(p, "open_price", 0) or 0)
+            _buy = str(p_bias).upper() in ("BUY", "LONG", "0")
+            _risk_free = _sl > 0 and _op > 0 and ((_buy and _sl >= _op - 1e-5) or (not _buy and _sl <= _op + 1e-5))
+            _add_exposure(p.symbol, p_bias, grouped=not _risk_free)
 
         # Hypothetically add target
         _add_exposure(target_symbol, target_bias)
@@ -165,10 +181,16 @@ class ExposureManager:
             if abs(count) > max_same_currency_direction:
                 dir_label = "LONG" if count > 0 else "SHORT"
                 breaches.append(f"Excessive currency concentration: {abs(count)} concurrent {dir_label} {curr} positions (max {max_same_currency_direction}).")
+        for grp, count in group_dir.items():
+            if abs(count) > max_same_group_direction:
+                dir_label = "LONG" if count > 0 else "SHORT"
+                breaches.append(f"Correlated group concentration: {abs(count)} concurrent {dir_label} {grp} positions "
+                                f"(max {max_same_group_direction}; the group is one bet).")
 
         return {
             "passed": len(breaches) == 0,
             "net_exposures": net_dir,
+            "group_exposures": group_dir,
             "breaches": breaches
         }
 

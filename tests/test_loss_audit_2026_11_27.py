@@ -86,3 +86,17 @@ def test_promoted_wait_with_cost_or_quality_hole_is_enforced():
                         model_confidence=0.6)
     assert _promotion_hole(d, "WAIT").startswith("Awaiting spread tightening")
     assert _promotion_hole(d, "EXECUTE") == ""  # only promotions are judged
+
+
+def test_correlated_group_is_one_bet():
+    """R8: BTC+ETH+SOL (and gold+silver, the cash indices) used to pass as separate bets."""
+    from types import SimpleNamespace
+    from jarvis.risk.exposure import ExposureManager
+    em = ExposureManager()
+    btc_long = SimpleNamespace(symbol="BTCUSD", side="BUY", type="BUY", sl=60000.0, open_price=61000.0, comment="")
+    res = em.check_currency_directional_exposure("ETHUSD", "BUY", [btc_long])
+    assert not res["passed"] and any("CRYPTO" in b for b in res["breaches"])
+    assert em.check_currency_directional_exposure("ETHUSD", "SELL", [btc_long])["passed"]  # opposite way is a hedge
+    assert em.check_currency_directional_exposure("EURUSD", "BUY", [btc_long])["passed"]  # other group
+    runner = SimpleNamespace(symbol="BTCUSD", side="BUY", type="BUY", sl=61500.0, open_price=61000.0, comment="")
+    assert em.check_currency_directional_exposure("ETHUSD", "BUY", [runner])["passed"]  # risk-free runner
