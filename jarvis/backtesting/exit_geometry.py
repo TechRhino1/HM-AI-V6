@@ -472,12 +472,21 @@ HOLDOUT_MIN_TRADES = 10
 def live_profile(symbol: str) -> Optional[Any]:
     """The calibrated profile the LIVE engine trades `symbol` on, or None when the
     calibrated policy is off, we are in a backtest, or no profile exists."""
-    global _LIVE_PROFILES
     try:
         from jarvis.config.runtime import is_offline
         from jarvis.config.settings import SETTINGS
         if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
+    except Exception:  # noqa: BLE001
+        return None
+    return _stamped_profile(symbol)
+
+
+def _stamped_profile(symbol: str) -> Optional[Any]:
+    """The symbol's profile (with its out-of-sample and holdout stamps) whether or not the
+    calibrated entry policy is on: the deployment gate judges the evidence either way."""
+    global _LIVE_PROFILES
+    try:
         from jarvis.intelligence.winrate_targeting import load_profiles
         _LIVE_PROFILES = load_profiles()  # mtime-cached inside load_profiles
         from jarvis.data.symbol_registry import resolve
@@ -496,16 +505,17 @@ def live_exit_geometry(symbol: str) -> Optional["ExitGeometry"]:
 
 
 def deployment_refusal(symbol: str) -> Optional[str]:
-    """Why `symbol` may not trade live under the calibrated policy, or None if it may.
-    A symbol with no profile has no validated evidence, so it is refused too."""
+    """Why `symbol` may not trade live, or None if it may.
+    A symbol with no profile has no validated evidence, so it is refused too.
+    Applies whether or not the calibrated entry policy is on: turning that policy off
+    (commit 4fd416a) used to switch this gate off for every symbol."""
     try:
         from jarvis.config.runtime import is_offline
-        from jarvis.config.settings import SETTINGS
-        if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
+        if is_offline():
             return None
     except Exception as exc:  # noqa: BLE001 - fail closed: unreadable settings never authorise a trade
         return f"DEPLOYMENT_GATE_UNVERIFIED: settings unavailable ({type(exc).__name__})"
-    prof = live_profile(symbol)
+    prof = _stamped_profile(symbol)
     if prof is None:
         return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"
     

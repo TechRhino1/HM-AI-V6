@@ -38,7 +38,8 @@ class TestAutomatedExecutionRootCauseFixes:
             h = OOS_HURDLES.get(str(resolve(sym).asset_class).upper(), OOS_HURDLES["DEFAULT"])
             clears = p["oos_trades"] >= h["min_trades"] and p["oos_expectancy_r"] >= h["min_expectancy_r"]
             he = p.get("holdout_expectancy_r")  # HOLDOUT_GATE: a lost walk-forward holdout refuses too
-            if he is not None and int(p.get("holdout_trades", 0) or 0) >= HOLDOUT_MIN_TRADES and he <= 0:
+            hn = int(p.get("holdout_trades", 0) or 0)
+            if he is not None and hn >= HOLDOUT_MIN_TRADES and he <= 0:
                 clears = False
             assert (refusal is None) == clears, (sym, refusal)
 

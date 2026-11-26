@@ -57,6 +57,19 @@ def _is_forex(symbol: str) -> bool:
         return False
 
 
+
+def _live_rr_for_ev(symbol: str, levels_rr: float) -> float:
+    """The R:R a trade on `symbol` will carry after dispatch: the live fixed/calibrated target
+    when one rewrites the TP, else the levels' geometric R:R."""
+    try:
+        from jarvis.backtesting.exit_geometry import live_target_r
+        fixed = live_target_r(symbol)
+        if fixed:
+            return float(fixed)
+    except Exception:  # noqa: BLE001 - fall back to the geometry
+        pass
+    return float(levels_rr or 0.0)
+
 class LevelsResult(tuple):
     """An 8-tuple result containing (bias, entry, sl, tp, risk_dist, rr, first_target, volume_pct)
     preserving 100% backward compatibility with tuple unpacking, while exposing 3-tier milestone
@@ -1987,11 +2000,15 @@ class DecisionEngine:
 
         is_gold_asset = any(k in context.symbol.upper() for k in ["XAU", "GOLD"])
         is_oil_asset = any(k in context.symbol.upper() for k in ["WTI", "OIL", "CRUDE"])
+        # EV is judged on the R:R the order will actually carry: dispatch rewrites the TP to the
+        # symbol's live target when one is set (execution_engine), else the levels' own R:R.
+        # Per-strategy RR floors (2.0-2.5R) used to inflate EV past the arbiter's 0.40 bar.
+        _ev_rr = _live_rr_for_ev(context.symbol, rr_ratio)
 
         for strat in candidate_strategies:
             strat_weight = strategy_probs.get(strat, 0.0)
             strat_p = final_win_p
-            strat_rr = rr_ratio
+            strat_rr = _ev_rr
 
             # Prerequisite trigger validation across ALL assets:
             # A reversal strategy requires actual structural or liquidity trigger evidence
@@ -2004,23 +2021,18 @@ class DecisionEngine:
             if strat == "RANGE_MEAN_REVERSION":
                 if context.momentum.adx < 20:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = min(2.0, max(1.6, strat_rr * 0.9))
             elif strat == "TREND_FOLLOWING":
                 if context.momentum.adx >= 25 and context.structure.bos:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = max(2.2, strat_rr * 1.1)
             elif strat == "BREAKOUT_EXPANSION":
                 if context.volatility.state in ("EXPANSION", "EXTREME"):
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = max(2.5, strat_rr * 1.15)
             elif strat == "LIQUIDITY_SWEEP_REVERSAL":
                 if context.liquidity.sweep_detected:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.0, strat_rr * 1.05)
             elif strat == "CHOCH_STRUCTURAL_REVERSAL":
                 if context.structure.choch:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.0, strat_rr * 1.05)
             elif strat == "BEAR_MARKET_SHORT":
                 # Phase 3: SELL on H4 BEARISH + H1 pullback to EMA20 + momentum < -10
                 # Only valid for indices in TREND_BEAR regime
@@ -2030,7 +2042,6 @@ class DecisionEngine:
                 ts_v = float(getattr(context.momentum, "trend_score", 0.0) or 0.0) if hasattr(context, "momentum") else 0.0
                 if regime_bear and h4_b == "BEARISH" and ts_v <= -10.0 and ema20_dist <= 0.5:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.5, strat_rr * 1.2)
 
             strat_loss_p = round(1.0 - strat_p, 2)
             strat_win_dollars = _risk_dollars * strat_rr
@@ -2683,6 +2694,12 @@ class DecisionEngine:
         tp_dist = abs(tp_price - entry_price)
         risk_dist = abs(entry_price - sl_price)
         rr_ratio = round(tp_dist / max(risk_dist, 1e-9), 2)
+        # The arbiter promotes on decision.expected_value: keep it on the final levels' R:R.
+        _final_rr = _live_rr_for_ev(context.symbol, rr_ratio)
+        if abs(_final_rr - _ev_rr) > 1e-6 and strategy_triggered:
+            _cost_r = (_spread_cost + _slippage) / max(_risk_dollars, 0.50)
+            ev = round(final_win_p * _final_rr - (1.0 - final_win_p) - _cost_r, 2)
+            ev_dollars = round(ev * _risk_dollars, 2)
 
         # Final Absolute Geometric Quality Gate Re-Check
         if gate_passed and rr_ratio < (min_allowed_rr - 0.05):
