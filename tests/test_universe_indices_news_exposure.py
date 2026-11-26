@@ -20,7 +20,10 @@ def test_eur_and_gbp_releases_cover_their_indices():
 
 
 def test_added_symbols_are_in_the_universe():
-    assert {"GER40", "UK100", "US30", "USDCHF", "NZDUSD", "XAGUSD"} <= set(SETTINGS.trading.symbols)
+    # Registered and tradable; whether each is ENABLED is the operator's allowed_symbols choice.
+    from jarvis.data.symbol_registry import all_symbols
+    registered = {s.canonical for s in all_symbols()}
+    assert {"GER40", "UK100", "US30", "USDCHF", "NZDUSD", "XAGUSD"} <= registered
 
 
 def _pos(sym, side):

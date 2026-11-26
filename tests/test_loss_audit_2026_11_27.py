@@ -71,3 +71,18 @@ def test_signal_frames_read_closed_bars_only(monkeypatch):
             assert len(frame) == 50 and float(frame["close"].iloc[-1]) == 49.0, (style, role)  # forming bar 50 dropped
             assert frame.attrs["last_price"] == 50.0  # the live price is still available
             assert frame.attrs["data_source"] == "LIVE_MT5"  # freshness/provenance stamps survive
+
+
+def test_promoted_wait_with_cost_or_quality_hole_is_enforced():
+    """R9: a scalp WAIT whose costs eat >35% of gross profit (or whose quality score is short)
+    was promoted to EXECUTE by the arbiter; the refusal ran in shadow, and 9 of 29 orders sent
+    2026-11-24..26 carried 41-157% friction. The hole is enforced by config."""
+    import json
+    from types import SimpleNamespace
+    from jarvis.application.orchestrator import _promotion_hole
+    gates = json.load(open("config/settings.json", encoding="utf-8")).get("gates", {})
+    assert gates.get("promotion_hole_mode") == "enforce"
+    d = SimpleNamespace(waiting_reasons=["Awaiting spread tightening (current friction 150.4% > 35%)"],
+                        model_confidence=0.6)
+    assert _promotion_hole(d, "WAIT").startswith("Awaiting spread tightening")
+    assert _promotion_hole(d, "EXECUTE") == ""  # only promotions are judged

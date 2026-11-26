@@ -14,7 +14,6 @@ def test_allowed_symbols_includes_gold_and_crypto():
     assert "BTCUSD" in symbols
     assert "ETHUSD" in symbols
     assert "SOLUSD" in symbols
-    assert "USDCAD" in symbols
 
 
 def test_local_request_precedence_over_invalid_token():

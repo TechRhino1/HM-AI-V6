@@ -4,6 +4,8 @@
     "default_mode": "demo",
     "primary_timeframe": "H1",
     "allowed_symbols": [
+      "BTCUSD",
+      "ETHUSD",
       "EURUSD",
       "GBPUSD",
       "NZDUSD",
@@ -43,5 +45,8 @@
     "correlation_scaling_enabled": true,
     "correlation_scaling_floor": 0.4,
     "breakeven_clears_correlation": true
+  },
+  "gates": {
+    "promotion_hole_mode": "enforce"
   }
 }
