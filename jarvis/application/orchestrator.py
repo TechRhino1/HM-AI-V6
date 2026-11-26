@@ -726,7 +726,10 @@ class JarvisOrchestrator:
             from jarvis.execution import strategy_quarantine as _sq
             details = _sq._load_full(None, self.mode)[1]
             live_r = {sym: rs for (sym, strat), rs in details.items() if strat == _sq.SYMBOL_POOL}
-            return {"live_r": live_r, "profiles": dict(getattr(self, "_wr_profiles", None) or {}),
+            # Load the stamped profiles directly: self._wr_profiles is only filled while the calibrated
+            # entry policy is on, so with it off (4fd416a) this check had nothing to compare against.
+            from jarvis.intelligence.winrate_targeting import load_profiles
+            return {"live_r": live_r, "profiles": dict(load_profiles() or {}),
                     "quarantine_r": _sq._cfg_threshold()}
         except Exception as exc:
             logger.debug("live drift inputs unavailable: %s", exc)
@@ -755,6 +758,7 @@ class JarvisOrchestrator:
                 position_monitor=self._position_monitor_status(),
                 has_position_monitor=getattr(self, "position_monitor", None) is not None,
                 **self._live_drift_inputs())
+            _sm.record_drift_advisory(self.monitor_state)
             # Advisory AI review of the same evidence (async, recommendations only).
             from collections import Counter as _C
             gate_stats = dict(_C(r.get("blocked_by") for r in rows if r.get("blocked_by")).most_common(15))

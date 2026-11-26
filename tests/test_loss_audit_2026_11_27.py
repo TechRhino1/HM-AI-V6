@@ -100,3 +100,21 @@ def test_correlated_group_is_one_bet():
     assert em.check_currency_directional_exposure("EURUSD", "BUY", [btc_long])["passed"]  # other group
     runner = SimpleNamespace(symbol="BTCUSD", side="BUY", type="BUY", sl=61500.0, open_price=61000.0, comment="")
     assert em.check_currency_directional_exposure("ETHUSD", "BUY", [runner])["passed"]  # risk-free runner
+
+
+def test_drift_check_uses_holdout_and_writes_one_advisory(tmp_path):
+    """Monitoring: live R is judged against the stamped holdout, and a drift writes ONE read-only
+    recommendation per day (no settings are touched)."""
+    from types import SimpleNamespace
+    from jarvis.observability import system_monitor as sm
+    prof = SimpleNamespace(oos_expectancy_r=0.30, holdout_trades=40, holdout_expectancy_r=0.05)
+    live = {"XAUUSD": [-1.0, 0.5] * 15}  # mean -0.25R over 30 closes
+    c = sm.check_live_drift(live, {"XAUUSD": prof}, quarantine_r=-0.15)
+    s = c["symbols"]["XAUUSD"]
+    assert s["benchmark"] == "holdout" and s["oos_r"] == 0.05 and s["status"] == sm.CRITICAL
+    sm._LAST_DRIFT_ADVISORY.clear()
+    state = {"checks": {"live_vs_calibrated": c}}
+    assert sm.record_drift_advisory(state, str(tmp_path))["source"] == "MONITOR_DRIFT"
+    assert sm.record_drift_advisory(state, str(tmp_path)) is None  # debounced
+    lines = list(tmp_path.glob("advisories_*.jsonl"))[0].read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and "promote_model.py" in lines[0]

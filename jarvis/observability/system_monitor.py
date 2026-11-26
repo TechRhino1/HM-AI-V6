@@ -198,11 +198,17 @@ def check_live_drift(live_r: Optional[Dict[str, List[float]]], profiles: Optiona
         mean = sum(rs) / n
         sd = (sum((r - mean) ** 2 for r in rs) / (n - 1)) ** 0.5
         se = sd / n ** 0.5
-        oos = float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
+        # Judge against the walk-forward holdout when one was stamped (the evidence the deployment
+        # gate uses), else the calibration's out-of-sample figure.
+        hn = int(getattr(prof, "holdout_trades", 0) or 0)
+        he = getattr(prof, "holdout_expectancy_r", None)
+        use_holdout = he is not None and hn >= 10
+        oos = float(he) if use_holdout else float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
         st = OK
         if mean < oos - 2.0 * se:
             st = CRITICAL if mean < quarantine_r else WARN
-        out[sym] = {"status": st, "n": n, "live_r": round(mean, 3), "se": round(se, 3), "oos_r": round(oos, 3)}
+        out[sym] = {"status": st, "n": n, "live_r": round(mean, 3), "se": round(se, 3), "oos_r": round(oos, 3),
+                    "benchmark": "holdout" if use_holdout else "oos"}
         if st == CRITICAL or (st == WARN and worst == OK):
             worst = st
     bad = {k: v for k, v in out.items() if v["status"] != OK}
@@ -210,6 +216,44 @@ def check_live_drift(live_r: Optional[Dict[str, List[float]]], profiles: Optiona
         f"{k} {v['live_r']:+.2f}R vs OOS {v['oos_r']:+.2f}R (n={v['n']})" for k, v in bad.items())
               if bad else f"{len(out)} symbol(s) within 2 SE of their calibrated expectancy")
     return {"status": worst, "detail": detail, "symbols": out}
+
+
+_LAST_DRIFT_ADVISORY: Dict[str, str] = {}
+
+
+def record_drift_advisory(state: Dict[str, Any], directory: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Append a deterministic recommendation to data/advisories when live expectancy drifts below
+    its validated benchmark. Read-only: it never changes a setting (promotion stays with
+    tools/promote_model.py). Written once per day per distinct drift verdict."""
+    import json
+    import os
+    import time
+    try:
+        c = ((state or {}).get("checks") or {}).get("live_vs_calibrated") or {}
+        bad = {k: v for k, v in (c.get("symbols") or {}).items() if v.get("status") != OK}
+        if not bad:
+            return None
+        day = time.strftime("%Y%m%d", time.gmtime())
+        key = json.dumps(sorted((k, v["status"]) for k, v in bad.items()))
+        if _LAST_DRIFT_ADVISORY.get(day) == key:
+            return None
+        recs = [f"{sym}: live {v['live_r']:+.2f}R over {v['n']} closes vs {v['benchmark']} {v['oos_r']:+.2f}R "
+                f"({v['status']}). Re-validate with tools/engine_select.py on fresh data; the live-expectancy "
+                f"quarantine acts automatically below its bar, any parameter change needs "
+                f"tools/promote_model.py approval." for sym, v in bad.items()]
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "source": "MONITOR_DRIFT",
+               "recommendations": recs}
+        if directory is None:
+            from jarvis.config.paths import DATA_DIR
+            directory = os.path.join(DATA_DIR, "advisories")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, f"advisories_{day}.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, default=str) + "\n")
+        _LAST_DRIFT_ADVISORY.clear()
+        _LAST_DRIFT_ADVISORY[day] = key
+        return row
+    except Exception:  # monitoring never reaches the trading path
+        return None
 
 
 def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last_send: float,
