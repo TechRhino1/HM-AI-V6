@@ -140,3 +140,8 @@ def test_gate_judges_engine_holdout_per_style_when_calibrated_policy_off(monkeyp
     assert exit_geometry.deployment_refusal("NZDUSD").startswith("STYLE_HOLDOUT_GATE")  # evidence: none for it
     monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: None)
     assert exit_geometry.deployment_refusal("EURUSD").startswith("NO_VALIDATED_PROFILE")  # no report -> stamps
+    # A cell that lost on train is refused despite its holdout; too few train trades or none -> holdout alone.
+    ev["DAY_TRADING"].update(train_trades=60, train_expectancy_r=-0.10)
+    assert exit_geometry.deployment_refusal("XAUUSD", "DAY_TRADING").startswith("STYLE_TRAIN_GATE")
+    ev["DAY_TRADING"].update(train_trades=5)
+    assert exit_geometry.deployment_refusal("XAUUSD", "DAY_TRADING") is None

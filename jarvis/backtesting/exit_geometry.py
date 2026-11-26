@@ -583,6 +583,11 @@ def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str
             if n < min_trades or e < min_exp:
                 return (f"STYLE_HOLDOUT_GATE: {symbol} {st} engine holdout {e:+.3f}R over {n} trades "
                         f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
+            # A holdout win after a train loss is a sign flip between regimes, not a stable edge.
+            tn, te = int(row.get("train_trades") or 0), row.get("train_expectancy_r")
+            if te is not None and tn >= HOLDOUT_MIN_TRADES and float(te) < 0.0:
+                return (f"STYLE_TRAIN_GATE: {symbol} {st} lost on the train window ({float(te):+.3f}R over {tn} trades) "
+                        f"before its holdout {e:+.3f}R")
             return None
         if style:
             st = _STYLE_ALIASES.get(str(style).upper(), str(style).upper())

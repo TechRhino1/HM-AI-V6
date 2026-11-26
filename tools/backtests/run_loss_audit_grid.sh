@@ -2,7 +2,7 @@
 # Evidence grid for reports/LOSS_ROOT_CAUSE_AUDIT_2026-11-27.md: real MT5 data (365d cache),
 # holdout 2026-05-24..11-26 (unseen by selection), train 2025-12-15..2026-05-21 for exit-mode choice.
 # Usage: bash tools/backtests/run_loss_audit_grid.sh <workers> <stage...>
-#   stages (run in the order given): holdout_lock holdout_default train
+#   stages (run in the order given): holdout_lock holdout_default train holdout_chandelier
 # Skips a symbol x style cell whose result file already exists, so a stopped run resumes.
 set -u
 cd "$(dirname "$0")/../.."
@@ -24,6 +24,7 @@ for stage in "$@"; do
   case $stage in
     holdout_lock)    run reports/loss_audit/after_holdout_institutional_lock SCALP,DAY_TRADING,SWING,H4_SWING 2026-05-24 2026-11-26 institutional_lock ;;
     holdout_default) run reports/loss_audit/after_holdout_default SCALP,DAY_TRADING,SWING,H4_SWING 2026-05-24 2026-11-26 ;;
+    holdout_chandelier) run reports/loss_audit/after_holdout_chandelier DAY_TRADING,SWING,H4_SWING 2026-05-24 2026-11-26 chandelier ;;
     train)
       for mode in "" institutional_lock hold chandelier; do
         run "reports/loss_audit/after_train_${mode:-default}" DAY_TRADING,SWING,H4_SWING 2025-12-15 2026-05-21 "$mode"
