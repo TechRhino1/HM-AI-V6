@@ -33,9 +33,10 @@ Usage::
 """
 from __future__ import annotations
 
+import os
 import threading
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Iterator, Optional
 
 _LOCK = threading.Lock()
 _OFFLINE = False
@@ -66,4 +67,15 @@ def offline_mode() -> Iterator[None]:
             _OFFLINE = previous
 
 
-__all__ = ["is_offline", "set_offline", "offline_mode"]
+BACKTEST_EXIT_MODES = ("legacy", "institutional_lock", "hold", "chandelier")
+
+
+def backtest_exit_mode() -> Optional[str]:
+    """Exit mode an offline backtest replays (env JARVIS_BACKTEST_EXIT_MODE), or None for the
+    calibrated/legacy policy. An env var so backtest worker processes inherit it. Live trading
+    never reads it: live uses trading.exit_mode."""
+    mode = (os.environ.get("JARVIS_BACKTEST_EXIT_MODE") or "").strip().lower()
+    return mode if mode in BACKTEST_EXIT_MODES else None
+
+
+__all__ = ["is_offline", "set_offline", "offline_mode", "backtest_exit_mode", "BACKTEST_EXIT_MODES"]
