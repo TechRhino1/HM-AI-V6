@@ -78,3 +78,29 @@ def test_drawdown_halt_blocks_forward_tests_too():
         res = gated_forward_entry(o, "EURUSD", "BUY", 0.01, stop=1.0900, tp=0.0, ref=1.0947,
                                   comment="FT_TR_EURUSD_H4_T1")
     assert res["status"] == "BLOCKED" and "Weekly" in res["reason"]
+
+
+def test_entry_bracket_is_repriced_to_the_live_quote():
+    """ETHUSD #2007190343: signal close 1631.18, fill 1638.57, stop left anchored to the close."""
+    o = _orch([])
+    o.mt5_client.get_tick.return_value = {"bid": 1.0950, "ask": 1.0952, "age_s": 0.5}
+    tg._RECENT_SENDS.clear()
+    with patch.object(dj, "record_dispatch"):
+        res = gated_forward_entry(o, "EURUSD", "SELL", 0.01, stop=1.1015, tp=1.0800, ref=1.0947,
+                                  comment="FT_ESW_EURUSD", style="SWING", strategy="ESW")
+    assert res["status"] == "FILLED"
+    kw = o.mt5_client.send_market_order.call_args.kwargs
+    assert abs(kw["sl_price"] - (1.1015 + 0.0003)) < 1e-9  # same 0.0068 distance from the bid
+    assert abs(kw["tp_price"] - (1.0800 + 0.0003)) < 1e-9
+    assert abs(kw["reference_price"] - 1.0950) < 1e-9
+
+
+def test_stale_signal_is_skipped_when_price_ran_half_a_stop_away():
+    o = _orch([])
+    o.mt5_client.get_tick.return_value = {"bid": 1.0990, "ask": 1.0992, "age_s": 0.5}  # +0.0043 vs 0.0068 stop
+    with patch.object(dj, "record_dispatch") as rec:
+        res = gated_forward_entry(o, "EURUSD", "SELL", 0.01, stop=1.1015, tp=0.0, ref=1.0947,
+                                  comment="FT_TR_EURUSD_H4_T1")
+    assert res["status"] == "BLOCKED" and res["reason"].startswith("STALE_SIGNAL")
+    o.mt5_client.send_market_order.assert_not_called()
+    assert rec.call_args[0][0]["blocked_by"] == "STALE_SIGNAL"
