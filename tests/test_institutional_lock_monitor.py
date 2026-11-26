@@ -40,3 +40,28 @@ def test_min_lot_position_is_floored_not_split():
     assert not [c for c in client.close_position.call_args_list if c.kwargs.get("volume")]
     sls = [c.kwargs.get("sl", c.args[1] if len(c.args) > 1 else None) for c in client.modify_position.call_args_list]
     assert any(s and s >= 2403.0 for s in sls)   # +0.3R floor (or the 0.7R trail above it)
+
+
+def test_legacy_partial_still_banks_half_of_a_splittable_lot():
+    """The 0.02 hardcode is gone; the broker min lot/step below it decides (2026-11-26)."""
+    import dataclasses
+    mon, client = _monitor({"sl": 2390.0, "volume_initial": 0.02})
+    client.get_symbol_trading_spec.return_value = {"volume_min": 0.01, "volume_step": 0.01}
+    ctx, _ = mon._ctx_cache["XAUUSD"]
+    ctx.current_price, ctx.bid, ctx.ask = 2411.0, 2410.9, 2411.1
+    mon._exit_policy[401] = dataclasses.replace(ExitPolicy.for_symbol("XAUUSD", trade_style="SWING"),
+                                                profit_locks=True, fast_cash_r=1.0, fast_cash_volume_pct=0.5)
+    mon._manage_single_position(_buy(0.02, 2411.0))
+    assert 0.01 in [c.kwargs.get("volume") for c in client.close_position.call_args_list]
+
+
+def test_legacy_partial_skips_an_unsplittable_min_lot():
+    import dataclasses
+    mon, client = _monitor({"sl": 2390.0, "volume_initial": 0.01})
+    client.get_symbol_trading_spec.return_value = {"volume_min": 0.01, "volume_step": 0.01}
+    ctx, _ = mon._ctx_cache["XAUUSD"]
+    ctx.current_price, ctx.bid, ctx.ask = 2411.0, 2410.9, 2411.1
+    mon._exit_policy[401] = dataclasses.replace(ExitPolicy.for_symbol("XAUUSD", trade_style="SWING"),
+                                                profit_locks=True, fast_cash_r=1.0, fast_cash_volume_pct=0.5)
+    mon._manage_single_position(_buy(0.01, 2411.0))
+    assert not [c for c in client.close_position.call_args_list if c.kwargs.get("volume")]
