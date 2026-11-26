@@ -26,19 +26,19 @@ def _rr_refusals(decision):
 
 def test_stale_tp_is_judged_on_the_calibrated_live_target(monkeypatch):
     monkeypatch.setattr(eg, "live_target_r", lambda s: 2.5)
-    monkeypatch.setattr(eg, "deployment_refusal", lambda s: None)
+    monkeypatch.setattr(eg, "deployment_refusal", lambda s, style=None: None)
     assert _rr_refusals(_decision(2120.0)) == []
 
 
 def test_deployable_calibrated_target_below_floor_is_not_refused(monkeypatch):
     monkeypatch.setattr(eg, "live_target_r", lambda s: 0.75)
-    monkeypatch.setattr(eg, "deployment_refusal", lambda s: None)
+    monkeypatch.setattr(eg, "deployment_refusal", lambda s, style=None: None)
     assert _rr_refusals(_decision(2120.0, "USDCHF")) == []
 
 
 def test_refused_profile_is_still_held_to_the_floor(monkeypatch):
     monkeypatch.setattr(eg, "live_target_r", lambda s: 0.4)
-    monkeypatch.setattr(eg, "deployment_refusal", lambda s: "EXPECTANCY_GATE")
+    monkeypatch.setattr(eg, "deployment_refusal", lambda s, style=None: "EXPECTANCY_GATE")
     assert _rr_refusals(_decision(2120.0, "USDCAD"))
 
 

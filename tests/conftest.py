@@ -172,7 +172,7 @@ def _legacy_exits_unless_marked(monkeypatch, request):
 
     monkeypatch.setattr(exit_geometry, "live_exit_geometry", lambda symbol: None)
     # Same for the live deployment bar (expectancy gate): unit tests use synthetic symbols/setups.
-    monkeypatch.setattr(exit_geometry, "deployment_refusal", lambda symbol: None)
+    monkeypatch.setattr(exit_geometry, "deployment_refusal", lambda symbol, style=None: None)
 
 
 @pytest.fixture(autouse=True)

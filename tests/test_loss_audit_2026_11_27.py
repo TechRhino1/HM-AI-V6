@@ -1,6 +1,8 @@
 """Regression tests for the 2026-11-27 loss root-cause audit (reports/LOSS_ROOT_CAUSE_AUDIT_2026-11-27.md)."""
 import inspect
 
+import pytest
+
 from jarvis.backtesting import exit_geometry
 from jarvis.intelligence import decision_engine as de
 
@@ -118,3 +120,23 @@ def test_drift_check_uses_holdout_and_writes_one_advisory(tmp_path):
     assert sm.record_drift_advisory(state, str(tmp_path)) is None  # debounced
     lines = list(tmp_path.glob("advisories_*.jsonl"))[0].read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1 and "promote_model.py" in lines[0]
+
+
+@pytest.mark.calibrated_exits  # conftest otherwise stubs deployment_refusal to None
+def test_gate_judges_engine_holdout_per_style_when_calibrated_policy_off(monkeypatch):
+    """Part B: with the calibrated policy off, the gate reads the engine-in-the-loop holdout of the
+    policy that actually trades, per symbol x style; with no such evidence it falls back to the stamps."""
+    from jarvis.config import runtime
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(runtime, "is_offline", lambda: False)
+    monkeypatch.setattr(SETTINGS.trading, "use_calibrated_entry_policy", False, raising=False)
+    ev = {"DAY_TRADING": {"trades": 120, "expectancy_r": 0.08}, "SCALP": {"trades": 300, "expectancy_r": -0.05}}
+    monkeypatch.setattr(exit_geometry, "_engine_evidence", lambda s: ev if s == "XAUUSD" else ({} if s == "NZDUSD" else None))
+    assert exit_geometry.deployment_refusal("XAUUSD", "DAY_TRADING") is None
+    assert exit_geometry.deployment_refusal("XAUUSD", "DAY") is None  # alias
+    assert exit_geometry.deployment_refusal("XAUUSD", "SCALP").startswith("STYLE_HOLDOUT_GATE")
+    assert exit_geometry.deployment_refusal("XAUUSD", "SWING").startswith("STYLE_HOLDOUT_GATE")  # no evidence
+    assert exit_geometry.deployment_refusal("XAUUSD") is None  # some cell passes
+    assert exit_geometry.deployment_refusal("NZDUSD").startswith("STYLE_HOLDOUT_GATE")  # evidence: none for it
+    monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: None)
+    assert exit_geometry.deployment_refusal("EURUSD").startswith("NO_VALIDATED_PROFILE")  # no report -> stamps

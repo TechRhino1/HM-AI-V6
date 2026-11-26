@@ -211,6 +211,11 @@ def main() -> int:
     ap.add_argument("--filters", action="store_true", help="screen every post-hoc entry filter")
     ap.add_argument("--trials", type=int, default=0, help="true number of trials for DSR (default: cells x variants)")
     ap.add_argument("--json", default="")
+    ap.add_argument("--write-mode-report", default="",
+                    help="write holdout evidence in ModeReliabilityModel's schema (reports/mode_backtest_report.json); "
+                         "the deployment gate and the AUTO prior read it")
+    ap.add_argument("--holdout-window", default="", help="e.g. 2026-05-24..2026-11-26 (required with --write-mode-report)")
+    ap.add_argument("--exit-mode", default="", help="exit policy the run replayed (recorded in the report)")
     a = ap.parse_args()
     run = load_run(a.run)
     base = evaluate(load_run(a.base)) if a.base else None
@@ -232,7 +237,35 @@ def main() -> int:
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump(res, fh, indent=2, default=str)
+    if a.write_mode_report:
+        if not a.holdout_window:
+            raise SystemExit("--holdout-window is required: the gate only trusts a report that says it is a holdout")
+        write_mode_report(ev, a.write_mode_report, a.holdout_window, a.exit_mode, a.run, n_trials)
     return 0
+
+
+def write_mode_report(ev, path: str, window: str, exit_mode: str, run: str, n_trials: int) -> None:
+    """Holdout evidence per style with per-symbol rows (schema of reports/mode_backtest_report.json)."""
+    import datetime
+    modes = {}
+    for (sym, st), m in ev.items():
+        if not m.get("n"):
+            continue
+        modes.setdefault(st, []).append({"symbol": sym, "trades": m["n"], "expectancy_r": m["exp_r"],
+                                         "profit_factor": m["pf"] or 0.0, "win_rate_pct": m["win_pct"],
+                                         "max_dd_r": m["max_dd_r"], "dsr": m.get("dsr")})
+    out = {"generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+           "source": run, "holdout_window": window, "exit_mode": exit_mode or "default",
+           "n_trials": n_trials, "data": "MT5 real bars, data/market/real/*_365d.parquet", "modes": []}
+    for st, rows in sorted(modes.items()):
+        rs = [r for (s2, t2), m in ev.items() if t2 == st for r in m.get("_rs", [])]
+        pm = metrics(rs, 1.0) if rs else {"n": 0}
+        out["modes"].append({"style": st, "pooled": {"trades": pm.get("n", 0), "expectancy_r": pm.get("exp_r", 0.0),
+                                                     "profit_factor": pm.get("pf") or 0.0,
+                                                     "win_rate_pct": pm.get("win_pct", 0.0)},
+                             "per_symbol": sorted(rows, key=lambda r: r["symbol"])})
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=2, default=str)
 
 
 if __name__ == "__main__":

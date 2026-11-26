@@ -13,13 +13,13 @@ from jarvis.risk.position_sizing import PositionSizer
 
 def test_deployable_calibrated_target_is_not_held_to_the_2r_floor(monkeypatch):
     monkeypatch.setattr(eg, "live_target_r", lambda s: 1.5)
-    monkeypatch.setattr(eg, "deployment_refusal", lambda s: None)
+    monkeypatch.setattr(eg, "deployment_refusal", lambda s, style=None: None)
     assert orch.unsplit_rr_block("XAUUSD", 4.99) is None
 
 
 def test_refused_profile_is_judged_on_the_target_it_carries(monkeypatch):
     monkeypatch.setattr(eg, "live_target_r", lambda s: 1.5)
-    monkeypatch.setattr(eg, "deployment_refusal", lambda s: "EXPECTANCY_GATE")
+    monkeypatch.setattr(eg, "deployment_refusal", lambda s, style=None: "EXPECTANCY_GATE")
     assert orch.unsplit_rr_block("USDCAD", 4.99) == 1.5     # the R it is judged on, not 4.99
 
 
