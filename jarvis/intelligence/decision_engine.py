@@ -318,7 +318,11 @@ class DecisionEngine:
             htf_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             context_bias = mtf_align.get("H1", mtf_align.get("M15", "NEUTRAL"))
             primary_tf_bias = mtf_align.get("M15", getattr(st, "bias", "NEUTRAL"))
-        else:  # SWING
+        elif "D1_SWING" in style_upper:  # macro W1, context D1 (data_feed.STYLE_TIMEFRAMES)
+            htf_bias = mtf_align.get("W1", mtf_align.get("D1", "NEUTRAL"))
+            context_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
+            primary_tf_bias = mtf_align.get("D1", getattr(st, "bias", "NEUTRAL"))
+        else:  # SWING / H4_SWING: macro D1, context H4
             htf_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
             context_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             primary_tf_bias = mtf_align.get("H1", getattr(st, "bias", "NEUTRAL"))
@@ -911,7 +915,10 @@ class DecisionEngine:
         elif any(x in t_style_upper for x in ("DAY", "INTRADAY")):
             macro_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             context_bias = mtf_align.get("H1", "NEUTRAL")
-        else: # SWING
+        elif "D1_SWING" in t_style_upper:  # macro W1, context D1 (data_feed.STYLE_TIMEFRAMES)
+            macro_bias = mtf_align.get("W1", mtf_align.get("D1", "NEUTRAL"))
+            context_bias = mtf_align.get("D1", "NEUTRAL")
+        else: # SWING / H4_SWING: macro D1, context H4
             macro_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
             context_bias = mtf_align.get("H4", "NEUTRAL")
 
@@ -1128,7 +1135,7 @@ class DecisionEngine:
                 if (macro_bias == "BEARISH" or d1_anchor_bias == "BEARISH") and not is_validated_reversal and ts <= -15.0:
                     gold_trend_following_valid = False
 
-            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK", "BREAKDOWN", "MOMENTUM_CONTINUATION", "STRUCTURE", "BREAKOUT"):
+            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK"):  # the only trend names StrategySelector emits
                 if tentative_bias == "BUY":
                     if not (sweep_confirmed or st_zone in ("DISCOUNT", "EQUILIBRIUM") or bos_active or ts >= 35.0):
                         gold_trend_following_valid = False
@@ -2123,10 +2130,10 @@ class DecisionEngine:
             has_bull_choch = getattr(st, "choch_type", "") == "BULLISH"
             has_bear_choch = getattr(st, "choch_type", "") == "BEARISH"
             rsi_val_eval = getattr(context.momentum, "rsi", 50.0) if hasattr(context, "momentum") else 50.0
-            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "MOMENTUM_CONTINUATION")
+            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING")
             has_fvg_ob = bool(getattr(st, "fair_value_gaps", None) or getattr(st, "order_blocks", None))
             strong_metals_trend = abs(trend_score_val) >= 45.0
-            has_breakout = best_strategy in ("BREAKOUT", "MOMENTUM_CONTINUATION") or getattr(st, "bos", False)
+            has_breakout = bool(getattr(st, "bos", False))  # BREAKOUT/MOMENTUM_CONTINUATION are never selected
 
             if tentative_bias == "BUY":
                 if is_trend_pullback or strong_metals_trend or has_fvg_ob:
@@ -2460,7 +2467,7 @@ class DecisionEngine:
         # or buy into an overbought premium roof (RSI > 68 or Premium zone), unless it is a verified momentum breakout expansion.
         st_zone = getattr(context.structure, "discount_premium_zone", "EQUILIBRIUM") if hasattr(context, "structure") else "EQUILIBRIUM"
         rsi_val = float(getattr(context.momentum, "rsi", 50.0) or 50.0) if hasattr(context, "momentum") else 50.0
-        is_breakout_mode = best_strategy in ("BREAKOUT_EXPANSION", "BREAKDOWN") or is_expansion_val > 0 or is_extreme_val > 0
+        is_breakout_mode = best_strategy == "BREAKOUT_EXPANSION" or is_expansion_val > 0 or is_extreme_val > 0
 
         has_bull_swp = bool(getattr(context.liquidity, "sweep_detected", False) and "BULLISH" in getattr(context.liquidity, "sweep_type", ""))
         has_bear_swp = bool(getattr(context.liquidity, "sweep_detected", False) and "BEARISH" in getattr(context.liquidity, "sweep_type", ""))
@@ -2624,7 +2631,7 @@ class DecisionEngine:
                         logger.info(f"[{context.symbol}] BUY_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. Resting limit blocked.")
         if threat_lvl is not None and isinstance(threat_lvl, (int, float)) and threat_lvl > 0:
             is_trend_or_breakout = (
-                best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "CHOCH_STRUCTURAL_REVERSAL")
+                best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "CHOCH_STRUCTURAL_REVERSAL")
                 or abs(trend_score_val) >= 40.0
             )
             if tentative_bias == "BUY" and entry_price < threat_lvl <= tp_price:
