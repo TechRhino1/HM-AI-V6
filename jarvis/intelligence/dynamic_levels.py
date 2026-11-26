@@ -1621,6 +1621,10 @@ class DynamicRiskAndLevelsEngine:
                     base_risk_floor = float(base_result.get("risk_dist", 0.0))
 
                     clamped_risk = max(inst_risk, base_risk_floor) if base_risk_floor > 0 else inst_risk
+                    # The gold SCALP/DAY $12 cap must bind the stop that is actually placed; the
+                    # baseline cap above is only a floor here, so gold DAY stops ran $20-60.
+                    if is_gold and style in ("SCALP", "DAY_TRADING", "DAY", "INTRADAY"):
+                        clamped_risk = min(clamped_risk, 12.0 + spread_dist)
 
                     if tentative_bias == "BUY":
 
