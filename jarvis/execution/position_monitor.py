@@ -301,11 +301,14 @@ class PositionMonitorEngine:
             start = time.monotonic()
             try:
                 self._run_monitor_tick()
+                self.consecutive_tick_errors = 0
+                self.last_ok_at = time.time()
             except Exception as e:
                 self.tick_errors += 1
+                self.consecutive_tick_errors = getattr(self, "consecutive_tick_errors", 0) + 1
                 self.last_tick_error = f"{type(e).__name__}: {e}"[:200]
                 logger.error(f"PositionMonitor tick error: {e}", exc_info=True)
-            self.last_tick_at = time.time()  # a completed tick, ok or not
+            self.last_tick_at = time.time()  # a completed tick, ok or not (last_ok_at = last good one)
             self.last_tick_ms = (time.monotonic() - start) * 1000.0
             elapsed = time.monotonic() - start
             sleep_time = max(0.0, MONITOR_INTERVAL_SEC - elapsed)
@@ -3015,6 +3018,8 @@ class PositionMonitorEngine:
             "thread_alive": bool(self._thread and self._thread.is_alive()),
             "last_tick_at": self.last_tick_at,
             "tick_errors": self.tick_errors,
+            "consecutive_tick_errors": getattr(self, "consecutive_tick_errors", 0),
+            "last_ok_at": getattr(self, "last_ok_at", 0.0),
             "last_tick_error": self.last_tick_error,
             "last_tick_ms": round(self.last_tick_ms, 1),
             "monitored_symbols": list(self._ctx_cache.keys()),

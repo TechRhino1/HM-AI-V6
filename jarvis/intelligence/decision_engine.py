@@ -702,7 +702,7 @@ class DecisionEngine:
             if honest_base_rate is not None:
                 _gap = describe_honest_gap(final_win_p, honest_base_rate, tp=rr_ratio)
                 if tentative_bias in ("BUY", "SELL"):
-                    logger.info(f"[{context.symbol}] HONEST BASE RATE | {_gap}")
+                    logger.debug(f"[{context.symbol}] HONEST BASE RATE | {_gap}")
                 else:
                     logger.debug(f"[{context.symbol}] HONEST BASE RATE | {_gap}")
         except Exception as _honest_exc:
@@ -1674,7 +1674,7 @@ class DecisionEngine:
                     tp_dist = tp_price - entry_price
                     rr_ratio = round(tp_dist / (risk_dist + 1e-9), 2)
                 else:
-                    logger.info(f"[{context.symbol}] Devil's threat level {threat_lvl} gives {tuck_r:.2f}R < {min_target_rr_tuck}:1. Maintaining structural TP {tp_price}.")
+                    logger.debug(f"[{context.symbol}] Devil's threat level {threat_lvl} gives {tuck_r:.2f}R < {min_target_rr_tuck}:1. Maintaining structural TP {tp_price}.")
             elif tentative_bias == "SELL" and tp_price < threat_lvl < entry_price:
                 adjusted_tp = round(threat_lvl + (atr_val * 0.1), spec.digits)
                 tuck_r = (entry_price - adjusted_tp) / (risk_dist + 1e-9)
@@ -1685,7 +1685,7 @@ class DecisionEngine:
                     tp_dist = entry_price - tp_price
                     rr_ratio = round(tp_dist / (risk_dist + 1e-9), 2)
                 else:
-                    logger.info(f"[{context.symbol}] Devil's threat level {threat_lvl} gives {tuck_r:.2f}R < {min_target_rr_tuck}:1. Maintaining structural TP {tp_price}.")
+                    logger.debug(f"[{context.symbol}] Devil's threat level {threat_lvl} gives {tuck_r:.2f}R < {min_target_rr_tuck}:1. Maintaining structural TP {tp_price}.")
 
 
 
@@ -1719,7 +1719,7 @@ class DecisionEngine:
             smt_type = metals_smt.get("smt_type", "NONE")
             if (tentative_bias == "BUY" and smt_type == "BULLISH_SMT") or (tentative_bias == "SELL" and smt_type == "BEARISH_SMT"):
                 ai_score = min(100.0, ai_score + float(metals_smt.get("score_bonus", 15.0)))
-                logger.info(f"[{context.symbol}] Institutional Metals SMT Divergence ALIGNS with {tentative_bias}! (+{metals_smt.get('score_bonus', 15.0)} AI boost)")
+                logger.debug(f"[{context.symbol}] Institutional Metals SMT Divergence ALIGNS with {tentative_bias}! (+{metals_smt.get('score_bonus', 15.0)} AI boost)")
             elif (tentative_bias == "BUY" and smt_type == "BEARISH_SMT") or (tentative_bias == "SELL" and smt_type == "BULLISH_SMT"):
                 ai_score = max(0.0, ai_score - 20.0)
                 logger.warning(f"[{context.symbol}] Institutional Metals SMT Divergence OPPOSES {tentative_bias}! (-20.0 AI penalty)")

@@ -184,6 +184,22 @@ class MonitorSettings:
     fallback_rate_warn: float = 0.25
     verifier_fail_rate_warn: float = 0.05
     forward_test_exposure_warn_pct: float = 50.0
+    # 2026-11-27 health upgrade (PR B). Windows are seconds; shares are fractions.
+    window_s: float = 1800.0              # rate checks look at this trailing window, not lifetime totals
+    state_sync_stall_s: float = 30.0      # the broker sync loop runs every second
+    synthetic_share_warn: float = 0.10    # share of rate fetches served synthetic bars
+    news_synthetic_share_warn: float = 0.50
+    stale_symbols_warn: int = 1           # symbols whose newest frame is STALE while quoting
+    cpu_warn_pct: float = 90.0
+    memory_warn_pct: float = 90.0
+    disk_free_warn_gb: float = 5.0
+    data_dir_warn_gb: float = 5.0
+    escalate_after_passes: int = 30       # a WARN that persists this many passes (~30 min) becomes CRITICAL
+    repeat_alert_s: float = 21600.0       # a persistent, unchanged problem is re-alerted at most every 6 h
+    thread_restarts_per_hour: int = 5     # self-heal cap per worker thread
+    retention_days: int = 14              # journals/advisories/alerts older than this are gzipped
+    delete_after_days: int = 90           # gzipped journals older than this are deleted
+    backups_keep: int = 7                 # daily SQLite backups kept per database
 
 
 @dataclass
@@ -215,6 +231,12 @@ class GovernanceSettings:
 
 # (section, attr) -> (min, max) bounds. Out-of-bounds values keep the default.
 _BOUNDS = {
+    ("monitor", "window_s"): (300.0, 86400.0),
+    ("monitor", "escalate_after_passes"): (3, 1440),
+    ("monitor", "thread_restarts_per_hour"): (0, 60),
+    ("monitor", "retention_days"): (3, 365),
+    ("monitor", "delete_after_days"): (7, 3650),
+    ("monitor", "backups_keep"): (1, 60),
     ("verifier", "budget_ms"): (20.0, 2000.0),
     ("verifier", "max_signal_age_s"): (30.0, 7200.0),
     ("verifier", "max_drift_atr"): (0.05, 3.0),

@@ -345,6 +345,26 @@ class DataFeedEngine:
                 "timeframe": timeframe,
                 "at": time.time(),
             }
+            # Per symbol too: one global value from whichever fetch ran last flipped DATA_FEED
+            # between symbols (crypto STREAMING vs FX CLOSED) and hid a single bad feed.
+            if not hasattr(self, "_symbol_health"):
+                self._symbol_health = {}
+            self._symbol_health[str(symbol).upper()] = dict(self._health)
+
+    def symbol_health(self, max_age_sec: float = 900.0) -> Dict[str, Dict[str, Any]]:
+        """{symbol: health} with the same statuses as `data_health`, for every symbol fetched recently."""
+        with self._health_lock:
+            rows = dict(getattr(self, "_symbol_health", {}))
+        out = {}
+        for sym, h in rows.items():
+            age = time.time() - float(h.get("at") or 0.0)
+            if age > max_age_sec:
+                continue
+            src, fr = h.get("source"), h.get("freshness")
+            status = ("SYNTHETIC" if src != "LIVE_MT5" else "CLOSED" if fr == MARKET_CLOSED
+                      else "STALE" if fr == STALE else "STREAMING")
+            out[sym] = dict(h, status=status, age_sec=round(age, 1))
+        return out
 
     def data_health(self, max_age_sec: float = 120.0) -> Dict[str, Any]:
         """Honest market-data health, derived from the last fetch that ran.
@@ -576,6 +596,8 @@ class DataFeedEngine:
                         )
                         break
 
+            if verdict == FRESH:
+                self._stale_warned.discard(cache_key)  # a second stale episode warns again
             if verdict == STALE and cache_key not in self._stale_warned:
                 self._stale_warned.add(cache_key)
                 bar_sec = TF_SECONDS_MAP.get(str(timeframe).upper(), 1)

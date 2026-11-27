@@ -89,8 +89,13 @@ def test_position_monitor_heartbeat_states():
     assert sm.check_position_monitor(NOW, _pm(last_tick_at=NOW - 300), 6, CFG)["status"] == sm.CRITICAL
     assert sm.check_position_monitor(NOW, _pm(thread_alive=False), 6, CFG)["status"] == sm.CRITICAL
     assert sm.check_position_monitor(NOW, _pm(last_tick_at=0.0), 6, CFG)["status"] == sm.CRITICAL
-    out = sm.check_position_monitor(NOW, _pm(tick_errors=3, last_tick_error="KeyError: x"), 6, CFG)
+    # Judged on the current error streak, not the lifetime count (one old error used to mean WARN forever).
+    out = sm.check_position_monitor(NOW, _pm(tick_errors=3, consecutive_tick_errors=3, last_tick_error="KeyError: x"), 6, CFG)
     assert out["status"] == sm.WARN and "KeyError" in out["detail"]
+    assert sm.check_position_monitor(NOW, _pm(tick_errors=3, consecutive_tick_errors=0), 6, CFG)["status"] == sm.OK
+    # Every tick failing for longer than the stall window is CRITICAL even though ticks "complete".
+    failing = _pm(consecutive_tick_errors=20, last_ok_at=NOW - 300, last_tick_error="KeyError: x")
+    assert sm.check_position_monitor(NOW, failing, 6, CFG)["status"] == sm.CRITICAL
     assert sm.check_position_monitor(NOW, None, 6, CFG)["status"] == sm.WARN   # open trades, no monitor
     assert sm.check_position_monitor(NOW, None, 0, CFG)["status"] == sm.OK
 

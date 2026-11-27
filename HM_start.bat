@@ -6,8 +6,8 @@ echo ======================================================================
 echo           Starting HM-AI-V6 (HM Algo 6.0) Live Trading Terminal
 echo ======================================================================
 if exist "C:\Users\musu9\AppData\Local\Programs\Python\Python312\python.exe" (
-    "C:\Users\musu9\AppData\Local\Programs\Python\Python312\python.exe" HM_start.py %*
+    "C:\Users\musu9\AppData\Local\Programs\Python\Python312\python.exe" tools\hm_supervisor.py %*
 ) else (
-    py -3.12 HM_start.py %* 2>nul || python HM_start.py %*
+    py -3.12 tools\hm_supervisor.py %* 2>nul || python tools\hm_supervisor.py %*
 )
 pause

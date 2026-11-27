@@ -44,10 +44,18 @@ def check_position_monitor(now: float, status: Optional[Dict[str, Any]], open_po
         return {"status": CRITICAL, "value": None if age is None else round(age, 1),
                 "threshold": cfg.position_monitor_stall_s,
                 "detail": "position monitor has not completed a tick" + ("" if age is None else f" for {age:.0f}s")}
-    errs = int(status.get("tick_errors") or 0)
-    return {"status": WARN if errs else OK, "value": round(age, 1), "threshold": cfg.position_monitor_stall_s,
-            "detail": f"last tick {age:.0f}s ago; {errs} tick error(s) since start"
-                      + (f" (last: {status.get('last_tick_error')})" if errs else "")}
+    # A tick that fails every time still "completes": judge the last GOOD tick and the current
+    # error streak, not the lifetime error count (one error used to mean WARN until restart).
+    streak = int(status.get("consecutive_tick_errors") or 0)
+    ok_at = float(status.get("last_ok_at") or last)
+    ok_age = now - ok_at if ok_at else None
+    if ok_age is not None and ok_age > cfg.position_monitor_stall_s and streak:
+        return {"status": CRITICAL, "value": round(ok_age, 1), "threshold": cfg.position_monitor_stall_s,
+                "detail": f"position monitor ticks are all failing ({streak} in a row, last good {ok_age:.0f}s ago): "
+                          f"{status.get('last_tick_error')}"}
+    return {"status": WARN if streak >= 3 else OK, "value": round(age, 1), "threshold": cfg.position_monitor_stall_s,
+            "detail": f"last tick {age:.0f}s ago; {streak} consecutive tick error(s)"
+                      + (f" (last: {status.get('last_tick_error')})" if streak else "")}
 
 
 def _legs(symbol: str):
@@ -256,12 +264,168 @@ def record_drift_advisory(state: Dict[str, Any], directory: Optional[str] = None
         return None
 
 
+class Window:
+    """Trailing-window delta of a monotonically increasing total (metrics Counters are lifetime
+    totals, so a spike at start-up diluted forever and a fresh spike was averaged away)."""
+
+    def __init__(self) -> None:
+        self._pts: Dict[str, List[tuple]] = {}
+
+    def delta(self, key: str, now: float, total: float, span: float) -> float:
+        pts = self._pts.setdefault(key, [])
+        pts.append((now, float(total)))
+        while len(pts) > 2 and pts[1][0] <= now - span:
+            pts.pop(0)
+        return max(0.0, pts[-1][1] - pts[0][1])
+
+
+WINDOW = Window()
+
+
+def counter_by(counter: Any, label: str) -> Dict[str, float]:
+    """Totals of a metrics Counter grouped by one label value."""
+    out: Dict[str, float] = {}
+    try:
+        for smp in counter.samples():
+            k = str(smp["labels"].get(label, ""))
+            out[k] = out.get(k, 0.0) + float(smp["value"])
+    except Exception:
+        pass
+    return out
+
+
+def check_share(name: str, now: float, bad_total: float, all_total: float, warn_at: float, span: float,
+                min_events: int = 20) -> Dict[str, Any]:
+    """Share of `bad` events among all events in the trailing window."""
+    bad = WINDOW.delta(name + ":bad", now, bad_total, span)
+    tot = WINDOW.delta(name + ":all", now, all_total, span)
+    share = bad / tot if tot > 0 else 0.0
+    return {"status": WARN if tot >= min_events and share > warn_at else OK, "value": round(share, 3),
+            "threshold": warn_at, "detail": f"{name}: {int(bad)}/{int(tot)} in the last {span / 60:.0f} min"}
+
+
+def check_windowed_rate(name: str, now: float, num_total: float, den_total: float, warn_at: float,
+                        span: float) -> Dict[str, Any]:
+    num = WINDOW.delta(name + ":num", now, num_total, span)
+    den = WINDOW.delta(name + ":den", now, den_total, span)
+    return check_rate(f"{name} (last {span / 60:.0f} min)", num, den, warn_at)
+
+
+def check_state_sync(now: float, last_ok_at: Optional[float], cfg: Any) -> Dict[str, Any]:
+    if not last_ok_at:
+        return {"status": WARN, "value": None, "threshold": cfg.state_sync_stall_s,
+                "detail": "broker state sync has not completed a pass yet"}
+    age = now - float(last_ok_at)
+    return {"status": CRITICAL if age > cfg.state_sync_stall_s else OK, "value": round(age, 1),
+            "threshold": cfg.state_sync_stall_s,
+            "detail": f"last successful broker sync {age:.0f}s ago (account and positions are this old)"}
+
+
+def check_symbol_feeds(symbols: Optional[Dict[str, Dict[str, Any]]], cfg: Any) -> Dict[str, Any]:
+    """Per-symbol market data: STALE while quoting, or SYNTHETIC, is a symbol the engine cannot trade."""
+    if not symbols:
+        return {"status": OK, "value": 0, "threshold": cfg.stale_symbols_warn, "detail": "no fetches yet", "symbols": {}}
+    bad = {s: h["status"] for s, h in symbols.items() if h.get("status") in ("STALE", "SYNTHETIC")}
+    return {"status": WARN if len(bad) >= cfg.stale_symbols_warn else OK, "value": len(bad),
+            "threshold": cfg.stale_symbols_warn,
+            "detail": ("untradeable feeds: " + ", ".join(f"{s} {st}" for s, st in sorted(bad.items())))
+            if bad else f"{len(symbols)} symbol feed(s) healthy or closed",
+            "symbols": {s: h.get("status") for s, h in symbols.items()}}
+
+
+def check_timeouts(guard: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not guard or "error" in guard:
+        return {"status": WARN, "value": None, "threshold": None, "detail": "timeout guard health unavailable"}
+    stuck = int(guard.get("stuck_workers") or guard.get("stuck") or 0)
+    wedged = bool(guard.get("wedged"))
+    return {"status": CRITICAL if wedged else (WARN if stuck else OK), "value": stuck, "threshold": None,
+            "detail": "worker pool wedged (calls cannot be scheduled)" if wedged
+            else f"{stuck} worker(s) stuck in calls that could not be cancelled"}
+
+
+def check_risk_guards(halted: Optional[str], breaker: Optional[str], daily_pnl: float, peak: float,
+                      daily_limit_pct: float = 4.0) -> Dict[str, Any]:
+    """Drawdown halt, circuit breaker, and distance to the daily-loss lockout."""
+    used = (-daily_pnl / peak * 100.0) if peak > 0 and daily_pnl < 0 else 0.0
+    parts = []
+    if halted:
+        parts.append(f"drawdown halt: {halted}")
+    if breaker:
+        parts.append(f"circuit breaker: {breaker}")
+    parts.append(f"daily loss {used:.2f}% of the {daily_limit_pct:g}% lockout")
+    st = WARN if (halted or breaker or used >= 0.75 * daily_limit_pct) else OK
+    return {"status": st, "value": round(used, 2), "threshold": daily_limit_pct, "detail": "; ".join(parts)}
+
+
+def check_overrides(rows: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """Operator deployment overrides on probation: how close each is to its stop."""
+    if not rows:
+        return {"status": OK, "value": 0, "threshold": None, "detail": "no deployment overrides", "overrides": []}
+    stopped = [r for r in rows if r.get("stopped")]
+    near = [r for r in rows if not r.get("stopped") and r.get("n", 0) >= 0.5 * r.get("stop_after", 30)
+            and r.get("r", 0.0) < r.get("stop_below", -0.1)]
+    detail = "; ".join(f"{r['symbol']} {r['style']}: {r['r']:+.3f}R over {r['n']}/{r['stop_after']}"
+                       + (" STOPPED" if r.get("stopped") else "") for r in rows)
+    return {"status": WARN if (stopped or near) else OK, "value": len(stopped), "threshold": None,
+            "detail": detail, "overrides": rows}
+
+
+def check_resources(cpu_pct: Optional[float], mem_pct: Optional[float], disk_free_gb: Optional[float],
+                    data_gb: Optional[float], cfg: Any) -> Dict[str, Any]:
+    bad = []
+    if cpu_pct is not None and cpu_pct > cfg.cpu_warn_pct:
+        bad.append(f"CPU {cpu_pct:.0f}%")
+    if mem_pct is not None and mem_pct > cfg.memory_warn_pct:
+        bad.append(f"memory {mem_pct:.0f}%")
+    if disk_free_gb is not None and disk_free_gb < cfg.disk_free_warn_gb:
+        bad.append(f"disk free {disk_free_gb:.1f} GB")
+    if data_gb is not None and data_gb > cfg.data_dir_warn_gb:
+        bad.append(f"data/ {data_gb:.1f} GB")
+    crit = disk_free_gb is not None and disk_free_gb < 1.0
+    return {"status": CRITICAL if crit else (WARN if bad else OK), "value": None, "threshold": None,
+            "detail": ", ".join(bad) if bad else
+            f"CPU {cpu_pct or 0:.0f}%, memory {mem_pct or 0:.0f}%, disk free {disk_free_gb or 0:.1f} GB, "
+            f"data/ {data_gb or 0:.2f} GB"}
+
+
+_ALERT_STATE: Dict[str, Dict[str, Any]] = {}
+
+
+def _alert_transitions(now: float, checks: Dict[str, Dict[str, Any]], cfg: Any) -> None:
+    """Alert on a status change, a recovery, an escalation, and at most every repeat_alert_s for a
+    problem that persists unchanged (the old 30-min debounce re-sent the same WARN forever)."""
+    from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+    esc_after = int(getattr(cfg, "escalate_after_passes", 30) or 30)
+    repeat_s = float(getattr(cfg, "repeat_alert_s", 21600.0) or 21600.0)
+    for name, c in checks.items():
+        st = c.get("status", OK)
+        prev = _ALERT_STATE.get(name, {"status": OK, "passes": 0, "alerted_at": 0.0, "alerted_status": OK})
+        passes = prev["passes"] + 1 if (st != OK and st == prev["status"]) else (1 if st != OK else 0)
+        effective = CRITICAL if (st == WARN and passes >= esc_after) else st
+        if effective != st:
+            c["escalated"] = True
+        send, sev, title = False, None, None
+        if effective == OK and prev["alerted_status"] != OK:
+            send, sev, title = True, AlertSeverity.INFO, f"Monitor: {name} recovered"
+        elif effective != OK and (effective != prev["alerted_status"] or now - prev["alerted_at"] >= repeat_s):
+            send = True
+            sev = AlertSeverity.CRITICAL if effective == CRITICAL else AlertSeverity.WARNING
+            title = f"Monitor: {name} {effective}" + (" (escalated: persistent)" if c.get("escalated") else "")
+        if send:
+            dispatch_alert(title=title, message=c.get("detail", ""), severity=sev, source="SystemMonitor",
+                           details={k: v for k, v in c.items() if k != "detail"},
+                           event_key=f"monitor_{name}_{effective}", debounce_seconds=0.0)
+            prev = dict(prev, alerted_at=now, alerted_status=effective)
+        _ALERT_STATE[name] = dict(prev, status=st, passes=passes)
+
+
 def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last_send: float,
                verifications: Iterable[Dict[str, Any]], positions: Iterable[Any], equity: float,
                max_portfolio_risk_pct: float, fallbacks: float, evaluations: float, cfg: Any,
                alert: bool = True, position_monitor: Optional[Dict[str, Any]] = None,
                has_position_monitor: bool = True, live_r: Optional[Dict[str, List[float]]] = None,
-               profiles: Optional[Dict[str, Any]] = None, quarantine_r: float = -0.15) -> Dict[str, Any]:
+               profiles: Optional[Dict[str, Any]] = None, quarantine_r: float = -0.15,
+               extra_checks: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     positions = list(positions)
     checks = {
         "loop_heartbeat": check_loop(now, heartbeat, cfg),
@@ -269,26 +433,24 @@ def run_checks(*, now: float, heartbeat: float, rows: List[Dict[str, Any]], last
                                                    len(positions), cfg),
         "no_trade": check_no_trade(now, rows, last_send, cfg),
         "rejection_spike": check_reject_spike(now, rows, cfg),
-        "analyst_fallbacks": check_rate("analyst fallbacks per evaluation", fallbacks, evaluations, cfg.fallback_rate_warn),
+        "analyst_fallbacks": check_windowed_rate("analyst fallbacks per evaluation", now, fallbacks, evaluations,
+                                                 cfg.fallback_rate_warn, float(getattr(cfg, "window_s", 1800.0))),
         "verifier_health": check_verifier(verifications, cfg),
         "forward_test_exposure": check_forward_exposure(positions, equity, max_portfolio_risk_pct, cfg),
         "currency_exposure": check_currency_exposure(positions, equity, max_portfolio_risk_pct),
         "stops_and_gap_risk": check_stops_and_gap(positions, equity, now),
         "live_vs_calibrated": check_live_drift(live_r, profiles, quarantine_r),
     }
+    checks.update(extra_checks or {})
     worst = CRITICAL if any(c["status"] == CRITICAL for c in checks.values()) else (
         WARN if any(c["status"] == WARN for c in checks.values()) else OK)
     if alert:
         try:
-            from jarvis.observability.alerting import AlertSeverity, dispatch_alert
-            for name, c in checks.items():
-                if c["status"] != OK:
-                    dispatch_alert(title=f"Monitor: {name} {c['status']}", message=c["detail"],
-                                   severity=AlertSeverity.CRITICAL if c["status"] == CRITICAL else AlertSeverity.WARNING,
-                                   source="SystemMonitor", details={k: v for k, v in c.items() if k != "detail"},
-                                   event_key=f"monitor_{name}", debounce_seconds=1800.0)
+            _alert_transitions(now, checks, cfg)
         except Exception:
             pass
+        if any(c.get("escalated") for c in checks.values()):
+            worst = CRITICAL
     return {"status": worst, "checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
             "checks": checks}
 

@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { api } from "../../lib/api";
 import { usePoll } from "../../lib/hooks";
 import { ago, fixed } from "../../lib/format";
 import { Badge, Card, Empty, ErrorNote, KV, Loading } from "../../components/ui";
@@ -21,7 +23,47 @@ const LABEL: Record<string, string> = {
   loop_heartbeat: "Orchestration loop", position_monitor: "Position monitor (open trades)", no_trade: "Order flow", rejection_spike: "Rejection rate",
   analyst_fallbacks: "Analyst fallbacks", currency_exposure: "Correlated currency risk",
   stops_and_gap_risk: "Broker stops & gap risk", verifier_health: "Pre-send verifier", forward_test_exposure: "Forward-test exposure",
+  live_vs_calibrated: "Live vs validated expectancy", state_sync: "Broker state sync", symbol_feeds: "Market data per symbol",
+  synthetic_bars: "Synthetic bars", news_calendar: "News calendar", timeouts: "Stuck broker calls",
+  risk_guards: "Risk guards & daily loss", deployment_overrides: "Deployment overrides", resources: "Machine resources",
 };
+
+interface SystemAlert { id: string; title: string; message: string; severity: string; source: string; timestamp: number; acknowledged?: boolean }
+const SEV_TONE: Record<string, "up" | "warn" | "down" | "flat"> = { INFO: "up", WARNING: "warn", CRITICAL: "down", FATAL: "down" };
+
+/** Monitor and self-heal alerts, newest first, kept across restarts (data/alerts). */
+function SystemAlerts() {
+  const res = usePoll<{ alerts: SystemAlert[] }>("/api/alerts?limit=100", 15000);
+  const [acked, setAcked] = useState<Set<string>>(new Set());
+  const rows = (res.data?.alerts || []).map((a) => ({ ...a, acknowledged: a.acknowledged || acked.has(a.id) }));
+  const open = rows.filter((a) => !a.acknowledged && a.severity !== "INFO");
+  const ack = async (ids: string[]) => {
+    await api.post("/api/system-alerts/ack", { ids });
+    setAcked((s) => new Set([...s, ...ids]));
+  };
+  return (
+    <Card title="System alerts" sub={`${open.length} unacknowledged · recoveries show as info · history survives restarts`}
+      actions={<button className="btn sm" disabled={!open.length} onClick={() => ack(open.map((a) => a.id))}>Acknowledge all</button>}>
+      <ErrorNote error={res.error} onRetry={res.reload} />
+      {!rows.length ? <Empty title="No system alerts" /> : (
+        <table className="table">
+          <thead><tr><th>When</th><th>Severity</th><th>Alert</th><th>Detail</th><th /></tr></thead>
+          <tbody>
+            {rows.map((a) => (
+              <tr key={a.id} style={a.acknowledged ? { opacity: 0.55 } : undefined}>
+                <td>{ago(a.timestamp)}</td>
+                <td><Badge tone={SEV_TONE[a.severity] || "flat"}>{a.severity.toLowerCase()}</Badge></td>
+                <td>{a.title}</td>
+                <td>{a.message}</td>
+                <td>{!a.acknowledged && a.severity !== "INFO" && <button className="btn ghost sm" onClick={() => ack([a.id])}>Ack</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
 const OUTCOME_TONE: Record<string, "up" | "warn" | "down" | "flat"> = {
   APPROVED: "up", REJECTED: "warn", NEEDS_ANALYSIS: "flat", BLOCKED_RISK: "down",
 };
@@ -54,6 +96,8 @@ export function Health() {
           </table>
         )}
       </Card>
+
+      <SystemAlerts />
 
       <Card title="Pre-send verifier" sub={`mode: ${ver.data?.mode || "—"} · shadow records verdicts without blocking; enforce blocks anything not approved`}>
         <ErrorNote error={ver.error} onRetry={ver.reload} />
