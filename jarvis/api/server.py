@@ -1464,6 +1464,11 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     "session": bool(session_id),
                     "provider": bool(self.copilot.provider.available),
                 })
+            elif path == "/api/system-alerts/ack":
+                # System (monitor/self-heal) alerts; /api/alerts/ack is for the user's market alert rules.
+                from jarvis.observability.alerting import ALERT_MANAGER
+                ids = data.get("ids") if isinstance(data.get("ids"), list) else [data.get("id")]
+                self._send_json({"acked": ALERT_MANAGER.acknowledge([str(i) for i in ids if i])})
             elif path.startswith("/api/ai/") or path in ("/api/alerts", "/api/alerts/delete", "/api/alerts/ack"):
                 self._ai_post(path, data)
             elif path == "/api/action/auto-select" or path.startswith("/api/backtest/") or path.startswith("/api/intelligence/"):
@@ -1994,6 +1999,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
     #: `BrokerLock` gives up waiting after 10s (broker_lock.DEFAULT_WAIT_SEC), so
     #: past that point callers are already failing. Kept in step with that module.
     _HEALTH_LOCK_STALE_SEC = 10.0
+    # The watchdog runs the monitor every 60 s; three missed passes means it stopped.
+    _HEALTH_MONITOR_STALE_SEC = 180.0
 
     @classmethod
     def _history_db_path(cls) -> str:
@@ -2027,7 +2034,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 "advisory": getattr(llm, "last_advisory", None),
                 "monitor_actions": list(_dj.MONITOR_ACTIONS)[-60:][::-1],
                 "config": {"verifier": asdict(SETTINGS.verifier), "gates": asdict(SETTINGS.gates),
-                           "forward_tests": asdict(SETTINGS.forward_tests)},
+                           "forward_tests": asdict(SETTINGS.forward_tests), "monitor": asdict(SETTINGS.monitor)},
+                "maintenance": getattr(orch, "last_maintenance", None),
             })
         elif path == "/api/gates/stats":
             from jarvis.observability.instruments import GATE_VERDICTS
@@ -2097,17 +2105,40 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             float(broker_lock.get("age_sec") or 0.0) > self._HEALTH_LOCK_STALE_SEC
         # Orchestration-loop liveness from the watchdog's monitor (a stalled loop
         # trades nothing while every other probe still looks green).
-        loop = ((getattr(getattr(self, "orchestrator", None), "monitor_state", None) or {})
-                .get("checks", {}).get("loop_heartbeat"))
+        state = getattr(getattr(self, "orchestrator", None), "monitor_state", None) or {}
+        loop = state.get("checks", {}).get("loop_heartbeat")
         loop_stalled = bool(loop and loop.get("status") == "CRITICAL")
+        # A monitor that stopped running leaves its last OK here forever: judge its age too.
+        monitor_age = None
+        try:
+            if state.get("checked_at"):
+                monitor_age = (datetime.now(timezone.utc)
+                               - datetime.fromisoformat(state["checked_at"])).total_seconds()
+        except (TypeError, ValueError):
+            monitor_age = None
+        monitor_stale = state != {} and (monitor_age is None or monitor_age > self._HEALTH_MONITOR_STALE_SEC)
+        workers = {k: (state.get("checks", {}).get(k) or {}).get("status")
+                   for k in ("position_monitor", "state_sync", "symbol_feeds", "timeouts", "broker_account",
+                             "unmanaged_positions")}
+        try:
+            workers["mt5"] = (self.state_manager.services_health or {}).get("MT5")
+        except Exception:  # noqa: BLE001 - a probe never raises
+            workers["mt5"] = None
         ok = (db_ok and not lock_stale and not bool(guard.get("wedged"))
-              and not lock_failed and not guard_failed and not loop_stalled)
+              and not lock_failed and not guard_failed and not loop_stalled and not monitor_stale
+              and "CRITICAL" not in workers.values()
+              # MT5 counts once the watchdog has measured it (a monitor pass ran); before, the
+              # boot default DISCONNECTED would fail every probe for the first seconds.
+              and not (state and workers.get("mt5") in ("RECONNECTING", "DISCONNECTED")))
         self._send_json({
             "status": "ok" if ok else "degraded",
             "broker_lock": broker_lock,
             "guard": guard,
             "db": db_ok,
             "loop": loop,
+            "monitor_age_sec": None if monitor_age is None else round(monitor_age, 1),
+            "monitor_stale": monitor_stale,
+            "workers": workers,
             "ts": datetime.now(timezone.utc).isoformat(),
         }, status_code=200 if ok else 503)
 

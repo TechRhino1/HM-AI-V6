@@ -52,6 +52,19 @@ def _hermetic_drawdown_guard(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_loss_cooldown_state(monkeypatch):
+    """Loss-streak cooldowns persist per mode (2026-11-27); a test's RiskEngine must not load a
+    streak a previous test (or the live engine) left in data/jarvis_loss_cooldown_<mode>.json."""
+    import os
+    import tempfile
+
+    import jarvis.risk.risk_engine as risk_engine
+    d = tempfile.mkdtemp(prefix="jarvis_test_cooldown_")
+    monkeypatch.setattr(risk_engine, "loss_cooldown_state_path",
+                        lambda mode: os.path.join(d, f"jarvis_loss_cooldown_{mode}.json"))
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_news_disk_cache(tmp_path):
     """Give every test its own news calendar cache.
 

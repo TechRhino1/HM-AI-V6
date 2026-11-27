@@ -106,6 +106,7 @@ class MT5StateSynchronizer:
                 # fired POSITION_CLOSED for every ticket, so the per-symbol limits
                 # saw 0 positions. Keep the last known state.
                 logger.warning("State sync skipped: broker position read failed.")
+                self.state_manager.update_service_health("STATE_SYNC", "DEGRADED")
                 return {"status": "SKIPPED", "reason": "positions_read_failed"}
 
             self.state_manager.update_account(account)
@@ -187,9 +188,10 @@ class MT5StateSynchronizer:
             self._last_position_tickets = current_tickets
             self._last_position_volumes = {t: p.volume for t, p in current_positions_by_ticket.items()}
 
-            status = "CONNECTED" if (self.mt5_client.is_connected and account.login > 0) else "DISCONNECTED"
-            self.state_manager.update_service_health("MT5", status)
+            # MT5 status has one writer, the watchdog: this loop wrote DISCONNECTED in paper mode
+            # while the watchdog wrote SIMULATED, and the dashboard flipped between the two.
             self.state_manager.update_service_health("STATE_SYNC", "ONLINE")
+            self.last_sync_ok_at = time.time()  # read by the system monitor's state_sync check
 
             # Reset backoff on success
             self._backoff_delay = 1.0

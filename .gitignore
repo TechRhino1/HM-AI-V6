@@ -124,3 +124,8 @@ data/markets.db
 *.tsbuildinfo
 .claude/worktrees/
 
+
+# Health upgrade (2026-11-27): persisted dashboard alerts and daily DB backups are local runtime data
+data/alerts/
+data/backups/
+data/jarvis_loss_cooldown_*.json

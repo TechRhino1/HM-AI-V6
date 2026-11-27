@@ -37,6 +37,8 @@ class Alert:
     timestamp: float = field(default_factory=time.time)
     details: Dict[str, Any] = field(default_factory=dict)
     event_key: str = ""
+    id: str = field(default_factory=lambda: os.urandom(6).hex())
+    acknowledged: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -107,9 +109,10 @@ class AlertManager:
             event_key=key,
         )
 
-        # 2. Append to ring buffer
+        # 2. Append to ring buffer (and the daily file, when persistence is on)
         with self._history_lock:
             self._history.append(alert)
+        self._persist(alert.to_dict())
 
         # 3. Structured log dispatch
         log_msg = f"🔔 [{alert.severity.value}] [{alert.source}] {alert.title}: {alert.message}"
@@ -180,6 +183,59 @@ class AlertManager:
         with self._history_lock:
             items = list(reversed(self._history))
         return [a.to_dict() for a in items[:limit]]
+
+    # ── Persistence and acknowledgement (dashboard delivery, 2026-11-27) ─────
+    def enable_persistence(self, directory: str, reload_days: int = 2) -> None:
+        """Write every alert to directory/alerts_YYYYMMDD.jsonl and reload the last `reload_days`
+        of history, so the dashboard keeps alerts (and acknowledgements) across restarts.
+        Off by default: only the engine start-up turns it on, tests never write files."""
+        self._persist_dir = directory
+        try:
+            os.makedirs(directory, exist_ok=True)
+            names = sorted(n for n in os.listdir(directory) if n.startswith("alerts_") and n.endswith(".jsonl"))
+            rows, acked = [], set()
+            for name in names[-max(1, reload_days):]:
+                with open(os.path.join(directory, name), encoding="utf-8") as fh:
+                    for line in fh:
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if "ack" in row:
+                            acked.add(row["ack"])
+                        elif row.get("title"):
+                            rows.append(row)
+            with self._history_lock:
+                for row in rows[-self._max_history:]:
+                    a = Alert(title=row["title"], message=row.get("message", ""),
+                              severity=AlertSeverity(row.get("severity", "INFO")), source=row.get("source", "JARVIS"),
+                              timestamp=float(row.get("timestamp", 0.0)), details=row.get("details") or {},
+                              event_key=row.get("event_key", ""), id=row.get("id") or os.urandom(6).hex(),
+                              acknowledged=row.get("id") in acked)
+                    self._history.append(a)
+        except Exception as exc:  # noqa: BLE001 - alerts must never stop the engine
+            logger.warning("Alert history reload failed: %s", exc)
+
+    def _persist(self, row: Dict[str, Any]) -> None:
+        d = getattr(self, "_persist_dir", None)
+        if not d:
+            return
+        try:
+            path = os.path.join(d, time.strftime("alerts_%Y%m%d.jsonl", time.gmtime()))
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, default=str) + "\n")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Alert persistence failed: %s", exc)
+
+    def acknowledge(self, ids: List[str]) -> int:
+        """Mark alerts acknowledged (persisted as {"ack": id} lines). Returns how many matched."""
+        want, n = {str(i) for i in ids or []}, 0
+        with self._history_lock:
+            for a in self._history:
+                if a.id in want and not a.acknowledged:
+                    a.acknowledged, n = True, n + 1
+                    self._persist({"ack": a.id, "at": time.time()})
+        return n
 
     def clear(self) -> None:
         """Clears alert history and debouncing state (primarily for tests)."""

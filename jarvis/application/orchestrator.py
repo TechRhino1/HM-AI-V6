@@ -584,6 +584,14 @@ class JarvisOrchestrator:
         if not self._running:
             self._running = True
             self.state_manager.set_orchestrator_running(True)
+            self._started_at = time.time()
+            # Dashboard alert delivery: alerts (and acknowledgements) survive restarts.
+            try:
+                from jarvis.config.paths import DATA_DIR
+                from jarvis.observability.alerting import ALERT_MANAGER
+                ALERT_MANAGER.enable_persistence(os.path.join(DATA_DIR, "alerts"))
+            except Exception as exc:  # noqa: BLE001 - alerts never block the engine
+                logger.warning("Alert persistence unavailable: %s", exc)
             # Reconcile BEFORE the synchronizer thread starts: its in-memory
             # "last seen" set is empty at boot, so on the first pass every open
             # position looks newly opened and every position that closed while
@@ -614,6 +622,223 @@ class JarvisOrchestrator:
                 logger.warning(f"Watchdog auto-releasing stale execution lock for {sym}.")
                 self._execution_in_progress.discard(sym)
         return stale
+
+    # ── Watchdog scheduling and self-healing (2026-11-27 health upgrade) ────
+    def _due(self, job: str, every: float, now: float) -> bool:
+        """Monotonic job schedule. The old `int(now) % N < 10` windows were skipped whenever a
+        watchdog pass ran long, because the loop is 10 s of sleep plus the work."""
+        last = self.__dict__.setdefault("_job_last", {})
+        if now - last.get(job, 0.0) >= every:
+            last[job] = now
+            return True
+        return False
+
+    def _heal_threads(self, now: float) -> list:
+        """Restart a dead position monitor, state synchroniser or orchestration loop through their
+        own start paths, at most `monitor.thread_restarts_per_hour` times each, with an alert.
+        A thread that is alive but stuck cannot be killed in Python; the monitor reports it."""
+        from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+        if not self._running:
+            return []
+        cap = int(getattr(SETTINGS.monitor, "thread_restarts_per_hour", 5))
+        hist = self.__dict__.setdefault("_thread_restarts", {})
+        healed = []
+
+        def _restart(name, start):
+            times = [t for t in hist.get(name, []) if now - t < 3600.0]
+            if len(times) >= cap:
+                dispatch_alert(title=f"Self-heal: {name} restart cap reached",
+                               message=f"{name} died {len(times)} times in the last hour; not restarting again. "
+                                       "Investigate the logs and restart the engine.",
+                               severity=AlertSeverity.CRITICAL, source="Watchdog",
+                               event_key=f"heal_cap_{name}", debounce_seconds=3600.0)
+                return
+            start()
+            hist[name] = times + [now]
+            healed.append(name)
+            logger.error("Self-heal: %s thread was dead; restarted (%d in the last hour).", name, len(hist[name]))
+            dispatch_alert(title=f"Self-heal: restarted {name}", message=f"{name} thread was dead and was restarted.",
+                           severity=AlertSeverity.CRITICAL, source="Watchdog",
+                           event_key=f"heal_{name}_{int(now)}", debounce_seconds=0.0)
+
+        for name, worker in (("position_monitor", getattr(self, "position_monitor", None)),
+                             ("state_synchronizer", getattr(self, "state_synchronizer", None))):
+            th = getattr(worker, "_thread", None)
+            if worker is not None and getattr(worker, "_running", False) and th is not None and not th.is_alive():
+                def _start(w=worker):
+                    w._running = False
+                    w.start()
+                _restart(name, _start)
+        main = getattr(self, "_main_thread", None)
+        if main is not None and not main.is_alive():
+            def _start_main():
+                self._main_thread = threading.Thread(target=self._orchestration_loop, daemon=True,
+                                                     name="jarvis_orchestrator")
+                self._main_thread.start()
+            _restart("orchestration_loop", _start_main)
+        return healed
+
+    def _maybe_maintenance(self, now: float) -> None:
+        """Once per UTC day, 10 min after start, run housekeeping in its own thread (never inline:
+        a backup or gzip must not stall stale-lock release or the monitor)."""
+        day = time.strftime("%Y%m%d", time.gmtime(now))
+        if day == getattr(self, "_maintenance_day", None) or now - float(getattr(self, "_started_at", now)) < 600.0:
+            return
+        if getattr(self, "_maintenance_thread", None) is not None and self._maintenance_thread.is_alive():
+            return
+        self._maintenance_day = day
+
+        def _run():
+            from jarvis.config.paths import DATA_DIR
+            from jarvis.observability import maintenance
+            from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+            rep = maintenance.run_daily(DATA_DIR, SETTINGS.monitor, now)
+            self.last_maintenance = rep
+            freed = sum(int((rep.get(k) or {}).get("freed_bytes", 0)) for k in maintenance.JOURNAL_DIRS)
+            logger.info("Maintenance: %s; freed %.1f MB; backups %s; errors %s", day, freed / 1e6,
+                        [b.get("backup") for b in rep.get("backups", [])], rep.get("errors"))
+            if rep.get("errors") or rep.get("corrupt"):
+                dispatch_alert(title="Maintenance: problems found",
+                               message=f"corrupt={rep.get('corrupt')} errors={rep.get('errors')}",
+                               severity=AlertSeverity.CRITICAL if rep.get("corrupt") else AlertSeverity.WARNING,
+                               source="Maintenance", event_key=f"maintenance_{day}", debounce_seconds=0.0)
+
+        self._maintenance_thread = threading.Thread(target=_run, daemon=True, name="jarvis_maintenance")
+        self._maintenance_thread.start()
+
+    def _monitor_extras(self, now: float) -> Dict[str, Any]:
+        """The 2026-11-27 checks: each input gathered defensively so one broken source never hides
+        the rest. Pure check functions live in system_monitor."""
+        from jarvis.observability import system_monitor as _sm
+        from jarvis.observability.instruments import MT5_RATES_FETCHES, NEWS_CALENDAR_SERVED
+        cfg, span = SETTINGS.monitor, float(SETTINGS.monitor.window_s)
+        out: Dict[str, Any] = {}
+
+        def _safe(name, fn):
+            try:
+                out[name] = fn()
+            except Exception as exc:  # noqa: BLE001
+                out[name] = {"status": _sm.WARN, "detail": f"check unavailable: {type(exc).__name__}: {exc}"}
+
+        _safe("state_sync", lambda: _sm.check_state_sync(
+            now, getattr(self.state_synchronizer, "last_sync_ok_at", None), cfg))
+        _safe("symbol_feeds", lambda: _sm.check_symbol_feeds(self.data_feed.symbol_health(), cfg))
+
+        def _synthetic():
+            by = _sm.counter_by(MT5_RATES_FETCHES, "source")
+            return _sm.check_share("synthetic bars", now, sum(v for k, v in by.items() if k != "live_mt5"),
+                                   sum(by.values()), cfg.synthetic_share_warn, span)
+        _safe("synthetic_bars", _synthetic)
+
+        def _news():
+            by = _sm.counter_by(NEWS_CALENDAR_SERVED, "origin")
+            return _sm.check_share("synthetic news calendar", now, by.get("synthetic", 0.0), sum(by.values()),
+                                   cfg.news_synthetic_share_warn, span, min_events=5)
+        _safe("news_calendar", _news)
+
+        def _timeouts():
+            from jarvis.common.timeout_guard import TimeoutGuard
+            return _sm.check_timeouts(TimeoutGuard.health())
+        _safe("timeouts", _timeouts)
+
+        def _guards():
+            acct = getattr(self.state_manager, "account", None)
+            eq, bal = float(getattr(acct, "equity", 0.0) or 0.0), float(getattr(acct, "balance", 0.0) or 0.0)
+            dd = self.drawdown_guard.check_limits(eq, bal) if eq > 0 else {"breaches": []}
+            cb = self.circuit_breaker.check_status()
+            lc = getattr(self.risk_engine, "loss_cooldown", None)
+            peak = float(getattr(lc, "peak_equity", 0.0) or getattr(self.drawdown_guard, "peak_equity", 0.0) or 0.0)
+            return _sm.check_risk_guards("; ".join(dd.get("breaches") or []) or None,
+                                         cb.get("reason") if cb.get("active") else None,
+                                         float(getattr(lc, "daily_pnl", 0.0) or 0.0), peak)
+        _safe("risk_guards", _guards)
+
+        def _overrides():
+            from jarvis.backtesting import exit_geometry as _eg
+            rows = []
+            for o in getattr(SETTINGS.gates, "deployment_overrides", None) or []:
+                st = _eg._norm_style(o.get("style"))
+                n, r = _eg._live_style_r(o.get("symbol"), st, str(o.get("since") or "1970-01-01"))
+                stop_n, stop_r = int(o.get("stop_after_trades", 30) or 30), float(o.get("stop_below_r", -0.10))
+                rows.append({"symbol": o.get("symbol"), "style": st, "n": n, "r": round(r, 3),
+                             "stop_after": stop_n, "stop_below": stop_r, "stopped": n >= stop_n and r < stop_r})
+            return _sm.check_overrides(rows)
+        _safe("deployment_overrides", _overrides)
+
+        def _resources():
+            import shutil
+            import psutil
+            from jarvis.config.paths import DATA_DIR
+            from jarvis.observability.maintenance import dir_size_gb
+            if self._due("data_dir_size", 600.0, now):  # walking data/ is not free
+                self._data_dir_gb = dir_size_gb(DATA_DIR)
+            proc = psutil.Process()
+            handles = proc.num_handles() if hasattr(proc, "num_handles") else proc.num_fds()
+            return _sm.check_resources(psutil.cpu_percent(None), psutil.virtual_memory().percent,
+                                       shutil.disk_usage(DATA_DIR).free / 1e9,
+                                       getattr(self, "_data_dir_gb", None), cfg,
+                                       threads=proc.num_threads(), handles=handles)
+        _safe("resources", _resources)
+
+        def _specs():
+            from jarvis.execution.mt5_client import MT5Client
+            return _sm.check_events("broker spec fallbacks", now, float(MT5Client.spec_fallbacks), span, 1,
+                                    "live symbol-spec lookups fell back to the registry")
+        _safe("broker_specs", _specs)
+
+        def _lock():
+            from jarvis.observability.instruments import BROKER_LOCK_ACQUISITIONS
+            busy = _sm.counter_by(BROKER_LOCK_ACQUISITIONS, "result").get("busy", 0.0)
+            return _sm.check_events("broker lock busy", now, busy, span, 5, "broker calls refused: lock busy > 10 s")
+        _safe("broker_lock", _lock)
+
+        _safe("broker_account", lambda: _sm.check_account(getattr(self.state_manager, "account", None), self.mode))
+
+        def _quarantine():
+            from jarvis.execution import strategy_quarantine as _sq
+            rep = _sq.quarantine_report(execution_mode=self.mode)
+            cur = [k for k, v in rep.items() if v.get("quarantined")]
+            out_q = _sm.check_quarantine(cur, getattr(self, "_last_quarantined", None))
+            self._last_quarantined = cur
+            return out_q
+        _safe("quarantine", _quarantine)
+
+        _safe("auto_style", lambda: _sm.check_auto_style(getattr(self, "_auto_unaffordable_streak", {}),
+                                                          int(getattr(cfg, "auto_unaffordable_sweeps", 120))))
+
+        def _gates():
+            from jarvis.observability import decision_journal as _dj
+            return _sm.check_gate_spikes(now, list(_dj.RECENT), cfg.reject_spike_factor)
+        _safe("gate_spikes", _gates)
+
+        def _latency():
+            from jarvis.observability.instruments import (DECISION_LATENCY, HTTP_LATENCY, MT5_RATES_LATENCY,
+                                                          ORDER_LATENCY)
+            p95 = {name: _sm.hist_p95(f"lat_{name}", now, h, span)
+                   for name, h in (("decision", DECISION_LATENCY), ("order", ORDER_LATENCY),
+                                   ("rates_fetch", MT5_RATES_LATENCY), ("http", HTTP_LATENCY))}
+            return _sm.check_latency(p95, {"decision": cfg.decision_p95_s, "order": cfg.order_p95_s,
+                                           "rates_fetch": cfg.fetch_p95_s, "http": cfg.http_p95_s})
+        _safe("latency", _latency)
+
+        def _databases():
+            from jarvis.config.paths import DATA_DIR
+            sizes = {}
+            for name in ("jarvis_history.db", "jarvis_trade_memory.db"):
+                path = os.path.join(DATA_DIR, name)
+                if os.path.exists(path):
+                    wal = path + "-wal"
+                    sizes[name] = {"db_mb": round(os.path.getsize(path) / 1e6, 2),
+                                   "wal_mb": round(os.path.getsize(wal) / 1e6, 2) if os.path.exists(wal) else 0.0}
+            return _sm.check_databases(sizes)
+        _safe("databases", _databases)
+
+        def _unmanaged():
+            st = self._position_monitor_status() or {}
+            running = bool(st.get("running") and st.get("thread_alive"))
+            return _sm.check_unmanaged(list(getattr(self.state_manager, "positions", None) or []), running)
+        _safe("unmanaged_positions", _unmanaged)
+        return out
 
     AUTO_TUNE_EVERY_SEC = 1800.0
 
@@ -681,14 +906,14 @@ class JarvisOrchestrator:
                 self._maybe_auto_tune(now)
 
                 # 3. ML Predictor Brier Score Health Check
-                if int(now) % 300 < 10:
+                if self._due("ml_brier", 300.0, now):
                     brier = self.ml_predictor.get_brier_score()
                     feat_imp = self.ml_predictor.get_feature_importance()
                     top_feat = max(feat_imp.items(), key=lambda x: x[1])[0] if feat_imp else "N/A"
                     logger.debug(f"Watchdog ML Heartbeat: BrierScore={brier:.3f}, TopFeature={top_feat}")
 
                 # 4. Pending Order Staleness Cleanup (Task 2c)
-                if int(now) % 60 < 10:
+                if self._due("pending_cleanup", 60.0, now):
                     cancelled = self.order_manager.cleanup_stale_pending_orders(
                         max_age_sec=2400,
                         context_map=getattr(self.state_manager, "market_contexts", None),
@@ -702,8 +927,12 @@ class JarvisOrchestrator:
                     self._last_monitor_at = now
                     self._run_system_monitor(now)
 
+                # 4c. Self-healing: restart dead worker threads (capped), daily housekeeping.
+                self._heal_threads(now)
+                self._maybe_maintenance(now)
+
                 # 5. Autonomous LLM Governor Dynamic Telemetry Refresh
-                if int(now) % 180 < 10:
+                if self._due("llm_refresh", 180.0, now):
                     try:
                         self.llm_controller.get_latest_directives()
                     except Exception as e:
@@ -760,14 +989,33 @@ class JarvisOrchestrator:
                 cfg=SETTINGS.monitor,
                 position_monitor=self._position_monitor_status(),
                 has_position_monitor=getattr(self, "position_monitor", None) is not None,
+                extra_checks=self._monitor_extras(now),
                 **self._live_drift_inputs())
             _sm.record_drift_advisory(self.monitor_state)
+            # Service chips were hardcoded READY/ACTIVE; derive them from what was just measured.
+            _c = self.monitor_state.get("checks", {})
+            _st = lambda k: (_c.get(k) or {}).get("status")  # noqa: E731
+            for _svc, _key, _bad in (("ANALYST_CLUSTER", "analyst_fallbacks", "DEGRADED"),
+                                     ("REGIME_ENGINE", "loop_heartbeat", "STALLED"),
+                                     ("DEVIL_ADVOCATE", "loop_heartbeat", "STALLED"),
+                                     ("RISK_ENGINE", "risk_guards", "RESTRICTED")):  # halt, breaker or near the daily lockout
+                if _st(_key) is not None:
+                    ok_word = "ACTIVE" if _svc == "RISK_ENGINE" else "READY"
+                    self.state_manager.update_service_health(_svc, ok_word if _st(_key) == "OK" else _bad)
             # Advisory AI review of the same evidence (async, recommendations only).
             from collections import Counter as _C
             gate_stats = dict(_C(r.get("blocked_by") for r in rows if r.get("blocked_by")).most_common(15))
             self.llm_controller.review_operations(self.monitor_state, gate_stats)
         except Exception as e:
-            logger.debug(f"System monitor pass failed: {e}")
+            # ERROR + alert, not DEBUG: a monitor that silently stops leaves /health serving its last OK.
+            logger.error(f"System monitor pass failed: {e}", exc_info=True)
+            try:
+                from jarvis.observability.alerting import AlertSeverity, dispatch_alert
+                dispatch_alert(title="Monitor: pass failed", message=f"{type(e).__name__}: {e}",
+                               severity=AlertSeverity.CRITICAL, source="SystemMonitor",
+                               event_key="monitor_pass_failed", debounce_seconds=1800.0)
+            except Exception:
+                pass
 
     def stop(self):
         """Clean shutdown of all engine workers."""
@@ -2136,7 +2384,8 @@ class JarvisOrchestrator:
             DECISION_EVALUATIONS.inc(style=active_trade_style, outcome=_outcome)
             log_event(
                 logger,
-                logging.ERROR if _outcome == "error" else logging.INFO,
+                # no_trade/refused at DEBUG: one line per symbol x style per sweep was ~15% of the log
+                logging.ERROR if _outcome == "error" else (logging.INFO if _outcome == "trade" else logging.DEBUG),
                 "decision_evaluated",
                 f"{symbol}: {_outcome}",
                 symbol=symbol,
@@ -2731,6 +2980,10 @@ class JarvisOrchestrator:
             pick = sel["pick"]
             vetoed = pick is not None and pick.bias in news.get("blocked_directions", [])
             action = "SKIP" if pick is None else "VETO" if vetoed else "TRADE"
+            # Monitor input: sweeps in a row where a gate-allowed style existed but none was affordable.
+            _streaks = self.__dict__.setdefault("_auto_unaffordable_streak", {})
+            _skipped = (sel.get("detail") or {}).get("skipped") or {}
+            _streaks[sym] = _streaks.get(sym, 0) + 1 if (pick is None and _skipped.get("unaffordable")) else 0
             decisions[sym] = {"symbol": sym, "action": action, "live": live, "pick": sel["detail"],
                               "news": news, "updated": time.time()}
             _dj.record_auto({"symbol": sym, "action": action, "live": live,

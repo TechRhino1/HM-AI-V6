@@ -1054,7 +1054,8 @@ class SQLiteTradeDB:
                     conn.execute(
                         "UPDATE executed_trades "
                         "SET closed_at = COALESCE(closed_at, ?), "
-                        "    exit_price = COALESCE(exit_price, NULL) "
+                        "    exit_price = COALESCE(exit_price, NULL), "
+                        "    exit_reason = COALESCE(exit_reason, 'UNFILLED') "
                         "WHERE id = ? AND closed_at IS NULL",
                         (cancel_dt or datetime.now(timezone.utc).isoformat(), row_id),
                     )
@@ -1064,6 +1065,13 @@ class SQLiteTradeDB:
                         f"Pending-order reconciliation: stamped {off_orders_touched} "
                         "never-filled-order row(s) closed (terminal order state, no deals)."
                     )
+            # Label rows stamped before 2026-11-27 too (idempotent, no schema bump): a never-filled
+            # order is closed with no outcome, so no reader can mistake it for a traded position.
+            conn.execute(
+                "UPDATE executed_trades SET exit_reason = 'UNFILLED' "
+                "WHERE closed_at IS NOT NULL AND realized_pnl IS NULL AND exit_price IS NULL "
+                "AND (position_id IS NULL OR position_id = ticket) AND exit_reason IS NULL"
+            )
             conn.commit()
 
         except Exception as e:
