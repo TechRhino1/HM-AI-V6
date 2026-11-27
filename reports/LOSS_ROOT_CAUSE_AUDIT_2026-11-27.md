@@ -64,7 +64,7 @@ Old code, default exit, holdout 2026-05-24 → 11-26 (`HM_main_chk/reports/base_
 | R9 | PROMOTION_HOLE gate in shadow: 9 of 29 orders on 11-24..26 had 41–157% cost friction. | `gates.promotion_hole_mode = "enforce"`. | `019a1de` |
 | Config | — | BTCUSD and ETHUSD added to `allowed_symbols` (user decision); they trade only where the gate allows. | `019a1de` |
 
-**Only R2 changes backtest behaviour.** R1, R5, R8 and R9 act on the live path, so a bar replay cannot measure them.
+**Only R2 changes backtest behaviour, and its measured effect is about neutral (§5).** R1, R5, R8 and R9 act on the live path, so a bar replay cannot measure them.
 
 ## 4. Research vs measurement
 
@@ -114,7 +114,31 @@ Notes:
 - BTCUSD H4_SWING and SOLUSD SWING pass because their train samples (8 and 9 trades) are under the 10-trade minimum for the train rule. SOLUSD SWING's train result (−0.472R over 9) is a warning; the drift monitor (§8) watches it.
 - Full metrics per cell (win %, net R, PF, average win and loss, max DD in R, max consecutive losses, trades per week, DSR) are in `reports/loss_audit/*.md` and `reports/mode_backtest_report.json`.
 
-<!-- CODE_ATTRIBUTION -->
+### What changed the backtest: code vs exit
+
+Same holdout and same 64 cells, real MT5 bars.
+
+| Run | Trades | Net R |
+|---|---:|---:|
+| Old code, default exit (baseline) | 3,270 | −107.8 |
+| Fixed code, default exit (code effect only) | 3,202 | −122.8 |
+| Fixed code, live exit `institutional_lock` | 3,174 | −74.9 |
+
+- **The backtestable code changes (mainly R2's honest EV) are neutral to slightly negative: −15R over about 3,200 trades, about −0.005R per trade.**
+  - The biggest moves are gold SCALP (+0.002 → −0.034R/trade) and gold SWING (+0.274 → +0.231).
+  - R2 is kept because it is a correctness fix: EV was computed from RR floors the trade never had. It is not kept for a profit claim.
+- **Holding the code fixed, the live exit beats the default exit by +48R.** That supports keeping `institutional_lock` live.
+- **One exception, gold SWING**, where the live exit is the worst of the three on the holdout:
+
+  | Gold SWING | Train | Holdout |
+  |---|---:|---:|
+  | Default exit | +0.071 | +0.231 |
+  | Chandelier | +0.333 | +0.081 |
+  | `institutional_lock` (live) | +0.105 | −0.027 |
+
+  Gold SWING is not routed now, because only 1% of its stops are affordable at $466. Revisit it when the balance can carry an $18 stop at 0.01 lot.
+- Raw runs: `reports/loss_audit/after_holdout_default/`; table: `reports/loss_audit/eval_holdout_default.md`.
+
 
 ## 6. XAUUSD: every timeframe and style
 
