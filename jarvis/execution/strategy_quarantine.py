@@ -79,6 +79,7 @@ SIZING_MIN_TRADES = 6
 SIZE_MULT_FOR_NEGATIVE = 0.80   # expectancy <= -0.05R
 SIZE_MULT_FOR_NEUTRAL = 1.00    # -0.05R < expectancy < +0.10R
 SIZE_MULT_FOR_POSITIVE = 1.15   # expectancy >= +0.10R
+SIZING_REDUCE_ONLY = True  # see expectancy_risk_multiplier
 
 # {(db_path, execution_mode, window): (loaded_at, stats, details)}
 _CACHE: Dict[Tuple[str, str, int], tuple] = {}
@@ -133,9 +134,8 @@ def _load_full(
 ) -> Tuple[Dict[Tuple[str, str], Tuple[int, float]], Dict[Tuple[str, str], List[float]]]:
     """Build (stats, details) where details keeps per-pair R values in trade order.
 
-    The rows are read with ``ORDER BY id ASC``: the ledger is append-only, so
-    id order is chronological close order — exactly what graduation needs to
-    look at the freshest cohort.
+    The rows are read in CLOSE order (``closed_at``, then id): id order is open order, and a
+    long trade opened early but closed late belongs with the freshest cohort graduation reads.
     """
     mode = str(execution_mode or "demo").strip().lower()
     window = _cfg_window()
@@ -155,16 +155,18 @@ def _load_full(
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
         try:
+            # Older ledgers have no volume column: select NULL there (price R fallback).
+            has_volume = any(c[1] == "volume" for c in conn.execute("PRAGMA table_info(executed_trades)"))
             rows = conn.execute(
-                """
+                f"""
                 SELECT symbol, action, entry_price, exit_price, sl, tp,
-                       realized_pnl, features_json
+                       realized_pnl, features_json, {'volume' if has_volume else 'NULL'}
                 FROM executed_trades
                 WHERE lower(execution_mode) = ?
                   AND closed_at IS NOT NULL
                   AND realized_pnl IS NOT NULL
                   AND COALESCE(regime, '') <> 'FORWARD_TEST'
-                ORDER BY id ASC
+                ORDER BY closed_at ASC, id ASC
                 """,
                 (mode,),
             ).fetchall()
@@ -184,7 +186,8 @@ def _load_full(
         return stats, details
 
     sums: Dict[Tuple[str, str], list] = {}
-    for symbol, action, entry, exit_price, sl, _tp, _pnl, features_json in rows:
+    from jarvis.analytics.performance import net_r_multiple
+    for symbol, action, entry, exit_price, sl, _tp, _pnl, features_json, volume in rows:
         try:
             if not entry or not exit_price or not sl:
                 continue
@@ -195,10 +198,14 @@ def _load_full(
             # moves as 50-400R; a planned target beyond MAX_PLANNED_R marks such a row.
             if _tp and abs(float(_tp) - float(entry)) / risk > MAX_PLANNED_R:
                 continue
-            if str(action).upper().startswith("BUY"):
-                r_i = (float(exit_price) - float(entry)) / risk
-            else:
-                r_i = (float(entry) - float(exit_price)) / risk
+            # Net R (all deals, costs included) when the row has a volume; the price R from the
+            # final exit misread a half-closed-at-+1R position and ignored spread/commission.
+            r_i = net_r_multiple(symbol, entry, sl, volume, _pnl)
+            if r_i is None:
+                if str(action).upper().startswith("BUY"):
+                    r_i = (float(exit_price) - float(entry)) / risk
+                else:
+                    r_i = (float(entry) - float(exit_price)) / risk
             sym = str(symbol or "").upper().strip()
             if not sym:
                 continue
@@ -371,7 +378,7 @@ def expectancy_risk_multiplier(
     db_path: Optional[str] = None,
     execution_mode: str = "demo",
 ) -> float:
-    """Learned size multiplier in [0.0, 1.15] for one (symbol, strategy).
+    """Learned size multiplier in [0.0, 1.0] (1.15 with SIZING_REDUCE_ONLY off) for one (symbol, strategy).
 
     Rewarded when the live book shows a real positive expectancy, haircut
     when mildly negative, zero for a pair that fails the quarantine
@@ -405,7 +412,9 @@ def expectancy_risk_multiplier(
     if exp_r <= -0.05:
         return SIZE_MULT_FOR_NEGATIVE
     if exp_r >= 0.10:
-        return SIZE_MULT_FOR_POSITIVE
+        # Reduce-only (user decision 2026-11-27): a size boost earned on as few as 6 live trades was
+        # never validated; it may cut risk but not raise it until it passes promote_model's test.
+        return min(1.0, SIZE_MULT_FOR_POSITIVE) if SIZING_REDUCE_ONLY else SIZE_MULT_FOR_POSITIVE
     return SIZE_MULT_FOR_NEUTRAL
 
 

@@ -872,6 +872,14 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                         "oos_expectancy_r": getattr(prof, "oos_expectancy_r", None),
                         "oos_profit_factor": getattr(prof, "oos_profit_factor", None),
                         "refusal": _eg.deployment_refusal(sym),
+                        # The per-style engine holdout the gate actually decides on (the oos_* above are
+                        # the calibrator's stamps, used only when no engine evidence exists).
+                        "styles": {st: {"holdout_trades": ev.get("trades"),
+                                        "holdout_expectancy_r": ev.get("expectancy_r"),
+                                        "train_expectancy_r": ev.get("train_expectancy_r"),
+                                        "dsr": ev.get("dsr"),
+                                        "refusal": _eg.deployment_refusal(sym, st)}
+                                   for st, ev in sorted((_eg._engine_evidence(sym) or {}).items())},
                     })
                 self._send_json({"min_oos_expectancy_r": _eg.MIN_OOS_EXPECTANCY_R,
                                  "min_oos_trades": _eg.MIN_OOS_TRADES, "symbols": rows})

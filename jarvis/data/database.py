@@ -112,7 +112,7 @@ def _empty_pnl():
 #       a closed row carried no outcome at all: `realized_pnl` defaulted to 0.0
 #       (a scratch trade) whether the trade had closed or not, and the exit price
 #       was never stored.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _migration_1(conn) -> None:
@@ -287,8 +287,17 @@ def _migration_6(conn) -> None:
     )
 
 
+def _migration_7(conn) -> None:
+    """Execution quality (2026-11-27): the price asked for, the price filled, the spread right after
+    the fill and the round-trip latency, so slippage and costs can be measured per trade instead of
+    only from the feed's spread estimate. Nullable: rows from before this step have no measurement."""
+    add_columns(conn, "executed_trades", {
+        "requested_price": "REAL", "fill_price": "REAL", "spread_at_fill": "REAL", "fill_latency_ms": "REAL",
+    })
+
+
 MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5,
-              6: _migration_6}
+              6: _migration_6, 7: _migration_7}
 
 # MT5 DEAL_REASON_* of a closing deal -> why the trade ended. The engine's own
 # reason (TIME_STOP, REVERSAL, ...) is written first by set_exit_reason and wins.
@@ -466,6 +475,10 @@ class SQLiteTradeDB:
         strategy: Optional[str] = None,
         trade_style: Optional[str] = None,
         planned_rr: Optional[float] = None,
+        requested_price: Optional[float] = None,
+        fill_price: Optional[float] = None,
+        spread_at_fill: Optional[float] = None,
+        fill_latency_ms: Optional[float] = None,
     ):
         """Journal an entry.
 
@@ -497,6 +510,9 @@ class SQLiteTradeDB:
         strategy = strategy if isinstance(strategy, str) else None
         trade_style = trade_style if isinstance(trade_style, str) else None
         planned_rr = float(planned_rr) if isinstance(planned_rr, (int, float)) and not isinstance(planned_rr, bool) else None
+        _num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+        requested_price, fill_price = _num(requested_price), _num(fill_price)
+        spread_at_fill, fill_latency_ms = _num(spread_at_fill), _num(fill_latency_ms)
         conn = self._get_conn()
         try:
             conn.execute('''
@@ -505,9 +521,10 @@ class SQLiteTradeDB:
                     ai_score, regime, expected_value, exit_price, realized_pnl, executor, session_name,
                     is_prime_session, adx, plus_di, minus_di, spread_pips,
                     mtf_alignment, threats_json, features_json,
-                    account_login, server, strategy, trade_style, planned_rr
+                    account_login, server, strategy, trade_style, planned_rr,
+                    requested_price, fill_price, spread_at_fill, fill_latency_ms
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 ticket, position_id, origin, execution_mode, symbol, action, entry, sl, tp, volume,
                 datetime.now(timezone.utc).isoformat(),
@@ -520,6 +537,7 @@ class SQLiteTradeDB:
                 executor, session_name, int(is_prime_session),
                 adx, plus_di, minus_di, spread_pips, mtf_alignment, threats_json, features_json,
                 account_login, server, strategy, trade_style, planned_rr,
+                requested_price, fill_price, spread_at_fill, fill_latency_ms,
             ))
             conn.commit()
         except Exception as e:

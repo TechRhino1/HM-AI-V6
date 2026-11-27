@@ -330,7 +330,7 @@ class JarvisOrchestrator:
         self.trade_memory = TradeMemory()
         # Trade Style AUTO: per-symbol style/strategy pick + news verdict, refreshed each sweep.
         from jarvis.intelligence.auto_style import AutoStyleSelector
-        self.auto_selector = AutoStyleSelector(self.trade_memory)
+        self.auto_selector = AutoStyleSelector(self.trade_memory, execution_mode=self.mode)
         self._auto_decisions: Dict[str, Dict[str, Any]] = {}
         self.llm_controller = AutonomousLLMSystemController(state_manager=self.state_manager)
 
@@ -953,16 +953,45 @@ class JarvisOrchestrator:
                                        "last_tick_error", "last_tick_ms", "monitored_symbols")}
 
     def _live_drift_inputs(self) -> Dict[str, Any]:
-        """Live R per symbol (all strategies pooled) and the calibrated profiles it is judged against."""
+        """Live net R per symbol x style (this mode, forward tests excluded) and the benchmark each
+        cell was deployed on: the engine holdout row the deployment gate reads, else the symbol's
+        stamped calibration profile. Pooled per symbol, a SCALP cell drifting was hidden by DAY."""
         try:
+            import sqlite3
+            from jarvis.analytics.performance import net_r_multiple
+            from jarvis.backtesting import exit_geometry as _eg
+            from jarvis.config.paths import resolve_db_path
+            from jarvis.data.symbol_registry import resolve as _resolve
             from jarvis.execution import strategy_quarantine as _sq
-            details = _sq._load_full(None, self.mode)[1]
-            live_r = {sym: rs for (sym, strat), rs in details.items() if strat == _sq.SYMBOL_POOL}
-            # Load the stamped profiles directly: self._wr_profiles is only filled while the calibrated
-            # entry policy is on, so with it off (4fd416a) this check had nothing to compare against.
             from jarvis.intelligence.winrate_targeting import load_profiles
-            return {"live_r": live_r, "profiles": dict(load_profiles() or {}),
-                    "quarantine_r": _sq._cfg_threshold()}
+            con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True, timeout=5.0)
+            try:
+                rows = con.execute(
+                    "SELECT symbol, trade_style, entry_price, sl, volume, realized_pnl FROM executed_trades "
+                    "WHERE closed_at IS NOT NULL AND realized_pnl IS NOT NULL AND lower(execution_mode) = ? "
+                    "AND COALESCE(regime, '') <> 'FORWARD_TEST' ORDER BY closed_at, id", (str(self.mode).lower(),)
+                ).fetchall()
+            finally:
+                con.close()
+            window = _sq._cfg_window()
+            live_r: Dict[str, List[float]] = {}
+            for sym, style, entry, sl, vol, pnl in rows:
+                r = net_r_multiple(sym, entry, sl, vol, pnl)
+                if r is None or not style:
+                    continue
+                canon = str(_resolve(sym).canonical).upper()
+                live_r.setdefault(f"{canon}|{_eg._norm_style(style)}", []).append(r)
+            live_r = {k: v[-window:] for k, v in live_r.items()}
+            profiles = dict(load_profiles() or {})
+            bench: Dict[str, Any] = {}
+            for key in live_r:
+                sym, style = key.split("|", 1)
+                row = (_eg._engine_evidence(sym) or {}).get(style)
+                if row is not None:
+                    bench[key] = {"expectancy_r": row.get("expectancy_r"), "source": "engine_holdout"}
+                elif profiles.get(sym) is not None:
+                    bench[key] = profiles[sym]
+            return {"live_r": live_r, "profiles": bench, "quarantine_r": _sq._cfg_threshold()}
         except Exception as exc:
             logger.debug("live drift inputs unavailable: %s", exc)
             return {}
@@ -1127,7 +1156,8 @@ class JarvisOrchestrator:
             "entry": fill_price,
             "sl": actual_sl,
             "risk_dist": abs(fill_price - actual_sl),
-            "symbol": decision.symbol
+            "symbol": decision.symbol,
+            "volume": float(lots or 0.0),  # entry size: net R = P&L / (risk_dist x volume x $/unit)
         }
 
         trade_payload = {
@@ -1161,6 +1191,18 @@ class JarvisOrchestrator:
                 f"📝 Pending order #{ticket} ({decision.symbol} {decision.bias} {trade_style}): "
                 f"open-time context deferred until fill."
             )
+
+    @staticmethod
+    def _journal_volume(ticket: Any) -> Optional[float]:
+        """Entry volume of `ticket` as the trade journal recorded it, or None."""
+        try:
+            from jarvis.data import database
+            row = database.TRADE_DB._get_conn().execute(
+                "SELECT volume FROM executed_trades WHERE ticket = ? OR position_id = ? ORDER BY id LIMIT 1",
+                (int(ticket), int(ticket))).fetchone()
+            return float(row[0]) if row and row[0] else None
+        except Exception:  # noqa: BLE001 - no size means price R, never a guess
+            return None
 
     def _recover_pending_features(self, ticket):
         """Rebuild the open-time context for `ticket` from the trade journal.
@@ -1218,6 +1260,9 @@ class JarvisOrchestrator:
             # R calculation rather than hand it a nonsense denominator.
             "risk_dist": abs(entry - sl) if (entry > 0 and sl > 0) else 0.0,
             "symbol": row.get("symbol"),
+            # The broker volume from the trade journal only: trade_memory stores a 0.01 default when
+            # no size was given, and an invented size would fabricate a net R. None -> price R.
+            "volume": self._journal_volume(ticket),
         }
         # `update_online` only runs when "features" is present, so a row with no stored
         # vector still gets the bandit and the close bookkeeping. An ABSENT vector must
@@ -1349,6 +1394,13 @@ class JarvisOrchestrator:
             # Preserve the true sign of the outcome; only floor the magnitude so the
             # gradient weighting cannot collapse to zero.
             raw_r = price_delta / risk_dist
+            # Net R when the close carries P&L and the entry size is known: the close P&L sums every
+            # deal (partials, swap, commissions), which the final exit price alone cannot see.
+            from jarvis.analytics.performance import net_r_multiple
+            _net = net_r_multiple(pending.get("symbol") or data.get("symbol"), entry,
+                                  pending.get("sl"), pending.get("volume"), pnl)
+            if _net is not None:
+                raw_r = _net
             r_multiple = round(raw_r if abs(raw_r) >= 0.01 else (0.01 if raw_r >= 0 else -0.01), 2)
         elif pending is None:
             logger.warning(

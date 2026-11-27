@@ -7,6 +7,12 @@ from jarvis.config.paths import resolve_db_path
 
 logger = logging.getLogger('JARVIS_SelfLearning')
 
+# Reduce-only (user decision 2026-11-27): these multipliers come from as few as 3-5 recent rows, are
+# off in backtests and so were never validated. They may still cut win probability / conviction, but
+# not raise it, until they pass the same shadow + tools/promote_model.py test the ML model uses.
+REDUCE_ONLY = True
+
+
 class SelfLearningEngine:
     def __init__(self, db_path='jarvis_history.db', cache_ttl_sec: float = 15.0):
         # Anchored on the repo data dir — see jarvis.config.paths.
@@ -65,6 +71,8 @@ class SelfLearningEngine:
                 else:
                     res = 1.0
 
+            if REDUCE_ONLY:
+                res = min(1.0, res)
             with self._lock:
                 self._cache[cache_key] = (now, res)
             return res
@@ -158,6 +166,8 @@ class SelfLearningEngine:
                 else:
                     conviction_mult = 1.0
 
+                if REDUCE_ONLY:
+                    conviction_mult = min(1.0, conviction_mult)
                 res = {
                     "sample_size": len(rows),
                     # `sample_size` is rows fetched; these are the rows the two
@@ -171,7 +181,7 @@ class SelfLearningEngine:
                     "avg_ev": round(avg_ev, 2),
                     "win_rate": round(win_rate, 2),
                     "conviction_multiplier": conviction_mult,
-                    "empirical_edge": avg_ev > 0.5 and win_rate >= 0.55
+                    "empirical_edge": (not REDUCE_ONLY) and avg_ev > 0.5 and win_rate >= 0.55
                 }
 
             with self._lock:

@@ -54,7 +54,7 @@ def test_prequential_promotion_scores_before_learning_and_never_touches_the_acti
 
 
 def test_gate_softening_respects_the_configured_floor():
-    policy = AdaptiveGatePolicy(max_soft_fail=3, min_recent_win_rate=0.45)
+    policy = AdaptiveGatePolicy(max_soft_fail=3, min_recent_win_rate=0.45, allow_soften=True)
     soft = ["Trend Not Exhausted: stretched"]
     assert policy.decide(soft, recent_win_rate=0.30)[0] == "BLOCK"   # was SOFTEN via min(0.30, ...)
     assert policy.decide(soft, recent_win_rate=0.50)[0] == "SOFTEN"

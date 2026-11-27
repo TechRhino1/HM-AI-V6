@@ -10,8 +10,10 @@ import { isMeasured, pnlOf } from "../overview/Overview";
 interface Group {
   total_trades: number; wins: number; net_profit: number; win_rate_pct: number; profit_factor: number;
   expectancy_dollars: number; avg_r: number; max_drawdown_dollars: number; max_consecutive_losses: number;
+  /** Measured at fill since 2026-11-27 (older trades have none). Slippage is adverse, in R. */
+  execution?: { avg_slippage_r?: number; avg_fill_latency_ms?: number; avg_spread_at_fill?: number; measured_fills?: number };
 }
-const BY = [["symbol", "Symbol"], ["strategy", "Strategy"], ["trade_style", "Style"], ["exit_reason", "Exit reason"], ["account_login", "Account"]];
+const BY = [["symbol", "Symbol"], ["symbol_style", "Symbol × style"], ["strategy", "Strategy"], ["trade_style", "Style"], ["exit_reason", "Exit reason"], ["account_login", "Account"]];
 type SortKey = keyof Group | "key";
 
 /** Cumulative realised P&L and drawdown from closed journal trades (also the Overview equity drill-down). */
@@ -109,7 +111,9 @@ export function Performance() {
               <thead>
                 <tr>{th("key", BY.find((b) => b[0] === by)?.[1] || "Group", false)}{th("total_trades", "Trades")}{th("win_rate_pct", "Win rate")}
                   {th("profit_factor", "PF")}{th("expectancy_dollars", "Expectancy")}{th("avg_r", "Avg R")}{th("net_profit", "Net")}
-                  {th("max_drawdown_dollars", "Max DD")}{th("max_consecutive_losses", "Loss streak")}</tr>
+                  {th("max_drawdown_dollars", "Max DD")}{th("max_consecutive_losses", "Loss streak")}
+                  <th className="num" title="Average adverse slippage vs the requested price, in R (fills measured since 2026-11-27)">Slippage R</th>
+                  <th className="num" title="Average order round trip">Latency</th></tr>
               </thead>
               <tbody>
                 {groups.map((g) => (
@@ -123,6 +127,10 @@ export function Performance() {
                     <td className={`num ${tone(g.net_profit)}`}><b>{signedMoney(g.net_profit, ccy)}</b></td>
                     <td className="num">{money(g.max_drawdown_dollars, ccy)}</td>
                     <td className="num">{g.max_consecutive_losses}</td>
+                    <td className={`num ${isNum(g.execution?.avg_slippage_r) && (g.execution?.avg_slippage_r as number) > 0.05 ? "down" : ""}`}
+                      title={`${g.execution?.measured_fills ?? 0} measured fill(s)`}>
+                      {isNum(g.execution?.avg_slippage_r) ? fixed(g.execution?.avg_slippage_r as number, 3) : "—"}</td>
+                    <td className="num">{isNum(g.execution?.avg_fill_latency_ms) ? `${fixed(g.execution?.avg_fill_latency_ms as number, 0)} ms` : "—"}</td>
                   </tr>
                 ))}
               </tbody>

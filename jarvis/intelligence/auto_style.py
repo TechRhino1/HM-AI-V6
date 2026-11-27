@@ -40,7 +40,17 @@ def _style_of(row: Dict[str, Any]) -> str:
 
 
 def r_multiple(row: Dict[str, Any]) -> Optional[float]:
-    """Realised R of a closed trade from its own entry/exit/stop; None when it can't be measured."""
+    """Realised R of a closed trade; None when it can't be measured.
+
+    Net R (P&L over all deals / dollar risk at the entry stop, analytics.performance.net_r_multiple)
+    when the row carries P&L and size; the price R from the final exit only as a fallback, since it
+    misreads a position half-closed at +1R and ignores costs."""
+    from jarvis.analytics.performance import net_r_multiple
+    pnl = row.get("realized_pnl", row.get("pnl"))
+    size = row.get("volume", row.get("lots"))
+    net = net_r_multiple(row.get("symbol"), row.get("entry_price"), row.get("sl"), size, pnl)
+    if net is not None:
+        return net
     try:
         entry, exit_, sl = float(row["entry_price"]), float(row["exit_price"]), float(row["sl"])
     except (KeyError, TypeError, ValueError):
@@ -150,14 +160,16 @@ def choose(symbol: str, candidates: List[Any], ranking: List[Dict[str, Any]], pr
 class AutoStyleSelector:
     """Holds the closed-trade history and backtest prior, refreshed at most once a minute."""
 
-    def __init__(self, trade_memory=None, prior=None):
+    def __init__(self, trade_memory=None, prior=None, execution_mode: Optional[str] = None):
         self._memory, self._prior, self._trades, self._at = trade_memory, prior, [], 0.0
+        self._mode = str(execution_mode).lower() if execution_mode else None
 
     def _load(self) -> List[Dict[str, Any]]:
         if time.time() - self._at > _CACHE_TTL:
             try:
-                self._trades = [t for t in (self._memory.fetch_all_trades() if self._memory else [])
-                                if t.get("exit_price") is not None]
+                rows = [t for t in (self._memory.fetch_all_trades() if self._memory else [])
+                        if t.get("exit_price") is not None]
+                self._trades = self._only_this_mode(rows) if self._mode else rows
             except Exception:
                 self._trades = []
             if self._prior is None:
@@ -168,6 +180,28 @@ class AutoStyleSelector:
                     self._prior = None
             self._at = time.time()
         return self._trades
+
+    def _only_this_mode(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep trades the journal confirms were taken in this engine's mode, with the journal's net
+        P&L and size. trade_memory has no mode or account column, so paper, demo and old 'live'-
+        labelled rows were pooled into one record."""
+        import sqlite3
+        from jarvis.config.paths import resolve_db_path
+        con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True)
+        try:
+            by_ticket = {int(t): (str(m or "").lower(), p, v) for t, m, p, v in con.execute(
+                "SELECT ticket, execution_mode, realized_pnl, volume FROM executed_trades "
+                "WHERE ticket IS NOT NULL AND COALESCE(regime, '') <> 'FORWARD_TEST'").fetchall()}
+        finally:
+            con.close()
+        out = []
+        for r in rows:
+            j = by_ticket.get(int(r.get("ticket") or 0))
+            if j is None or j[0] != self._mode:
+                continue
+            out.append(dict(r, realized_pnl=j[1] if j[1] is not None else r.get("pnl"),
+                            volume=j[2] if j[2] else r.get("lots")))
+        return out
 
     def choose(self, symbol: str, candidates: List[Any],
                allowed: Optional[Callable[[Any], Optional[str]]] = None) -> Dict[str, Any]:

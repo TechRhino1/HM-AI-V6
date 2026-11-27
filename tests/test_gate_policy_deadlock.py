@@ -5,7 +5,7 @@ from jarvis.intelligence.opportunity_arbiter import UniversalOpportunityArbiter
 def test_adaptive_gate_policy_softens_only_at_the_configured_floor():
     # 4a25738: a soft gate may be softened only while recent win rate meets the CONFIGURED
     # floor (0.45 here); the old min(0.30, floor) let a 30% win rate skip gates.
-    policy = AdaptiveGatePolicy(max_soft_fail=1, min_recent_win_rate=0.45)
+    policy = AdaptiveGatePolicy(max_soft_fail=1, min_recent_win_rate=0.45, allow_soften=True)
     decision, gates = policy.decide(["Volume Spike Ratio"], recent_win_rate=0.30)
     assert decision == "BLOCK"
     decision, gates = policy.decide(["Volume Spike Ratio"], recent_win_rate=None)   # cold start
@@ -14,7 +14,7 @@ def test_adaptive_gate_policy_softens_only_at_the_configured_floor():
     assert decision == "SOFTEN" and "Volume Spike Ratio" in gates
 
 def test_adaptive_gate_policy_blocks_hard_gates_always():
-    policy = AdaptiveGatePolicy(max_soft_fail=1, min_recent_win_rate=0.45)
+    policy = AdaptiveGatePolicy(max_soft_fail=1, min_recent_win_rate=0.45, allow_soften=True)
     
     # Hard gate must NEVER soften, even with 100% win rate
     decision, gates = policy.decide(["Market Session Open"], recent_win_rate=1.0)

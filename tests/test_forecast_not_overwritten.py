@@ -140,9 +140,15 @@ class TestSelfLearningReadsWhatItSays:
             _close(conn, 300 + i, pnl=8.0)
         conn.close()
 
-        engine = SelfLearningEngine(db_path=str(db))
         # Note the forecast was NEGATIVE here: pre-fix this would have penalised.
-        assert engine.get_regime_multiplier("TREND_BULL", lookback=50) == 1.10
+        # Reduce-only since 2026-11-27: the boost is computed but capped at 1.0 until validated.
+        import jarvis.intelligence.self_learning as sl_mod
+        assert SelfLearningEngine(db_path=str(db)).get_regime_multiplier("TREND_BULL", lookback=50) == 1.0
+        sl_mod.REDUCE_ONLY = False
+        try:
+            assert SelfLearningEngine(db_path=str(db)).get_regime_multiplier("TREND_BULL", lookback=50) == 1.10
+        finally:
+            sl_mod.REDUCE_ONLY = True
 
     def test_fewer_than_five_outcomes_abstains(self, db):
         conn = sqlite3.connect(str(db))

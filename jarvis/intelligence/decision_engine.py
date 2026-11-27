@@ -1748,8 +1748,9 @@ class DecisionEngine:
         if pattern_memory.get("sample_size", 0) >= 3:
             p_mult = pattern_memory.get("conviction_multiplier", 1.0)
             win_p_floor = 0.50 if ai_score >= 68.0 else 0.35
-            calibrated_win_p = min(0.99, max(win_p_floor, calibrated_win_p * p_mult))
-            final_win_p = min(0.99, max(win_p_floor, final_win_p * p_mult))
+            # Reduce-only: the floor bounds how far a penalty can cut, it never lifts a low win-p.
+            calibrated_win_p = min(calibrated_win_p, max(win_p_floor, calibrated_win_p * p_mult))
+            final_win_p = min(final_win_p, max(win_p_floor, final_win_p * p_mult))
             if pattern_memory.get("empirical_edge"):
                 ai_score = min(100.0, ai_score + 5.0)
                 logger.info(f"[{context.symbol}] Empirical pattern edge: WinRate={pattern_memory['win_rate']*100:.0f}%, EV={pattern_memory['avg_ev']:.2f}")
@@ -1812,8 +1813,8 @@ class DecisionEngine:
             if sl_multiplier != 1.0:
                 win_p_floor = 0.50 if ai_score >= 68.0 else 0.35
                 p_ceil = 0.65 if ("SCALP" in str(style).upper() or is_micro_mode) else 0.72
-                calibrated_win_p = min(p_ceil, max(win_p_floor, calibrated_win_p * sl_multiplier))
-                final_win_p = min(p_ceil, max(win_p_floor, final_win_p * sl_multiplier))
+                calibrated_win_p = min(calibrated_win_p, p_ceil, max(win_p_floor, calibrated_win_p * sl_multiplier))
+                final_win_p = min(final_win_p, p_ceil, max(win_p_floor, final_win_p * sl_multiplier))
 
         is_fx = _is_forex(context.symbol)
 

@@ -190,10 +190,11 @@ def check_forward_exposure(positions: Iterable[Any], equity: float, max_portfoli
 
 def check_live_drift(live_r: Optional[Dict[str, List[float]]], profiles: Optional[Dict[str, Any]],
                      quarantine_r: float = -0.15, min_n: int = 20) -> Dict[str, Any]:
-    """Live realised R per symbol vs the calibrated out-of-sample expectancy it was deployed on.
+    """Live realised R vs the expectancy it was deployed on, per key ("SYMBOL|STYLE" or "SYMBOL").
 
-    WARN when the live mean sits more than 2 standard errors below the profile's OOS figure;
-    CRITICAL when it is also below the quarantine bar. ``live_r`` is {symbol: [R, ...]}."""
+    WARN when the live mean sits more than 2 standard errors below the benchmark; CRITICAL when it
+    is also below the quarantine bar. ``live_r`` is {key: [R, ...]}; ``profiles`` maps the same key
+    to an engine evidence row {"expectancy_r", "source"} or a stamped calibration profile."""
     if not live_r or not profiles:
         return {"status": OK, "detail": "no live closes or calibrated profiles to compare", "symbols": {}}
     out: Dict[str, Any] = {}
@@ -208,21 +209,26 @@ def check_live_drift(live_r: Optional[Dict[str, List[float]]], profiles: Optiona
         se = sd / n ** 0.5
         # Judge against the walk-forward holdout when one was stamped (the evidence the deployment
         # gate uses), else the calibration's out-of-sample figure.
-        hn = int(getattr(prof, "holdout_trades", 0) or 0)
-        he = getattr(prof, "holdout_expectancy_r", None)
-        use_holdout = he is not None and hn >= 10
-        oos = float(he) if use_holdout else float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
+        if isinstance(prof, dict):  # engine-in-the-loop evidence row (what the deployment gate reads)
+            oos, bench = float(prof.get("expectancy_r") or 0.0), str(prof.get("source") or "engine_holdout")
+        else:
+            hn = int(getattr(prof, "holdout_trades", 0) or 0)
+            he = getattr(prof, "holdout_expectancy_r", None)
+            use_holdout = he is not None and hn >= 10
+            oos = float(he) if use_holdout else float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
+            bench = "holdout" if use_holdout else "oos"
         st = OK
         if mean < oos - 2.0 * se:
             st = CRITICAL if mean < quarantine_r else WARN
         out[sym] = {"status": st, "n": n, "live_r": round(mean, 3), "se": round(se, 3), "oos_r": round(oos, 3),
-                    "benchmark": "holdout" if use_holdout else "oos"}
+                    "benchmark": bench}
         if st == CRITICAL or (st == WARN and worst == OK):
             worst = st
     bad = {k: v for k, v in out.items() if v["status"] != OK}
     detail = ("live expectancy below calibration: " + ", ".join(
         f"{k} {v['live_r']:+.2f}R vs OOS {v['oos_r']:+.2f}R (n={v['n']})" for k, v in bad.items())
-              if bad else f"{len(out)} symbol(s) within 2 SE of their calibrated expectancy")
+              if bad else f"{len(out)} cell(s) within 2 SE of their deployed expectancy; "
+              f"{sum(1 for k, v in live_r.items() if len(v) < min_n)} cell(s) under {min_n} live closes, not yet judged")
     return {"status": worst, "detail": detail, "symbols": out}
 
 
