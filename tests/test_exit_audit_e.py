@@ -223,3 +223,19 @@ def test_excursion_stats_match_the_gold_trade():
     from jarvis.analytics.performance import excursion_stats
     s = excursion_stats([(1.26, 0.54), (0.7, -1.0)])
     assert s["reached_1r"] == 1 and s["giveback_r"] == pytest.approx(0.72) and s["capture_pct"] == pytest.approx(42.9)
+
+
+def test_exit_selection_needs_total_r_not_just_expectancy(monkeypatch):
+    """A variant with better R per trade but a lower total (it churns extra losing re-entries) is kept out."""
+    import tools.exit_audit_eval as xa
+    monkeypatch.setattr(xa, "_class", lambda s: "INDEX")
+    cell = ("US30", "SWING")
+    base = {cell: {"n": 10, "_rs": [1.0] * 4 + [-0.5] * 6, "max_dd_r": 3.0}}          # +1.0R total, 0.10/trade
+    churn = {cell: {"n": 30, "_rs": [1.0] * 13 + [-0.5] * 17 + [0.0] * 0, "max_dd_r": 3.0}}  # +4.5R
+    worse_total = {cell: {"n": 4, "_rs": [0.9, 0.0, 0.0, 0.0], "max_dd_r": 1.0}}        # 0.225/trade, 0.9R
+    train = {"live": base, "early_protect": worse_total, "ratchet": churn, "early_ratchet": worse_total}
+    hold = {"live": base, "early_protect": worse_total, "ratchet": churn, "early_ratchet": worse_total}
+    sel = xa.select(train, hold)["INDEX|SWING"]
+    assert sel["choice"] == "ratchet" and sel["verdict"] == "CONFIRMED"
+    hold2 = dict(hold, ratchet={cell: {"n": 10, "_rs": [1.0] * 4 + [-0.5] * 5 + [-0.6], "max_dd_r": 3.0}})
+    assert xa.select(train, hold2)["INDEX|SWING"]["verdict"] == "REJECTED"

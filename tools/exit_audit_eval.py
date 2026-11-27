@@ -10,7 +10,9 @@ Rules, fixed before the runs:
     its mean per-cell max drawdown is not higher. The eligible variant with the best train expectancy
     is chosen; otherwise the baseline stays.
   * HOLDOUT confirms only: the chosen variant must not be worse than the baseline there (pooled
-    expectancy), else the choice is REJECTED and the baseline stays.
+    expectancy and total R), else the choice is REJECTED and the baseline stays.
+  * Total R (added after the first grid, 2026-11-28; it can only reject): a tighter exit closes sooner,
+    the engine re-enters, and the extra trades can lose - eligibility also needs train total R >= baseline.
   * SCALP has no train window (M1 history starts inside the holdout): a SCALP variant can be chosen on
     the holdout only as PROVISIONAL - its out-of-sample test is the live shadow (>= 20 closes per cell).
   * One symbol gets its own rule only when its own best mode beats the class choice by >= SYMBOL_EDGE_R
@@ -52,7 +54,7 @@ def pooled(ev: Dict[tuple, Dict[str, Any]], keys: List[tuple]) -> Dict[str, Any]
         return {"n": 0}
     wins, losses = [r for r in rs if r > 0], [r for r in rs if r < 0]
     dds = [ev[k]["max_dd_r"] for k in keys if ev.get(k, {}).get("n")]
-    return {"n": len(rs), "exp_r": round(sum(rs) / len(rs), 4),
+    return {"n": len(rs), "exp_r": round(sum(rs) / len(rs), 4), "sum_r": round(sum(rs), 2),
             "pf": round(sum(wins) / abs(sum(losses)), 3) if losses else None,
             "mean_dd_r": round(sum(dds) / len(dds), 2) if dds else None}
 
@@ -60,7 +62,9 @@ def pooled(ev: Dict[tuple, Dict[str, Any]], keys: List[tuple]) -> Dict[str, Any]
 def _better(v: Dict[str, Any], b: Dict[str, Any]) -> bool:
     if not v.get("n") or not b.get("n"):
         return False
-    return (v["exp_r"] > b["exp_r"] and (v["pf"] or 0) >= (b["pf"] or 0)
+    # sum_r: a tighter exit frees the slot sooner and the engine re-enters, so expectancy per trade alone
+    # can improve while the cell's total R falls (added 2026-11-28 after the grid; it only rejects more).
+    return (v["exp_r"] > b["exp_r"] and v["sum_r"] >= b["sum_r"] and (v["pf"] or 0) >= (b["pf"] or 0)
             and (v["mean_dd_r"] or 0) <= (b["mean_dd_r"] or 0))
 
 
@@ -84,7 +88,8 @@ def select(train: Dict[str, Dict], hold: Dict[str, Dict]) -> Dict[str, Any]:
             verdict = "PROVISIONAL (no train window; needs the live shadow)"
         else:
             verdict = ("CONFIRMED" if hs[choice].get("n") and hs[BASELINE].get("n")
-                       and hs[choice]["exp_r"] >= hs[BASELINE]["exp_r"] else "REJECTED")
+                       and hs[choice]["exp_r"] >= hs[BASELINE]["exp_r"]
+                       and hs[choice]["sum_r"] >= hs[BASELINE]["sum_r"] else "REJECTED")
         final = choice if verdict.startswith(("CONFIRMED", "PROVISIONAL")) else BASELINE
         dec = {"cells": sorted(f"{s}|{t}" for s, t in cells), "selected_on": "train" if has_train else "holdout",
                "selection": stats, "holdout": hs, "choice": choice, "verdict": verdict, "mode": final, "exceptions": {}}

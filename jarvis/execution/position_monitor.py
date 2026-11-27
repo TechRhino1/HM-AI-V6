@@ -279,9 +279,9 @@ class PositionMonitorEngine:
             t = int(ticket)
         except (TypeError, ValueError):
             return None
+        mfe, mae = self._peak_mfe.pop(t, None), self._peak_mae.pop(t, None)   # always cleared: one credit per ticket
         if t in self._closed_excursions:
             return self._closed_excursions.pop(t)
-        mfe, mae = self._peak_mfe.pop(t, None), self._peak_mae.pop(t, None)
         return None if mfe is None and mae is None else (mfe, mae)
 
     @staticmethod

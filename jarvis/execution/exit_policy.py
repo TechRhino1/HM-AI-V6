@@ -688,13 +688,19 @@ def apply_exit_mode(pol: "ExitPolicy", mode: Optional[str], hold: bool = False) 
     return pol
 
 
+_CELLS_CHECKED = [0.0]   # monotonic time of the last settings.json stat (one per second, not per lookup)
+
+
 def live_exit_mode(symbol: str, trade_style: str) -> str:
     """The exit mode live trading uses for `symbol` x `trade_style`: trading.exit_cells
     "SYMBOL|STYLE", then "ASSETCLASS|STYLE", then "hold" for trading.exit_hold_symbols when the
     lock is on, else trading.exit_mode. With no exit_cells this is exactly the pre-2026-11-27 rule."""
     from jarvis.config.settings import SETTINGS, reload_deployment_overrides
     from jarvis.data.symbol_registry import resolve
-    reload_deployment_overrides()  # also picks up trading.exit_cells edited in settings.json
+    import time as _time
+    if _time.monotonic() - _CELLS_CHECKED[0] >= 1.0:   # an approved exit_cells edit applies within ~1 s
+        _CELLS_CHECKED[0] = _time.monotonic()
+        reload_deployment_overrides()
     spec = resolve(symbol)
     canon = str(getattr(spec, "canonical", symbol) or symbol).upper()
     st = _STYLE_ALIASES.get(str(trade_style or "").upper(), str(trade_style or "").upper())
