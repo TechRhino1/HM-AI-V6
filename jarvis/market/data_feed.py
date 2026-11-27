@@ -646,8 +646,6 @@ class DataFeedEngine:
         if timeframes is None:
             timeframes = style_timeframes(trade_style)
 
-        is_intraday = trade_style.upper() in ("SCALP", "DAY_TRADING", "INTRADAY", "DAY")
-        
         # Deduplicate MT5 calls across roles: fetch unique timeframes with forming bar, then slice locally
         unique_tfs = set(timeframes.values())
         raw_frames = {}
@@ -656,21 +654,23 @@ class DataFeedEngine:
 
         result = {}
         for role, tf in timeframes.items():
-            # The timing frame (M1 for SCALP) feeds sweep/displacement/bias checks that must read
-            # CLOSED bars: a forming M1 bar that wicked under a low "closed back above" mid-bar and
-            # flagged a sweep that then closed as a breakdown. Price comes from the primary frame.
-            inc_cur = True if (role == "primary" or (is_intraday and role == "setup")) else False
+            # Every signal frame reads CLOSED bars only, as the backtest does. Structure, sweeps,
+            # momentum and ATR computed on a forming bar fire mid-bar and repaint (a forming M1
+            # wick "closed back above" a low and flagged a sweep that then closed as a breakdown;
+            # the same held for the primary frame, which used to include the forming bar).
+            # The live price is carried separately as attrs["last_price"].
             df = raw_frames.get(tf)
             if df is not None and not df.empty:
-                if inc_cur:
-                    res_df = df.tail(num_bars).copy()
-                else:
-                    # Slicing off the forming bar produces closed bars with zero MT5 roundtrip
-                    res_df = df.iloc[:-1].tail(num_bars).copy()
+                # Slicing off the forming bar produces closed bars with zero MT5 roundtrip
+                res_df = df.iloc[:-1].tail(num_bars).copy()
                 res_df.attrs = dict(df.attrs)
+                try:
+                    res_df.attrs["last_price"] = float(df["close"].iloc[-1])
+                except Exception:  # noqa: BLE001 - price falls back to the last closed bar
+                    pass
                 result[role] = res_df
             else:
-                result[role] = self.fetch_rates(symbol, timeframe=tf, num_bars=num_bars, include_current_bar=inc_cur)
+                result[role] = self.fetch_rates(symbol, timeframe=tf, num_bars=num_bars, include_current_bar=False)
         return result
 
     def _generate_realistic_rates(self, symbol: str, timeframe: str, num_bars: int) -> pd.DataFrame:

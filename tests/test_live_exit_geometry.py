@@ -39,7 +39,7 @@ def test_expectancy_gate(monkeypatch):
     profs = {"AAA": SimpleNamespace(oos_trades=150, oos_expectancy_r=0.10),
              "BBB": SimpleNamespace(oos_trades=150, oos_expectancy_r=0.01),
              "CCC": SimpleNamespace(oos_trades=20, oos_expectancy_r=0.50)}
-    monkeypatch.setattr(exit_geometry, "live_profile", lambda s: profs.get(s))
+    monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: profs.get(s))
     assert exit_geometry.deployment_refusal("AAA") is None
     assert exit_geometry.deployment_refusal("BBB").startswith("EXPECTANCY_GATE")
     assert exit_geometry.deployment_refusal("CCC").startswith("EXPECTANCY_GATE")

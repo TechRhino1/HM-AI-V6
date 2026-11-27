@@ -19,7 +19,7 @@ def _live(monkeypatch, profs):
     from jarvis.config.settings import SETTINGS
     monkeypatch.setattr(runtime, "is_offline", lambda: False)
     monkeypatch.setattr(SETTINGS.trading, "use_calibrated_entry_policy", True, raising=False)
-    monkeypatch.setattr(exit_geometry, "live_profile", lambda s: profs.get(s))
+    monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: profs.get(s))
 
 
 def _p(he=None, hn=0):
@@ -76,3 +76,19 @@ def test_merge_realised_keeps_meta(tmp_path, monkeypatch):
     store.save({"AAA": _profile()}, meta={"days": 730})
     store.merge_realised("AAA", [SimpleNamespace(ai_score=0.5, is_win=True)] * 25)
     assert json.loads(path.read_text())["meta"] == {"days": 730}
+
+
+def test_gate_applies_with_calibrated_entry_policy_off(monkeypatch):
+    """Commit 4fd416a turned use_calibrated_entry_policy off, which silently switched the
+    holdout/expectancy gate off for every symbol. The gate must not depend on that flag."""
+    from jarvis.config import runtime
+    from jarvis.config.settings import SETTINGS
+    monkeypatch.setattr(runtime, "is_offline", lambda: False)
+    monkeypatch.setattr(SETTINGS.trading, "use_calibrated_entry_policy", False, raising=False)
+    profs = {"LOSS": _p(-0.05, 40), "WIN": _p(0.08, 40)}
+    monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: profs.get(s))
+    monkeypatch.setattr(exit_geometry, "_engine_evidence", lambda s: None)  # stamps path, not the report
+    assert exit_geometry.deployment_refusal("LOSS").startswith("HOLDOUT_GATE")
+    assert exit_geometry.deployment_refusal("WIN") is None
+    assert exit_geometry.deployment_refusal("NOPROFILE").startswith("NO_VALIDATED_PROFILE")
+    assert exit_geometry.live_profile("WIN") is None  # geometry still follows the flag

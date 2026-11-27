@@ -446,7 +446,8 @@ class RiskEngine:
 
             # 0. Deployment bar: only symbols with validated out-of-sample expectancy trade live.
             from jarvis.backtesting.exit_geometry import deployment_refusal
-            _deploy = deployment_refusal(symbol)
+            # Judged per style: the evidence is per symbol x style (exit_geometry.deployment_refusal).
+            _deploy = deployment_refusal(symbol, getattr(decision, "trade_style", None))
             if _deploy:
                 rejection_reasons.append(_deploy)
 

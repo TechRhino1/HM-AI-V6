@@ -925,7 +925,10 @@ class TestRegressionFixes(unittest.TestCase):
             liquidity=LiquidityContext(),
             volatility=VolatilityContext(atr=10.0, current_spread_pips=2.0),
             momentum=MomentumContext(trend_score=75.0, adx=30.0),
-            session=SessionContext(is_prime_session=True)
+            session=SessionContext(is_prime_session=True),
+            # DAY keeps gold's $12 stop cap, so the 2420 barrier sits beyond min R:R and is tucked.
+            # (A SWING gold stop now follows ATR; the barrier then becomes a TP1 milestone instead.)
+            trade_style="DAY_TRADING",
         )
         regime = RegimeOutput(primary_regime=MarketRegime.TREND_BULL, probabilities={}, confidence=0.85)
 
@@ -944,7 +947,8 @@ class TestRegressionFixes(unittest.TestCase):
             regime=regime,
             analyst_reports={},
             devil_report=devil_rep,
-            account_balance=10000.0
+            account_balance=10000.0,
+            trade_style="DAY_TRADING",
         )
 
         self.assertLess(decision.take_profit, 2420.0, "TP must be tucked below Devil's Advocate threat level 2420.0")

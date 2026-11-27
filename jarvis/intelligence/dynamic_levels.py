@@ -746,8 +746,11 @@ class DynamicRiskAndLevelsEngine:
 
             sl_dist = max(sl_dist, min_sl_dist)
 
-            if is_gold:
+            if is_gold and style in ("SCALP", "DAY_TRADING", "DAY", "INTRADAY"):
 
+                # $12 keeps a 0.01-lot gold scalp/day stop inside the small-account risk tier.
+                # SWING/H4/D1 keep the ATR ceiling: $12 is ~0.7x H1 ATR (one normal H1 bar), so a
+                # capped swing stop was noise; sizing refuses a swing stop the min lot can't afford.
                 sl_dist = min(sl_dist, 12.0 + spread_dist)
 
             elif is_silver:
@@ -1261,8 +1264,11 @@ class DynamicRiskAndLevelsEngine:
 
             sl_dist = max(sl_dist, min_sl_dist)
 
-            if is_gold:
+            if is_gold and style in ("SCALP", "DAY_TRADING", "DAY", "INTRADAY"):
 
+                # $12 keeps a 0.01-lot gold scalp/day stop inside the small-account risk tier.
+                # SWING/H4/D1 keep the ATR ceiling: $12 is ~0.7x H1 ATR (one normal H1 bar), so a
+                # capped swing stop was noise; sizing refuses a swing stop the min lot can't afford.
                 sl_dist = min(sl_dist, 12.0 + spread_dist)
 
             elif is_silver:

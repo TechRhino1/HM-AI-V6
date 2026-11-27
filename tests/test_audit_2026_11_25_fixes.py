@@ -116,7 +116,7 @@ def test_portfolio_budget_counts_the_new_trade():
         current_price=1.1000, sl=1.0760, tp=1.1300, profit=0.0, swap=0.0,
         commission=0.0, open_time="2026-11-25 00:00:00", magic=888999, comment="",
     )
-    with patch("jarvis.backtesting.exit_geometry.deployment_refusal", lambda s: None):
+    with patch("jarvis.backtesting.exit_geometry.deployment_refusal", lambda s, style=None: None):
         flat = fx.risk_engine.authorize_execution(
             fx.decision, fx.account, [], fx.sym_info,
             current_spread_pips=1.5, max_allowed_spread_pips=35.0, context=fx.context,

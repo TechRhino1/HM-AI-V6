@@ -131,7 +131,12 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="report stem under reports/")
     ap.add_argument("--promote", default=None,
                     help="live store (config/winrate_profiles.json): copy holdout-passing symbols in, stamp the rest")
+    ap.add_argument("--exit-mode", default="", choices=["", "legacy", "institutional_lock", "hold", "chandelier"],
+                    help="replay this exit policy offline (default: calibrated/legacy); sets JARVIS_BACKTEST_EXIT_MODE")
     args = ap.parse_args()
+    if args.exit_mode:
+        import os as _os
+        _os.environ["JARVIS_BACKTEST_EXIT_MODE"] = args.exit_mode
     if pd.Timestamp(args.holdout_start) <= pd.Timestamp(args.train_end):
         ap.error("--holdout-start must be after --train-end")
 

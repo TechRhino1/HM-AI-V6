@@ -5,6 +5,7 @@ Runtime inputs that must stay at their paths: `trade_quality_audit_365d.json` (h
 
 | Date | Report | Title | Status |
 |---|---|---|---|
+| 2026-11-27 | [LOSS_ROOT_CAUSE_AUDIT_2026-11-27.md](LOSS_ROOT_CAUSE_AUDIT_2026-11-27.md) | Loss root-cause audit: JARVIS MT5 (2026-11-27) |  |
 | 2026-11-26 | [GOLD_AUDIT_2026-11-26.md](GOLD_AUDIT_2026-11-26.md) | Gold (XAUUSD) end-to-end audit — 2026-11-26 |  |
 | 2026-11-25 | [ENGINE_SELECT_AUDIT_2026-11-25.md](ENGINE_SELECT_AUDIT_2026-11-25.md) | Audit + engine-in-the-loop per-symbol calibration, 6-month blind holdout — 2026-11-25 |  |
 | 2026-11-17 | [TRADE_STARVATION_ROOT_CAUSE_2026-11-17.md](TRADE_STARVATION_ROOT_CAUSE_2026-11-17.md) | Why so few trades, and would more trades make money? (2026-11-17) |  |

@@ -57,6 +57,19 @@ def _is_forex(symbol: str) -> bool:
         return False
 
 
+
+def _live_rr_for_ev(symbol: str, levels_rr: float) -> float:
+    """The R:R a trade on `symbol` will carry after dispatch: the live fixed/calibrated target
+    when one rewrites the TP, else the levels' geometric R:R."""
+    try:
+        from jarvis.backtesting.exit_geometry import live_target_r
+        fixed = live_target_r(symbol)
+        if fixed:
+            return float(fixed)
+    except Exception:  # noqa: BLE001 - fall back to the geometry
+        pass
+    return float(levels_rr or 0.0)
+
 class LevelsResult(tuple):
     """An 8-tuple result containing (bias, entry, sl, tp, risk_dist, rr, first_target, volume_pct)
     preserving 100% backward compatibility with tuple unpacking, while exposing 3-tier milestone
@@ -305,7 +318,11 @@ class DecisionEngine:
             htf_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             context_bias = mtf_align.get("H1", mtf_align.get("M15", "NEUTRAL"))
             primary_tf_bias = mtf_align.get("M15", getattr(st, "bias", "NEUTRAL"))
-        else:  # SWING
+        elif "D1_SWING" in style_upper:  # macro W1, context D1 (data_feed.STYLE_TIMEFRAMES)
+            htf_bias = mtf_align.get("W1", mtf_align.get("D1", "NEUTRAL"))
+            context_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
+            primary_tf_bias = mtf_align.get("D1", getattr(st, "bias", "NEUTRAL"))
+        else:  # SWING / H4_SWING: macro D1, context H4
             htf_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
             context_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             primary_tf_bias = mtf_align.get("H1", getattr(st, "bias", "NEUTRAL"))
@@ -898,7 +915,10 @@ class DecisionEngine:
         elif any(x in t_style_upper for x in ("DAY", "INTRADAY")):
             macro_bias = mtf_align.get("H4", mtf_align.get("H1", "NEUTRAL"))
             context_bias = mtf_align.get("H1", "NEUTRAL")
-        else: # SWING
+        elif "D1_SWING" in t_style_upper:  # macro W1, context D1 (data_feed.STYLE_TIMEFRAMES)
+            macro_bias = mtf_align.get("W1", mtf_align.get("D1", "NEUTRAL"))
+            context_bias = mtf_align.get("D1", "NEUTRAL")
+        else: # SWING / H4_SWING: macro D1, context H4
             macro_bias = mtf_align.get("D1", mtf_align.get("H4", "NEUTRAL"))
             context_bias = mtf_align.get("H4", "NEUTRAL")
 
@@ -1115,7 +1135,7 @@ class DecisionEngine:
                 if (macro_bias == "BEARISH" or d1_anchor_bias == "BEARISH") and not is_validated_reversal and ts <= -15.0:
                     gold_trend_following_valid = False
 
-            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK", "BREAKDOWN", "MOMENTUM_CONTINUATION", "STRUCTURE", "BREAKOUT"):
+            if effective_strat in ("TREND_FOLLOWING", "TREND_PULLBACK"):  # the only trend names StrategySelector emits
                 if tentative_bias == "BUY":
                     if not (sweep_confirmed or st_zone in ("DISCOUNT", "EQUILIBRIUM") or bos_active or ts >= 35.0):
                         gold_trend_following_valid = False
@@ -1987,11 +2007,15 @@ class DecisionEngine:
 
         is_gold_asset = any(k in context.symbol.upper() for k in ["XAU", "GOLD"])
         is_oil_asset = any(k in context.symbol.upper() for k in ["WTI", "OIL", "CRUDE"])
+        # EV is judged on the R:R the order will actually carry: dispatch rewrites the TP to the
+        # symbol's live target when one is set (execution_engine), else the levels' own R:R.
+        # Per-strategy RR floors (2.0-2.5R) used to inflate EV past the arbiter's 0.40 bar.
+        _ev_rr = _live_rr_for_ev(context.symbol, rr_ratio)
 
         for strat in candidate_strategies:
             strat_weight = strategy_probs.get(strat, 0.0)
             strat_p = final_win_p
-            strat_rr = rr_ratio
+            strat_rr = _ev_rr
 
             # Prerequisite trigger validation across ALL assets:
             # A reversal strategy requires actual structural or liquidity trigger evidence
@@ -2004,23 +2028,18 @@ class DecisionEngine:
             if strat == "RANGE_MEAN_REVERSION":
                 if context.momentum.adx < 20:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = min(2.0, max(1.6, strat_rr * 0.9))
             elif strat == "TREND_FOLLOWING":
                 if context.momentum.adx >= 25 and context.structure.bos:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = max(2.2, strat_rr * 1.1)
             elif strat == "BREAKOUT_EXPANSION":
                 if context.volatility.state in ("EXPANSION", "EXTREME"):
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.03, style, is_micro_mode)
-                strat_rr = max(2.5, strat_rr * 1.15)
             elif strat == "LIQUIDITY_SWEEP_REVERSAL":
                 if context.liquidity.sweep_detected:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.0, strat_rr * 1.05)
             elif strat == "CHOCH_STRUCTURAL_REVERSAL":
                 if context.structure.choch:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.0, strat_rr * 1.05)
             elif strat == "BEAR_MARKET_SHORT":
                 # Phase 3: SELL on H4 BEARISH + H1 pullback to EMA20 + momentum < -10
                 # Only valid for indices in TREND_BEAR regime
@@ -2030,7 +2049,6 @@ class DecisionEngine:
                 ts_v = float(getattr(context.momentum, "trend_score", 0.0) or 0.0) if hasattr(context, "momentum") else 0.0
                 if regime_bear and h4_b == "BEARISH" and ts_v <= -10.0 and ema20_dist <= 0.5:
                     strat_p = _bounded_bayesian_probability_update(strat_p, 0.05, style, is_micro_mode)
-                strat_rr = max(2.5, strat_rr * 1.2)
 
             strat_loss_p = round(1.0 - strat_p, 2)
             strat_win_dollars = _risk_dollars * strat_rr
@@ -2112,10 +2130,10 @@ class DecisionEngine:
             has_bull_choch = getattr(st, "choch_type", "") == "BULLISH"
             has_bear_choch = getattr(st, "choch_type", "") == "BEARISH"
             rsi_val_eval = getattr(context.momentum, "rsi", 50.0) if hasattr(context, "momentum") else 50.0
-            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "MOMENTUM_CONTINUATION")
+            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING")
             has_fvg_ob = bool(getattr(st, "fair_value_gaps", None) or getattr(st, "order_blocks", None))
             strong_metals_trend = abs(trend_score_val) >= 45.0
-            has_breakout = best_strategy in ("BREAKOUT", "MOMENTUM_CONTINUATION") or getattr(st, "bos", False)
+            has_breakout = bool(getattr(st, "bos", False))  # BREAKOUT/MOMENTUM_CONTINUATION are never selected
 
             if tentative_bias == "BUY":
                 if is_trend_pullback or strong_metals_trend or has_fvg_ob:
@@ -2449,7 +2467,7 @@ class DecisionEngine:
         # or buy into an overbought premium roof (RSI > 68 or Premium zone), unless it is a verified momentum breakout expansion.
         st_zone = getattr(context.structure, "discount_premium_zone", "EQUILIBRIUM") if hasattr(context, "structure") else "EQUILIBRIUM"
         rsi_val = float(getattr(context.momentum, "rsi", 50.0) or 50.0) if hasattr(context, "momentum") else 50.0
-        is_breakout_mode = best_strategy in ("BREAKOUT_EXPANSION", "BREAKDOWN") or is_expansion_val > 0 or is_extreme_val > 0
+        is_breakout_mode = best_strategy == "BREAKOUT_EXPANSION" or is_expansion_val > 0 or is_extreme_val > 0
 
         has_bull_swp = bool(getattr(context.liquidity, "sweep_detected", False) and "BULLISH" in getattr(context.liquidity, "sweep_type", ""))
         has_bear_swp = bool(getattr(context.liquidity, "sweep_detected", False) and "BEARISH" in getattr(context.liquidity, "sweep_type", ""))
@@ -2613,7 +2631,7 @@ class DecisionEngine:
                         logger.info(f"[{context.symbol}] BUY_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. Resting limit blocked.")
         if threat_lvl is not None and isinstance(threat_lvl, (int, float)) and threat_lvl > 0:
             is_trend_or_breakout = (
-                best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "CHOCH_STRUCTURAL_REVERSAL")
+                best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "CHOCH_STRUCTURAL_REVERSAL")
                 or abs(trend_score_val) >= 40.0
             )
             if tentative_bias == "BUY" and entry_price < threat_lvl <= tp_price:
@@ -2683,6 +2701,12 @@ class DecisionEngine:
         tp_dist = abs(tp_price - entry_price)
         risk_dist = abs(entry_price - sl_price)
         rr_ratio = round(tp_dist / max(risk_dist, 1e-9), 2)
+        # The arbiter promotes on decision.expected_value: keep it on the final levels' R:R.
+        _final_rr = _live_rr_for_ev(context.symbol, rr_ratio)
+        if abs(_final_rr - _ev_rr) > 1e-6 and strategy_triggered:
+            _cost_r = (_spread_cost + _slippage) / max(_risk_dollars, 0.50)
+            ev = round(final_win_p * _final_rr - (1.0 - final_win_p) - _cost_r, 2)
+            ev_dollars = round(ev * _risk_dollars, 2)
 
         # Final Absolute Geometric Quality Gate Re-Check
         if gate_passed and rr_ratio < (min_allowed_rr - 0.05):

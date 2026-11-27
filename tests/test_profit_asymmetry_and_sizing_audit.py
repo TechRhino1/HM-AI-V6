@@ -32,7 +32,9 @@ from jarvis.execution.execution_engine import ExecutionEngine
 
 
 def test_gold_sl_distance_cap():
-    """Verify that DynamicRiskAndLevelsEngine strictly caps Gold SL to <= 12.50 points."""
+    """Gold's $12+spread stop cap applies to SCALP/DAY only (user decision 2026-11-27). On SWING
+    a $12 stop is ~0.7x H1 ATR - inside one normal H1 bar - so SWING keeps its ATR ceiling and
+    sizing refuses a stop the minimum lot cannot afford (it never squeezes the stop)."""
     engine = DynamicRiskAndLevelsEngine()
     
     ctx = MarketContext(
@@ -59,10 +61,12 @@ def test_gold_sl_distance_cap():
         confidence=0.85,
     )
 
-    levels = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style="SWING")
-    
-    assert levels["risk_dist"] <= 12.50, f"Gold swing SL distance ({levels['risk_dist']}) exceeds 12.50 points!"
-    assert levels["rr_ratio"] >= 1.8, f"Gold R:R ({levels['rr_ratio']}) is below institutional minimum 1.8:1"
+    swing = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style="SWING")
+    assert swing["risk_dist"] > 12.50, f"Gold swing SL ({swing['risk_dist']}) is still squeezed to the scalp cap"
+    assert swing["rr_ratio"] >= 1.8, f"Gold R:R ({swing['rr_ratio']}) is below institutional minimum 1.8:1"
+    for style in ("SCALP", "DAY_TRADING"):
+        lv = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style=style)
+        assert lv["risk_dist"] <= 12.50, f"Gold {style} SL distance ({lv['risk_dist']}) exceeds 12.50 points!"
 
 
 def test_micro_account_gold_dollar_risk_cap():

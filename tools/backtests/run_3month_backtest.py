@@ -148,7 +148,12 @@ def main() -> int:
                     help="profile store to stamp with each symbol's holdout result (e.g. "
                          "config/winrate_profiles.json); exit_geometry.deployment_refusal reads it. "
                          "Requires --start and --profiles from calibrate_winrate.py --train-end")
+    ap.add_argument("--exit-mode", default="", choices=["", "legacy", "institutional_lock", "hold", "chandelier"],
+                    help="replay this exit policy offline (default: calibrated/legacy); sets JARVIS_BACKTEST_EXIT_MODE")
     args = ap.parse_args()
+    if args.exit_mode:
+        import os as _os
+        _os.environ["JARVIS_BACKTEST_EXIT_MODE"] = args.exit_mode
     if args.stamp and not (args.start and args.profiles):
         ap.error("--stamp needs --start and --profiles (a train-only store), otherwise it is not a holdout")
 

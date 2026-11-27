@@ -472,12 +472,21 @@ HOLDOUT_MIN_TRADES = 10
 def live_profile(symbol: str) -> Optional[Any]:
     """The calibrated profile the LIVE engine trades `symbol` on, or None when the
     calibrated policy is off, we are in a backtest, or no profile exists."""
-    global _LIVE_PROFILES
     try:
         from jarvis.config.runtime import is_offline
         from jarvis.config.settings import SETTINGS
         if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
             return None
+    except Exception:  # noqa: BLE001
+        return None
+    return _stamped_profile(symbol)
+
+
+def _stamped_profile(symbol: str) -> Optional[Any]:
+    """The symbol's profile (with its out-of-sample and holdout stamps) whether or not the
+    calibrated entry policy is on: the deployment gate judges the evidence either way."""
+    global _LIVE_PROFILES
+    try:
         from jarvis.intelligence.winrate_targeting import load_profiles
         _LIVE_PROFILES = load_profiles()  # mtime-cached inside load_profiles
         from jarvis.data.symbol_registry import resolve
@@ -495,21 +504,43 @@ def live_exit_geometry(symbol: str) -> Optional["ExitGeometry"]:
         return None
 
 
-def deployment_refusal(symbol: str) -> Optional[str]:
-    """Why `symbol` may not trade live under the calibrated policy, or None if it may.
-    A symbol with no profile has no validated evidence, so it is refused too."""
+_ENGINE_EVIDENCE: Dict[str, Any] = {"mtime": None, "rows": None}
+_STYLE_ALIASES = {"DAY": "DAY_TRADING", "INTRADAY": "DAY_TRADING"}
+
+
+def _engine_evidence(symbol: str) -> Optional[Dict[str, Dict[str, Any]]]:
+    """{style: holdout row} for `symbol` from the engine-in-the-loop holdout report, or None.
+
+    The report is reports/mode_backtest_report.json - the same file the AUTO style selector's
+    prior (ModeReliabilityModel) reads - and counts as gate evidence only when it says it is a
+    holdout run (`holdout_window`); the legacy in-sample report and a missing file return None."""
+    import json
+    import os
     try:
-        from jarvis.config.runtime import is_offline
-        from jarvis.config.settings import SETTINGS
-        if is_offline() or not bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False)):
+        from jarvis.config.paths import REPO_ROOT
+        from jarvis.data.symbol_registry import resolve
+        path = os.path.join(REPO_ROOT, "reports", "mode_backtest_report.json")
+        mt = os.path.getmtime(path) if os.path.exists(path) else None
+        if mt != _ENGINE_EVIDENCE["mtime"]:
+            rows = None
+            if mt is not None:
+                payload = json.load(open(path, encoding="utf-8"))
+                if payload.get("holdout_window"):
+                    rows = {}
+                    for mode in payload.get("modes", []) or []:
+                        st = str(mode.get("style") or "").upper()
+                        for r in mode.get("per_symbol", []) or []:
+                            rows.setdefault(str(r.get("symbol") or "").upper(), {})[st] = r
+            _ENGINE_EVIDENCE.update(mtime=mt, rows=rows)
+        rows = _ENGINE_EVIDENCE["rows"]
+        if rows is None:
             return None
-    except Exception as exc:  # noqa: BLE001 - fail closed: unreadable settings never authorise a trade
-        return f"DEPLOYMENT_GATE_UNVERIFIED: settings unavailable ({type(exc).__name__})"
-    prof = live_profile(symbol)
-    if prof is None:
-        return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"
-    
-    # Determine asset-class specific hurdle
+        return rows.get(str(resolve(symbol).canonical).upper()) or rows.get(str(symbol).upper()) or {}
+    except Exception:  # noqa: BLE001 - unreadable evidence falls back to the stamped profile
+        return None
+
+
+def _hurdle(symbol: str) -> tuple:
     asset_cls = "DEFAULT"
     try:
         from jarvis.data.symbol_registry import resolve
@@ -518,10 +549,57 @@ def deployment_refusal(symbol: str) -> Optional[str]:
             asset_cls = str(spec.asset_class).upper()
     except Exception:
         pass
-
     hurdle = OOS_HURDLES.get(asset_cls, OOS_HURDLES.get("DEFAULT", {"min_trades": MIN_OOS_TRADES, "min_expectancy_r": MIN_OOS_EXPECTANCY_R}))
-    min_trades = int(hurdle.get("min_trades", MIN_OOS_TRADES))
-    min_exp = float(hurdle.get("min_expectancy_r", MIN_OOS_EXPECTANCY_R))
+    return int(hurdle.get("min_trades", MIN_OOS_TRADES)), float(hurdle.get("min_expectancy_r", MIN_OOS_EXPECTANCY_R))
+
+
+def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str]:
+    """Why `symbol` (optionally in trade `style`) may not trade live, or None if it may.
+
+    The gate judges the evidence of the policy that actually trades:
+      * calibrated entry policy ON  -> the calibrated profile's out-of-sample and holdout stamps;
+      * calibrated entry policy OFF -> the engine-in-the-loop holdout per symbol x style
+        (reports/mode_backtest_report.json, run on the live exit policy), when that report exists;
+        a style cell must clear the asset-class hurdle, and with no style given at least one cell must.
+    With no engine evidence it falls back to the stamped profile, so it is never looser than before.
+    A symbol with no evidence at all is refused. Turning the calibrated policy off (4fd416a) used
+    to switch this gate off for every symbol."""
+    try:
+        from jarvis.config.runtime import is_offline
+        from jarvis.config.settings import SETTINGS
+        if is_offline():
+            return None
+        calibrated_on = bool(getattr(SETTINGS.trading, "use_calibrated_entry_policy", False))
+    except Exception as exc:  # noqa: BLE001 - fail closed: unreadable settings never authorise a trade
+        return f"DEPLOYMENT_GATE_UNVERIFIED: settings unavailable ({type(exc).__name__})"
+    min_trades, min_exp = _hurdle(symbol)
+
+    ev = None if calibrated_on else _engine_evidence(symbol)
+    if ev is not None:
+        def _fails(st: str, row: Optional[Dict[str, Any]]) -> Optional[str]:
+            if row is None:
+                return f"STYLE_HOLDOUT_GATE: {symbol} {st} has no engine holdout evidence"
+            n, e = int(row.get("trades") or 0), float(row.get("expectancy_r") or 0.0)
+            if n < min_trades or e < min_exp:
+                return (f"STYLE_HOLDOUT_GATE: {symbol} {st} engine holdout {e:+.3f}R over {n} trades "
+                        f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
+            # A holdout win after a train loss is a sign flip between regimes, not a stable edge.
+            tn, te = int(row.get("train_trades") or 0), row.get("train_expectancy_r")
+            if te is not None and tn >= HOLDOUT_MIN_TRADES and float(te) < 0.0:
+                return (f"STYLE_TRAIN_GATE: {symbol} {st} lost on the train window ({float(te):+.3f}R over {tn} trades) "
+                        f"before its holdout {e:+.3f}R")
+            return None
+        if style:
+            st = _STYLE_ALIASES.get(str(style).upper(), str(style).upper())
+            return _fails(st, ev.get(st))
+        if not ev:
+            return f"STYLE_HOLDOUT_GATE: {symbol} has no engine holdout evidence"
+        reasons = [_fails(st, row) for st, row in ev.items()]
+        return None if any(r is None for r in reasons) else "; ".join(r for r in reasons if r)
+
+    prof = _stamped_profile(symbol)
+    if prof is None:
+        return f"NO_VALIDATED_PROFILE: {symbol} has no calibrated out-of-sample profile"
 
     n, e = int(getattr(prof, "oos_trades", 0) or 0), float(getattr(prof, "oos_expectancy_r", 0.0) or 0.0)
     if n < min_trades or e < min_exp:

@@ -126,14 +126,26 @@ class ExitPolicy:
         for it (live only: offline backtests and research keep the policy they calibrated)."""
         pol = cls._resolve(symbol, spec, trade_style, regime)
         try:
-            from jarvis.config.runtime import is_offline
+            from jarvis.config.runtime import backtest_exit_mode, is_offline
             from jarvis.config.settings import SETTINGS
+            from jarvis.data.symbol_registry import resolve
+            canon = str(getattr(resolve(symbol), "canonical", symbol) or symbol).upper()
+            hold_set = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+            if is_offline():
+                # A backtest replays the live exit only when asked (JARVIS_BACKTEST_EXIT_MODE), so
+                # the evidence the deployment gate reads is measured on the policy that trades.
+                mode = backtest_exit_mode()
+                if mode == "institutional_lock":
+                    return institutional_lock(pol, hold=canon in hold_set or str(symbol).upper() in hold_set)
+                if mode == "hold":
+                    return institutional_lock(pol, hold=True)
+                if mode == "chandelier":
+                    import dataclasses
+                    return dataclasses.replace(pol, trail_mode="institutional", be_at_r=1.0, profit_locks=False)
+                return pol
             mode = str(getattr(SETTINGS.trading, "exit_mode", "legacy") or "legacy").lower()
-            if mode == "institutional_lock" and not is_offline():
-                from jarvis.data.symbol_registry import resolve
-                hold = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
-                canon = str(getattr(resolve(symbol), "canonical", symbol) or symbol).upper()
-                return institutional_lock(pol, hold=canon in hold or str(symbol).upper() in hold)
+            if mode == "institutional_lock":
+                return institutional_lock(pol, hold=canon in hold_set or str(symbol).upper() in hold_set)
         except Exception:
             pass
         return pol

@@ -26,7 +26,7 @@ from jarvis.backtesting.exit_geometry import OOS_HURDLES  # noqa: E402
 from jarvis.backtesting.trade_simulator import Geometry, select_sequential, simulate_all_candidates, summarise  # noqa: E402
 from jarvis.config.paths import DATA_DIR  # noqa: E402
 from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit, resolve  # noqa: E402
-from jarvis.forward_tests.session_leads import SIGNALS, to_candidates  # noqa: E402
+from jarvis.forward_tests.session_leads import IMOM_SESSIONS, SIGNALS, to_candidates  # noqa: E402
 from jarvis.intelligence.winrate_targeting import WRTargetCalibrator, _selection_bias_stats  # noqa: E402
 
 REAL_DIR = Path(DATA_DIR) / "market" / "real"
@@ -65,8 +65,11 @@ def main() -> int:
             print(f"{sym}: skipped, not real MT5 data")
             continue
         df = pd.read_parquet(path).reset_index(drop=True)
+        df.attrs["symbol"] = sym  # IMOM reads it to pick the index's cash session
         digits = int((meta.get("meta") or {}).get("digits", resolve(sym).digits))
         for kind in SIGNALS:
+            if kind == "IMOM" and sym not in IMOM_SESSIONS:
+                continue
             results[(sym, kind)] = evaluate(df, sym, kind, digits)
             r = results[(sym, kind)]
             print(f"{sym:7s} {kind:5s} n={r['trades']:4d} exp={r.get('expectancy_r', 0):+.3f}R")
