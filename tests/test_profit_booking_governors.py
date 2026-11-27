@@ -203,7 +203,7 @@ class TestStrategyQuarantine(unittest.TestCase):
                 VALUES (?, ?, 'BUY', 4200.0, 4190.0, 4220.0, 0.01,
                         '2026-10-20T09:15:27+00:00', ?, ?, ?, 'x', ?, 'broker', ?)
                 """,
-                (960000 + i, symbol, exit_px, -r_i * 10.0, json.dumps({"strategy": strategy}),
+                (960000 + i, symbol, exit_px, r_i * 10.0, json.dumps({"strategy": strategy}),  # P&L = R x $10 risk (0.01 lot gold, $10 stop): consistent with the price, as net R reads it
                  mode, regime),
             )
         conn.commit()
@@ -329,12 +329,16 @@ class TestStrategyQuarantine(unittest.TestCase):
                                        db_path=self._temp_db(5)),
             1.0,
         )
-        # Positive live edge earns the boost.
-        self.assertEqual(
-            expectancy_risk_multiplier("XAUUSD", "TREND_PULLBACK",
-                                       db_path=self._temp_db(20, r_values=[0.5] * 20)),
-            1.15,
-        )
+        # Positive live edge: no boost while sizing is reduce-only (2026-11-27); 1.15 with it off.
+        from jarvis.execution import strategy_quarantine as _sq
+        db = self._temp_db(20, r_values=[0.5] * 20)
+        self.assertEqual(expectancy_risk_multiplier("XAUUSD", "TREND_PULLBACK", db_path=db), 1.0)
+        _sq.SIZING_REDUCE_ONLY = False
+        try:
+            _sq.clear_cache()
+            self.assertEqual(expectancy_risk_multiplier("XAUUSD", "TREND_PULLBACK", db_path=db), 1.15)
+        finally:
+            _sq.SIZING_REDUCE_ONLY = True
         # Mild negative earns the haircut (below quarantine floor of n>=20
         # at <= -0.25R: 15 trades at -0.4R is a haircut, not a ban).
         self.assertEqual(

@@ -119,6 +119,24 @@ class ExecutionEngine:
 
 
 
+    def _execution_quality(self, decision, res, use_limit, bid_price, ask_price, order_timer) -> Dict[str, Any]:
+        """{requested_price, fill_price, spread_at_fill, fill_latency_ms} for the journal; any
+        unmeasurable field is None. Never raises: it must not cost a trade its journal row."""
+        out: Dict[str, Any] = {"requested_price": None, "fill_price": None, "spread_at_fill": None,
+                               "fill_latency_ms": None}
+        try:
+            buy = str(decision.bias).upper().startswith("BUY")
+            out["requested_price"] = float(decision.entry_price) if use_limit else float(ask_price if buy else bid_price)
+            out["fill_price"] = float((res or {}).get("price")) if (res or {}).get("price") else None
+            out["fill_latency_ms"] = float(getattr(order_timer, "elapsed_ms", 0.0) or 0.0) or None
+            tick = self.mt5_client.get_tick(decision.symbol) if hasattr(self.mt5_client, "get_tick") else None
+            if tick:
+                from jarvis.data.symbol_registry import resolve
+                out["spread_at_fill"] = round((float(tick["ask"]) - float(tick["bid"])) / float(resolve(decision.symbol).pip_size), 2)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("execution quality not measured for %s: %s", getattr(decision, "symbol", "?"), exc)
+        return out
+
     def _price_origin(self, res: Dict[str, Any]) -> str:
 
         """Where the fill price came from — `broker`, `paper` or `synthetic` (D1).
@@ -1328,6 +1346,8 @@ class ExecutionEngine:
                     # deal will be keyed on. Without it the row can never close.
 
                     position_id=res.get("position_id"),
+                    # Execution quality: asked vs filled, spread right after the fill, latency.
+                    **self._execution_quality(decision, res, use_limit, bid_price, ask_price, _order_timer),
 
                     # D1: say where the fill price came from, so a statistic over
 

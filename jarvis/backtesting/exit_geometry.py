@@ -646,7 +646,7 @@ def _live_style_r(symbol: str, style: str, since: str) -> tuple:
     if hit and _t.time() - hit[0] < OVERRIDE_STATS_TTL_SEC:
         return hit[1], hit[2]
     from jarvis.config.paths import resolve_db_path
-    from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit, resolve
+    from jarvis.data.symbol_registry import resolve
     canon = str(resolve(symbol).canonical).upper()
     con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True)
     try:
@@ -656,13 +656,14 @@ def _live_style_r(symbol: str, style: str, since: str) -> tuple:
             "AND COALESCE(execution_mode, '') != 'paper'", (str(since),)).fetchall()
     finally:
         con.close()
+    from jarvis.analytics.performance import net_r_multiple
     rs = []
     for sym, entry, sl, vol, pnl, st in rows:
         if _norm_style(st) != style or str(resolve(sym).canonical).upper() != canon:
             continue
-        risk = abs(float(entry or 0) - float(sl or 0)) * float(vol or 0) * float(get_dollar_risk_per_price_unit(sym) or 0)
-        if risk > 0:
-            rs.append(float(pnl) / risk)
+        r = net_r_multiple(sym, entry, sl, vol, pnl)
+        if r is not None:
+            rs.append(r)
     n, mean = len(rs), (sum(rs) / len(rs) if rs else 0.0)
     _OVERRIDE_CACHE[key] = (_t.time(), n, mean)
     return n, mean

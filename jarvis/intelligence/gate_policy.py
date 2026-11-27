@@ -52,9 +52,18 @@ def _policy_thresholds() -> tuple:
 
 
 
+# Reduce-only (user decision 2026-11-27): SOFTEN let failed soft gates trade on a 30-trade win rate
+# pooled across every symbol, never validated out of sample. Off (failed soft gates BLOCK) until it
+# passes the shadow + tools/promote_model.py test; live and backtest share this default. It did not
+# fire on 2026-11-26/27 (pooled win rate ~31% < the 0.45 floor), so switching it off changes no
+# current trade.
+SOFTEN_ENABLED = False
+
+
 class AdaptiveGatePolicy:
     def __init__(self, max_soft_fail: Optional[int] = None,
-                 min_recent_win_rate: Optional[float] = None):
+                 min_recent_win_rate: Optional[float] = None, allow_soften: Optional[bool] = None):
+        self.allow_soften = SOFTEN_ENABLED if allow_soften is None else bool(allow_soften)
         _df_max, _df_min = _policy_thresholds()
         self.max_soft_fail = int(max_soft_fail) if max_soft_fail is not None else _df_max
         self.min_recent_win_rate = float(min_recent_win_rate) if min_recent_win_rate is not None else _df_min
@@ -85,7 +94,7 @@ class AdaptiveGatePolicy:
         # CONFIGURED floor (default 0.45). It used to be min(0.30, floor), which
         # silently lowered the setting and let a 30% win rate skip 3 gates.
         # Capital-protection hard gates NEVER soften under any circumstance.
-        if len(soft) <= self.max_soft_fail:
+        if self.allow_soften and len(soft) <= self.max_soft_fail:
             if recent_win_rate is not None and recent_win_rate >= self.min_recent_win_rate:
                 return ("SOFTEN", soft)
         return ("BLOCK", soft)

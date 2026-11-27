@@ -49,7 +49,7 @@ class TestGatePolicy(unittest.TestCase):
 
     def test_good_evidence_softens(self):
         from jarvis.intelligence.gate_policy import AdaptiveGatePolicy
-        gp = AdaptiveGatePolicy()
+        gp = AdaptiveGatePolicy(allow_soften=True)  # the logic under test; shipped default is off
         decision, soft = gp.decide(["Order Flow Momentum"], 0.62)
         self.assertEqual(decision, "SOFTEN")
         # 3 soft failures -> soften with new max_soft_fail=3
