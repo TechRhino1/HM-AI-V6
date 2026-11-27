@@ -200,6 +200,13 @@ class MonitorSettings:
     retention_days: int = 14              # journals/advisories/alerts older than this are gzipped
     delete_after_days: int = 90           # gzipped journals older than this are deleted
     backups_keep: int = 7                 # daily SQLite backups kept per database
+    threads_warn: int = 400               # process threads above this look like a leak
+    handles_warn: int = 20000             # OS handles above this look like a leak
+    auto_unaffordable_sweeps: int = 120   # AUTO sweeps in a row with no affordable allowed style
+    decision_p95_s: float = 10.0          # p95 latency ceilings over the window
+    order_p95_s: float = 5.0
+    fetch_p95_s: float = 5.0
+    http_p95_s: float = 3.0
 
 
 @dataclass

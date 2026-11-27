@@ -772,10 +772,72 @@ class JarvisOrchestrator:
             from jarvis.observability.maintenance import dir_size_gb
             if self._due("data_dir_size", 600.0, now):  # walking data/ is not free
                 self._data_dir_gb = dir_size_gb(DATA_DIR)
+            proc = psutil.Process()
+            handles = proc.num_handles() if hasattr(proc, "num_handles") else proc.num_fds()
             return _sm.check_resources(psutil.cpu_percent(None), psutil.virtual_memory().percent,
                                        shutil.disk_usage(DATA_DIR).free / 1e9,
-                                       getattr(self, "_data_dir_gb", None), cfg)
+                                       getattr(self, "_data_dir_gb", None), cfg,
+                                       threads=proc.num_threads(), handles=handles)
         _safe("resources", _resources)
+
+        def _specs():
+            from jarvis.execution.mt5_client import MT5Client
+            return _sm.check_events("broker spec fallbacks", now, float(MT5Client.spec_fallbacks), span, 1,
+                                    "live symbol-spec lookups fell back to the registry")
+        _safe("broker_specs", _specs)
+
+        def _lock():
+            from jarvis.observability.instruments import BROKER_LOCK_ACQUISITIONS
+            busy = _sm.counter_by(BROKER_LOCK_ACQUISITIONS, "result").get("busy", 0.0)
+            return _sm.check_events("broker lock busy", now, busy, span, 5, "broker calls refused: lock busy > 10 s")
+        _safe("broker_lock", _lock)
+
+        _safe("broker_account", lambda: _sm.check_account(getattr(self.state_manager, "account", None), self.mode))
+
+        def _quarantine():
+            from jarvis.execution import strategy_quarantine as _sq
+            rep = _sq.quarantine_report(execution_mode=self.mode)
+            cur = [k for k, v in rep.items() if v.get("quarantined")]
+            out_q = _sm.check_quarantine(cur, getattr(self, "_last_quarantined", None))
+            self._last_quarantined = cur
+            return out_q
+        _safe("quarantine", _quarantine)
+
+        _safe("auto_style", lambda: _sm.check_auto_style(getattr(self, "_auto_unaffordable_streak", {}),
+                                                          int(getattr(cfg, "auto_unaffordable_sweeps", 120))))
+
+        def _gates():
+            from jarvis.observability import decision_journal as _dj
+            return _sm.check_gate_spikes(now, list(_dj.RECENT), cfg.reject_spike_factor)
+        _safe("gate_spikes", _gates)
+
+        def _latency():
+            from jarvis.observability.instruments import (DECISION_LATENCY, HTTP_LATENCY, MT5_RATES_LATENCY,
+                                                          ORDER_LATENCY)
+            p95 = {name: _sm.hist_p95(f"lat_{name}", now, h, span)
+                   for name, h in (("decision", DECISION_LATENCY), ("order", ORDER_LATENCY),
+                                   ("rates_fetch", MT5_RATES_LATENCY), ("http", HTTP_LATENCY))}
+            return _sm.check_latency(p95, {"decision": cfg.decision_p95_s, "order": cfg.order_p95_s,
+                                           "rates_fetch": cfg.fetch_p95_s, "http": cfg.http_p95_s})
+        _safe("latency", _latency)
+
+        def _databases():
+            from jarvis.config.paths import DATA_DIR
+            sizes = {}
+            for name in ("jarvis_history.db", "jarvis_trade_memory.db"):
+                path = os.path.join(DATA_DIR, name)
+                if os.path.exists(path):
+                    wal = path + "-wal"
+                    sizes[name] = {"db_mb": round(os.path.getsize(path) / 1e6, 2),
+                                   "wal_mb": round(os.path.getsize(wal) / 1e6, 2) if os.path.exists(wal) else 0.0}
+            return _sm.check_databases(sizes)
+        _safe("databases", _databases)
+
+        def _unmanaged():
+            st = self._position_monitor_status() or {}
+            running = bool(st.get("running") and st.get("thread_alive"))
+            return _sm.check_unmanaged(list(getattr(self.state_manager, "positions", None) or []), running)
+        _safe("unmanaged_positions", _unmanaged)
         return out
 
     AUTO_TUNE_EVERY_SEC = 1800.0
@@ -2918,6 +2980,10 @@ class JarvisOrchestrator:
             pick = sel["pick"]
             vetoed = pick is not None and pick.bias in news.get("blocked_directions", [])
             action = "SKIP" if pick is None else "VETO" if vetoed else "TRADE"
+            # Monitor input: sweeps in a row where a gate-allowed style existed but none was affordable.
+            _streaks = self.__dict__.setdefault("_auto_unaffordable_streak", {})
+            _skipped = (sel.get("detail") or {}).get("skipped") or {}
+            _streaks[sym] = _streaks.get(sym, 0) + 1 if (pick is None and _skipped.get("unaffordable")) else 0
             decisions[sym] = {"symbol": sym, "action": action, "live": live, "pick": sel["detail"],
                               "news": news, "updated": time.time()}
             _dj.record_auto({"symbol": sym, "action": action, "live": live,

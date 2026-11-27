@@ -2034,7 +2034,8 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 "advisory": getattr(llm, "last_advisory", None),
                 "monitor_actions": list(_dj.MONITOR_ACTIONS)[-60:][::-1],
                 "config": {"verifier": asdict(SETTINGS.verifier), "gates": asdict(SETTINGS.gates),
-                           "forward_tests": asdict(SETTINGS.forward_tests)},
+                           "forward_tests": asdict(SETTINGS.forward_tests), "monitor": asdict(SETTINGS.monitor)},
+                "maintenance": getattr(orch, "last_maintenance", None),
             })
         elif path == "/api/gates/stats":
             from jarvis.observability.instruments import GATE_VERDICTS
@@ -2117,10 +2118,18 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             monitor_age = None
         monitor_stale = state != {} and (monitor_age is None or monitor_age > self._HEALTH_MONITOR_STALE_SEC)
         workers = {k: (state.get("checks", {}).get(k) or {}).get("status")
-                   for k in ("position_monitor", "state_sync", "symbol_feeds", "timeouts")}
+                   for k in ("position_monitor", "state_sync", "symbol_feeds", "timeouts", "broker_account",
+                             "unmanaged_positions")}
+        try:
+            workers["mt5"] = (self.state_manager.services_health or {}).get("MT5")
+        except Exception:  # noqa: BLE001 - a probe never raises
+            workers["mt5"] = None
         ok = (db_ok and not lock_stale and not bool(guard.get("wedged"))
               and not lock_failed and not guard_failed and not loop_stalled and not monitor_stale
-              and "CRITICAL" not in workers.values())
+              and "CRITICAL" not in workers.values()
+              # MT5 counts once the watchdog has measured it (a monitor pass ran); before, the
+              # boot default DISCONNECTED would fail every probe for the first seconds.
+              and not (state and workers.get("mt5") in ("RECONNECTING", "DISCONNECTED")))
         self._send_json({
             "status": "ok" if ok else "degraded",
             "broker_lock": broker_lock,

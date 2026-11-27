@@ -272,7 +272,9 @@ class Window:
         self._pts: Dict[str, List[tuple]] = {}
 
     def delta(self, key: str, now: float, total: float, span: float) -> float:
-        pts = self._pts.setdefault(key, [])
+        # Every total is a process-lifetime counter that started at 0, so a key seen for the first
+        # time counts everything so far (the monitor's first pass is ~60 s after start).
+        pts = self._pts.setdefault(key, [(now, 0.0)])
         pts.append((now, float(total)))
         while len(pts) > 2 and pts[1][0] <= now - span:
             pts.pop(0)
@@ -371,8 +373,13 @@ def check_overrides(rows: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
 
 
 def check_resources(cpu_pct: Optional[float], mem_pct: Optional[float], disk_free_gb: Optional[float],
-                    data_gb: Optional[float], cfg: Any) -> Dict[str, Any]:
+                    data_gb: Optional[float], cfg: Any, threads: Optional[int] = None,
+                    handles: Optional[int] = None) -> Dict[str, Any]:
     bad = []
+    if threads is not None and threads > getattr(cfg, "threads_warn", 400):
+        bad.append(f"{threads} threads (leak?)")
+    if handles is not None and handles > getattr(cfg, "handles_warn", 20000):
+        bad.append(f"{handles} handles (leak?)")
     if cpu_pct is not None and cpu_pct > cfg.cpu_warn_pct:
         bad.append(f"CPU {cpu_pct:.0f}%")
     if mem_pct is not None and mem_pct > cfg.memory_warn_pct:
@@ -385,7 +392,125 @@ def check_resources(cpu_pct: Optional[float], mem_pct: Optional[float], disk_fre
     return {"status": CRITICAL if crit else (WARN if bad else OK), "value": None, "threshold": None,
             "detail": ", ".join(bad) if bad else
             f"CPU {cpu_pct or 0:.0f}%, memory {mem_pct or 0:.0f}%, disk free {disk_free_gb or 0:.1f} GB, "
-            f"data/ {data_gb or 0:.2f} GB"}
+            f"data/ {data_gb or 0:.2f} GB, threads {threads if threads is not None else '?'}, "
+            f"handles {handles if handles is not None else '?'}"}
+
+
+def check_events(name: str, now: float, total: float, span: float, warn_at: int = 1,
+                 what: str = "events") -> Dict[str, Any]:
+    """Count of a failure event in the trailing window (spec fallbacks, broker-lock busy)."""
+    n = WINDOW.delta(name, now, total, span)
+    return {"status": WARN if n >= warn_at else OK, "value": int(n), "threshold": warn_at,
+            "detail": f"{int(n)} {what} in the last {span / 60:.0f} min"}
+
+
+def hist_p95(name: str, now: float, hist: Any, span: float) -> Optional[float]:
+    """p95 (upper bucket edge, seconds) of a metrics Histogram over the trailing window; None
+    without observations. All label series are pooled."""
+    cum: Dict[str, float] = {}
+    try:
+        for smp in hist.samples():
+            if smp.get("suffix") == "_bucket":
+                le = str(smp["labels"].get("le"))
+                cum[le] = cum.get(le, 0.0) + float(smp["value"])
+    except Exception:
+        return None
+    if not cum:
+        return None
+    deltas = {le: WINDOW.delta(f"{name}:le={le}", now, v, span) for le, v in cum.items()}
+    total = deltas.get("+Inf", 0.0)
+    if total <= 0:
+        return None
+    for le in sorted((k for k in deltas if k != "+Inf"), key=float):
+        if deltas[le] >= 0.95 * total:
+            return float(le)
+    return float("inf")
+
+
+def check_latency(p95s: Dict[str, Optional[float]], limits: Dict[str, float]) -> Dict[str, Any]:
+    slow = {k: v for k, v in p95s.items() if v is not None and v > limits.get(k, float("inf"))}
+    shown = ", ".join(f"{k} {'>' + str(limits[k]) if v == float('inf') else f'{v:g}'}s" for k, v in p95s.items()
+                      if v is not None) or "no observations yet"
+    return {"status": WARN if slow else OK, "value": None, "threshold": limits,
+            "detail": ("slow p95: " + ", ".join(f"{k} > {limits[k]:g}s" for k in slow) + "; ") * bool(slow)
+            + f"p95 {shown}", "p95": p95s}
+
+
+def check_account(acct: Any, mode: str) -> Dict[str, Any]:
+    """The broker account a live/demo engine trades on: logged in and allowed to trade."""
+    if str(mode).lower() in ("paper", "offline", "backtest"):
+        return {"status": OK, "value": None, "threshold": None, "detail": f"{mode}: simulated account"}
+    login = int(getattr(acct, "login", 0) or 0)
+    if not login:
+        return {"status": CRITICAL, "value": None, "threshold": None,
+                "detail": "no broker account: MT5 not logged in or disconnected"}
+    if not bool(getattr(acct, "trade_allowed", False)):
+        return {"status": CRITICAL, "value": login, "threshold": None,
+                "detail": f"account #{login} is logged in but trading is NOT allowed (terminal/broker setting)"}
+    return {"status": OK, "value": login, "threshold": None, "detail": f"account #{login} connected, trading allowed"}
+
+
+def check_quarantine(current: Iterable[str], previous: Optional[Iterable[str]]) -> Dict[str, Any]:
+    """Strategy quarantine changes since the last pass (it blocks pairs automatically, silently)."""
+    cur = set(current or [])
+    prev = set(previous) if previous is not None else cur
+    added, removed = sorted(cur - prev), sorted(prev - cur)
+    parts = ([f"newly quarantined: {', '.join(added)}"] if added else []) + (
+        [f"released: {', '.join(removed)}"] if removed else [])
+    return {"status": WARN if added else OK, "value": len(cur), "threshold": None,
+            "detail": "; ".join(parts) or f"{len(cur)} symbol x strategy pair(s) quarantined, unchanged",
+            "quarantined": sorted(cur)}
+
+
+def check_auto_style(streaks: Optional[Dict[str, int]], warn_after: int) -> Dict[str, Any]:
+    """AUTO skipping a symbol sweep after sweep because every gate-allowed style is unaffordable."""
+    bad = {s: n for s, n in (streaks or {}).items() if n >= warn_after}
+    return {"status": WARN if bad else OK, "value": max(bad.values(), default=0), "threshold": warn_after,
+            "detail": ("no affordable allowed style for " + ", ".join(f"{s} ({n} sweeps)" for s, n in sorted(bad.items())))
+            if bad else "every allowed symbol had an affordable style recently"}
+
+
+def check_gate_spikes(now: float, rows: List[Dict[str, Any]], factor: float, min_count: int = 10) -> Dict[str, Any]:
+    """Per-gate rejections in the last 30 min against that gate's 24 h average (the total-rate
+    check misses one gate suddenly blocking everything while another quietens)."""
+    last30: Dict[str, int] = {}
+    day: Dict[str, int] = {}
+    for r in rows:
+        g = r.get("blocked_by")
+        if not g:
+            continue
+        age = now - _ts(r)
+        if age <= 86400:
+            day[g] = day.get(g, 0) + 1
+            if age <= 1800:
+                last30[g] = last30.get(g, 0) + 1
+    spikes = {g: n for g, n in last30.items() if n >= min_count and n > factor * max(1.0, day.get(g, 0) / 48.0)}
+    top = ", ".join(f"{g} x{n}" for g, n in sorted(last30.items(), key=lambda kv: -kv[1])[:5]) or "none"
+    return {"status": WARN if spikes else OK, "value": len(spikes), "threshold": factor,
+            "detail": ("spiking: " + ", ".join(f"{g} x{n}" for g, n in spikes.items()) + "; ") * bool(spikes)
+            + f"last 30 min top blockers: {top}", "last_30min": last30}
+
+
+def check_databases(sizes: Dict[str, Dict[str, float]], wal_warn_mb: float = 64.0) -> Dict[str, Any]:
+    """Trade DB and WAL sizes (a WAL that keeps growing means checkpoints are not happening)."""
+    big = {db: v for db, v in sizes.items() if v.get("wal_mb", 0.0) > wal_warn_mb}
+    return {"status": WARN if big else OK, "value": None, "threshold": wal_warn_mb,
+            "detail": ", ".join(f"{db} {v['db_mb']:.1f} MB (WAL {v.get('wal_mb', 0.0):.1f} MB)" for db, v in sizes.items())
+            or "no databases found", "sizes": sizes}
+
+
+def check_unmanaged(positions: Iterable[Any], monitor_running: bool) -> Dict[str, Any]:
+    """Open bot positions while the position monitor is not running: nothing trails, locks or
+    closes them. Forward-test positions are managed by their own routers (comment FT_), manual
+    trades by the operator, so neither counts. (The monitor fills its symbol cache lazily, so a
+    per-symbol test would false-alarm after every start.)"""
+    from jarvis.risk.exposure import is_forward_test
+    bot = [f"#{p.ticket} {p.symbol}" for p in positions
+           if not is_forward_test(p) and str(getattr(p, "comment", "") or "").upper().startswith(("HMA", "JARVIS"))]
+    out = bot if not monitor_running else []
+    return {"status": CRITICAL if out else OK, "value": len(out), "threshold": None,
+            "detail": ("bot positions with NO position monitor running: " + ", ".join(out)) if out
+            else f"{len(bot)} bot position(s), managed by the position monitor; forward tests by their routers"}
 
 
 _ALERT_STATE: Dict[str, Dict[str, Any]] = {}

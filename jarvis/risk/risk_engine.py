@@ -32,6 +32,14 @@ def _normalize_pos_side(pos: Any) -> str:
         return "BUY" if raw == 0 else "SELL"
     return str(raw or "BUY").upper()
 
+
+def loss_cooldown_state_path(mode: str) -> str:
+    """Where the loss-streak cooldowns persist for `mode` (tests swap this for a temp file)."""
+    from jarvis.config.paths import ensure_data_dir, resolve_db_path
+    ensure_data_dir()
+    return resolve_db_path(mode_scoped_db_path("jarvis_loss_cooldown.json", mode, False))
+
+
 class RiskEngine:
     def __init__(
         self,
@@ -107,7 +115,10 @@ class RiskEngine:
         self._now = time.time
         self.position_sizer = PositionSizer()
         self.trade_guard = TradeGuard()
-        self.loss_cooldown = LossCooldownManager(drawdown_guard=self.drawdown_guard)
+        # Loss-streak cooldowns persist per mode (a restart used to clear them); backtests never persist.
+        self.loss_cooldown = LossCooldownManager(
+            drawdown_guard=self.drawdown_guard,
+            state_path=None if is_backtest else loss_cooldown_state_path(mode))
         self.correlation_engine = DynamicCorrelationEngine()
 
         # Atomic Risk Reservation table: {symbol: (reserved_usd, expiry_time)}

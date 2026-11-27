@@ -12,7 +12,11 @@ class LossCooldownManager:
     - Dynamic drawdown deleveraging prevents catastrophic failure
     """
 
-    def __init__(self, drawdown_guard=None):
+    _PERSISTED = ("cooldown_expiry_global", "cooldown_expiry_by_symbol", "consecutive_losses",
+                  "consecutive_losses_by_symbol", "consecutive_wins")
+
+    def __init__(self, drawdown_guard=None, state_path: Optional[str] = None):
+        self._state_path = state_path
         self.consecutive_losses = 0
         self.consecutive_wins = 0
         self.consecutive_losses_by_symbol: Dict[str, int] = {}
@@ -38,8 +42,51 @@ class LossCooldownManager:
         self.drawdown_guard = drawdown_guard
         # Injectable clock for backtest (bar time) vs live (wall time)
         self._clock = None
+        self._load_state()
+
+    # ── Persistence (2026-11-27): a restart used to clear the 15/30-min loss-streak cooldowns ──
+    def _load_state(self) -> None:
+        import json
+        import os
+        if not self._state_path or not os.path.exists(self._state_path):
+            return
+        try:
+            with open(self._state_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            for k in self._PERSISTED:
+                if k in data:
+                    setattr(self, k, data[k])
+        except Exception as exc:  # noqa: BLE001 - a corrupt file must not stop the engine
+            logger.warning("LossCooldownManager: could not load %s (%s)", self._state_path, exc)
+
+    def _save_state(self) -> None:
+        import json
+        import os
+        if not self._state_path:
+            return
+        try:
+            tmp = self._state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({k: getattr(self, k) for k in self._PERSISTED}, fh)
+            os.replace(tmp, self._state_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LossCooldownManager: could not save %s (%s)", self._state_path, exc)
 
     def record_trade_result(
+        self,
+        pnl: float,
+        is_win: bool,
+        symbol: str = "",
+        current_date=None,
+        r_multiple: Optional[float] = None,
+    ) -> None:
+        """Record trade outcome and update streak tracking (persisted when a state path is set)."""
+        try:
+            self._record_trade_result(pnl, is_win, symbol, current_date, r_multiple)
+        finally:
+            self._save_state()
+
+    def _record_trade_result(
         self,
         pnl: float,
         is_win: bool,

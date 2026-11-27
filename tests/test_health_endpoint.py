@@ -307,13 +307,14 @@ def test_the_probes_dispatch_without_authentication(monkeypatch, path):
 
 
 # ── monitor freshness and worker state (2026-11-27) ──────────────────────────
-def _with_monitor(monkeypatch, state):
+def _with_monitor(monkeypatch, state, mt5="CONNECTED"):
     from types import SimpleNamespace
     monkeypatch.setattr(server_module.sqlite3, "connect", lambda *a, **k: _FakeConnection())
     monkeypatch.setattr(TimeoutGuard, "health", classmethod(
         lambda cls: {"stuck_workers": 0, "max_workers": 16, "available": 16, "wedged": False}))
     handler = _healthy_handler()
     handler.orchestrator = SimpleNamespace(monitor_state=state)
+    handler.state_manager = SimpleNamespace(services_health={"MT5": mt5})
     handler._send_health()
     return handler
 
@@ -335,3 +336,11 @@ def test_a_critical_worker_degrades_and_a_boot_without_a_pass_does_not(monkeypat
     h = _with_monitor(monkeypatch, {"checked_at": _iso(10), "checks": crit})
     assert h.last_status == 503 and h.body()["workers"]["state_sync"] == "CRITICAL"
     assert _with_monitor(monkeypatch, {}).last_status == 200   # first minute after start: no pass yet
+
+
+def test_mt5_reconnecting_degrades_only_after_the_watchdog_measured_it(monkeypatch):
+    from types import SimpleNamespace
+    fresh = {"checked_at": _iso(10), "checks": {"loop_heartbeat": {"status": "OK"}}}
+    h = _with_monitor(monkeypatch, fresh, mt5="RECONNECTING")
+    assert h.last_status == 503 and h.body()["workers"]["mt5"] == "RECONNECTING"
+    assert _with_monitor(monkeypatch, {}, mt5="DISCONNECTED").last_status == 200   # boot: not measured yet

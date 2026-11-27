@@ -36,6 +36,8 @@ class MT5Client:
     # it, so the wedge is reported instead of absorbed.
     _shared_lock = TrackedRLock("mt5_shared", default_wait_sec=DEFAULT_WAIT_SEC)
     _symbol_spec_cache: ClassVar[Dict[str, Tuple[float, Dict[str, Any]]]] = {}
+    #: Live spec lookups that fell back to the registry (read by the system monitor's broker_specs check).
+    spec_fallbacks: ClassVar[int] = 0
     _pending_orders_cache: ClassVar[Tuple[float, List[Dict[str, Any]]]] = (0.0, [])
 
     def __init__(self, magic_number: int = 888999, mode: str = "live", timeout_sec: float = 4.0,
@@ -318,6 +320,7 @@ class MT5Client:
         # at 1.0/0.0001 = $10k/lot; for a 5-digit FX pair it is $100k, so sizing
         # off them oversized lots up to 10x. Use the symbol's registry spec, uncached.
         logger.warning(f"Live symbol_info unavailable for {resolved}; sizing from registry spec.")
+        MT5Client.spec_fallbacks += 1
         spec = _registry_spec(cache=False)
         # Negative cache for 60 s (the hit window is 3600 s): retries, but not on every call
         # under the broker lock.

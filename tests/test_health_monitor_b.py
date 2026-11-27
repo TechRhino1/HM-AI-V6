@@ -21,9 +21,10 @@ CFG = MonitorSettings()
 # ── windowed rates ───────────────────────────────────────────────────────────
 def test_window_forgets_events_older_than_the_span():
     w = sm.Window()
-    assert w.delta("k", NOW, 100.0, 600) == 0.0
-    assert w.delta("k", NOW + 300, 130.0, 600) == 30.0
-    assert w.delta("k", NOW + 1300, 130.0, 600) == 0.0      # the old burst left the window
+    assert w.delta("k", NOW, 100.0, 600) == 100.0            # lifetime counters start at 0
+    assert w.delta("k", NOW + 300, 130.0, 600) == 130.0
+    assert w.delta("k", NOW + 1300, 130.0, 600) == 0.0       # the old burst left the window
+    assert w.delta("k", NOW + 1400, 131.0, 600) == 1.0
 
 
 def test_share_needs_enough_events_and_judges_the_window():
@@ -252,3 +253,90 @@ def test_symbol_health_keeps_each_symbol_and_classifies_it():
     h = DataFeedEngine.symbol_health(feed)
     assert {s: v["status"] for s, v in h.items()} == {"XAUUSD": "STREAMING", "US30": "STALE",
                                                       "EURUSD": "CLOSED", "GBPUSD": "SYNTHETIC"}
+
+
+# ── checks added in the pre-merge audit (2026-11-27) ─────────────────────────
+def _rows_at(now, gate, n, age_s):
+    ts = datetime.fromtimestamp(now - age_s, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return [{"blocked_by": gate, "ts": ts}] * n
+
+
+def test_failure_event_counts_and_gate_spikes():
+    sm.WINDOW._pts.clear()
+    assert sm.check_events("e", NOW, 0.0, 1800)["status"] == sm.OK
+    assert sm.check_events("e", NOW + 60, 1.0, 1800)["status"] == sm.WARN
+    assert sm.check_events("e", NOW + 3700, 1.0, 1800)["status"] == sm.OK      # aged out of the window
+    steady = _rows_at(NOW, "EXEC_READY", 48 * 20, 40000)          # ~20 per 30 min all day
+    out = sm.check_gate_spikes(NOW, steady + _rows_at(NOW, "EXEC_READY", 25, 60), 3.0)
+    assert out["status"] == sm.OK                                  # normal for that gate
+    out = sm.check_gate_spikes(NOW, steady + _rows_at(NOW, "LOSS_COOLDOWN", 30, 60), 3.0)
+    assert out["status"] == sm.WARN and "LOSS_COOLDOWN x30" in out["detail"]
+
+
+def test_latency_p95_from_histogram_deltas():
+    from jarvis.observability.metrics import Histogram
+    sm.WINDOW._pts.clear()
+    h = Histogram("t_seconds", "t", (), buckets=(0.5, 1.0, 5.0, 30.0))
+    assert sm.hist_p95("h", NOW, h, 1800) is None
+    for _ in range(95):
+        h.observe(0.2)
+    for _ in range(5):
+        h.observe(20.0)
+    assert sm.hist_p95("h", NOW + 60, h, 1800) == 0.5
+    for _ in range(100):
+        h.observe(20.0)
+    assert sm.hist_p95("h", NOW + 120, h, 1800) == 30.0
+    out = sm.check_latency({"decision": 30.0, "order": None}, {"decision": 10.0, "order": 5.0})
+    assert out["status"] == sm.WARN and "decision > 10s" in out["detail"]
+
+
+def test_account_quarantine_auto_databases_unmanaged():
+    assert sm.check_account(SimpleNamespace(login=0), "demo")["status"] == sm.CRITICAL
+    assert sm.check_account(SimpleNamespace(login=7, trade_allowed=False), "demo")["status"] == sm.CRITICAL
+    assert sm.check_account(SimpleNamespace(login=7, trade_allowed=True), "demo")["status"] == sm.OK
+    assert sm.check_account(None, "paper")["status"] == sm.OK
+
+    assert sm.check_quarantine(["A|X"], None)["status"] == sm.OK       # first pass: baseline
+    q = sm.check_quarantine(["A|X", "B|Y"], ["A|X"])
+    assert q["status"] == sm.WARN and "newly quarantined: B|Y" in q["detail"]
+    assert "released: A|X" in sm.check_quarantine([], ["A|X"])["detail"]
+
+    assert sm.check_auto_style({"XAUUSD": 200, "ETHUSD": 3}, 120)["detail"].startswith("no affordable allowed style for XAUUSD")
+    assert sm.check_auto_style({"ETHUSD": 3}, 120)["status"] == sm.OK
+
+    assert sm.check_databases({"h.db": {"db_mb": 2.3, "wal_mb": 4.0}})["status"] == sm.OK
+    assert sm.check_databases({"h.db": {"db_mb": 2.3, "wal_mb": 200.0}})["status"] == sm.WARN
+
+    pos = [SimpleNamespace(ticket=1, symbol="XAUUSD", comment="HMA2_SCLP_TREN_DEMO"),
+           SimpleNamespace(ticket=2, symbol="EURUSD", comment="FT_TR_EURUSD_H4_T1"),
+           SimpleNamespace(ticket=3, symbol="GBPUSD", comment="manual")]
+    assert sm.check_unmanaged(pos, True)["status"] == sm.OK
+    out = sm.check_unmanaged(pos, False)
+    assert out["status"] == sm.CRITICAL and "#1 XAUUSD" in out["detail"] and "#2" not in out["detail"]
+
+    assert sm.check_resources(10, 10, 100, 1, CFG, threads=900, handles=100)["status"] == sm.WARN
+
+
+# ── A1 follow-up: loss-streak cooldowns survive a restart ────────────────────
+def test_loss_streak_cooldown_survives_a_restart(tmp_path, monkeypatch):
+    from jarvis.config import runtime
+    from jarvis.risk.loss_cooldown import LossCooldownManager
+    monkeypatch.setattr(runtime, "is_offline", lambda: False)
+    import jarvis.risk.loss_cooldown as lc
+    monkeypatch.setattr(lc, "closed_today_from_history", lambda day: (0.0, 0, {}))
+    path = str(tmp_path / "jarvis_loss_cooldown_demo.json")
+    m = LossCooldownManager(state_path=path)
+    for _ in range(3):
+        m.record_trade_result(pnl=-5.0, is_win=False, symbol="XAUUSD", r_multiple=-1.0)
+    assert m.should_skip_trade("XAUUSD")[0]
+    restarted = LossCooldownManager(state_path=path)
+    assert restarted.consecutive_losses == 3
+    skip, why = restarted.should_skip_trade("ETHUSD")
+    assert skip and "Cooldown active" in why                        # the global 15-min pause held
+    assert LossCooldownManager().consecutive_losses == 0            # no path (backtests): nothing loaded
+
+
+def test_risk_engine_persists_live_but_never_backtests():
+    from jarvis.risk.risk_engine import RiskEngine
+    assert RiskEngine(mode="demo").loss_cooldown._state_path.endswith("jarvis_loss_cooldown_demo.json")
+    assert RiskEngine(mode="demo", is_backtest=True).loss_cooldown._state_path is None
