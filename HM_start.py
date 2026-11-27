@@ -294,7 +294,10 @@ def _keep_awake(on: bool) -> bool:
     return True
 
 
-def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trade_style: str = "ALL"):
+def hm_start(mode: str = "live", port: int = 8501, host: str = "127.0.0.1", trade_style: str = ""):
+    if not trade_style:
+        from jarvis.config.settings import SETTINGS
+        trade_style = SETTINGS.trading.trade_style or "ALL"
     # Rotating JSON log under data/logs (production was console-only). Called at
     # run time, not import time, so importing this module (tests) writes nothing.
     from jarvis.observability.logging_setup import add_file_logging

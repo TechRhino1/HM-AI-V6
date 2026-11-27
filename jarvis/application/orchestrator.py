@@ -2687,13 +2687,19 @@ class JarvisOrchestrator:
         verdicts and returns `ranked` untouched; live keeps the picks the news doesn't veto and
         scales their risk by the news size multiplier (which can only reduce it)."""
         from jarvis.intelligence import news_risk
+        from jarvis.intelligence.auto_style import live_allowed as _auto_live_allowed
         from jarvis.observability import decision_journal as _dj
         live = auto_style_live()
+        try:
+            _acct = self.state_manager.account or self.mt5_client.get_account_snapshot()
+            _equity = float(getattr(_acct, "equity", 0.0) or 0.0)
+        except Exception:  # noqa: BLE001 - unknown equity: skip the affordability pre-check, the sizer still refuses
+            _equity = 0.0
         keep: List[Any] = []
         decisions: Dict[str, Dict[str, Any]] = {}
         for sym in dict.fromkeys(c.symbol for c in ranked):
             try:
-                sel = self.auto_selector.choose(sym, ranked)
+                sel = self.auto_selector.choose(sym, ranked, allowed=lambda c: _auto_live_allowed(c, _equity))
             except Exception as exc:
                 logger.warning("AUTO style selection failed for %s: %s", sym, exc)
                 sel = {"pick": None, "detail": {"reason": f"selection error: {exc}"}}

@@ -38,8 +38,11 @@ loss category without another dataclass layer.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ExitLeg",
@@ -553,7 +556,7 @@ def _hurdle(symbol: str) -> tuple:
     return int(hurdle.get("min_trades", MIN_OOS_TRADES)), float(hurdle.get("min_expectancy_r", MIN_OOS_EXPECTANCY_R))
 
 
-def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str]:
+def _evidence_refusal(symbol: str, style: Optional[str] = None) -> Optional[str]:
     """Why `symbol` (optionally in trade `style`) may not trade live, or None if it may.
 
     The gate judges the evidence of the policy that actually trades:
@@ -612,6 +615,104 @@ def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str
         return (f"HOLDOUT_GATE: {symbol} walk-forward holdout {float(he):+.3f}R over {hn} trades "
                 f"({getattr(prof, 'holdout_window', '')}; needs > 0R over >= {HOLDOUT_MIN_TRADES})")
     return None
+
+
+_OVERRIDE_CACHE: Dict[tuple, tuple] = {}
+_OVERRIDE_LOGGED: Dict[tuple, float] = {}
+OVERRIDE_STATS_TTL_SEC = 60.0
+
+
+def _norm_style(style: Any) -> str:
+    st = str(style or "").upper()
+    return _STYLE_ALIASES.get(st, st)
+
+
+def _overrides_for(symbol: str) -> List[Dict[str, Any]]:
+    """The operator overrides (settings gates.deployment_overrides) that name `symbol`."""
+    from jarvis.config.settings import SETTINGS
+    from jarvis.data.symbol_registry import resolve
+    names = {str(symbol).upper(), str(resolve(symbol).canonical).upper()}
+    return [o for o in (getattr(SETTINGS.gates, "deployment_overrides", None) or [])
+            if str(o.get("symbol", "")).upper() in names and o.get("style")]
+
+
+def _live_style_r(symbol: str, style: str, since: str) -> tuple:
+    """(n, mean R) of live trades in `symbol` x `style` closed since `since`, from executed_trades.
+    R = net realised P&L / risk at the entry stop, so costs count. Raises if the DB is unreadable."""
+    import sqlite3
+    import time as _t
+    key = (str(symbol).upper(), style, str(since))
+    hit = _OVERRIDE_CACHE.get(key)
+    if hit and _t.time() - hit[0] < OVERRIDE_STATS_TTL_SEC:
+        return hit[1], hit[2]
+    from jarvis.config.paths import resolve_db_path
+    from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit, resolve
+    canon = str(resolve(symbol).canonical).upper()
+    con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT symbol, entry_price, sl, volume, realized_pnl, trade_style FROM executed_trades "
+            "WHERE closed_at IS NOT NULL AND realized_pnl IS NOT NULL AND closed_at >= ? "
+            "AND COALESCE(execution_mode, '') != 'paper'", (str(since),)).fetchall()
+    finally:
+        con.close()
+    rs = []
+    for sym, entry, sl, vol, pnl, st in rows:
+        if _norm_style(st) != style or str(resolve(sym).canonical).upper() != canon:
+            continue
+        risk = abs(float(entry or 0) - float(sl or 0)) * float(vol or 0) * float(get_dollar_risk_per_price_unit(sym) or 0)
+        if risk > 0:
+            rs.append(float(pnl) / risk)
+    n, mean = len(rs), (sum(rs) / len(rs) if rs else 0.0)
+    _OVERRIDE_CACHE[key] = (_t.time(), n, mean)
+    return n, mean
+
+
+def _override_verdict(symbol: str, style: str, o: Dict[str, Any], evidence: str) -> Optional[str]:
+    """None while the override is on probation and has not failed it; else why it no longer applies."""
+    import time as _t
+    since = str(o.get("since") or "1970-01-01")
+    try:
+        n, r = _live_style_r(symbol, style, since)
+    except Exception as exc:  # noqa: BLE001 - fail closed: an override is only as good as its stop
+        return f"OVERRIDE_UNVERIFIED: {symbol} {style} live record unreadable ({type(exc).__name__}); {evidence}"
+    stop_n, stop_r = int(o.get("stop_after_trades", 30) or 30), float(o.get("stop_below_r", -0.10))
+    if n >= stop_n and r < stop_r:
+        return (f"OVERRIDE_STOPPED: {symbol} {style} live {r:+.3f}R over {n} trades since {since} "
+                f"(stop below {stop_r:+.2f}R after {stop_n}); remove or renew gates.deployment_overrides to re-enable")
+    k = (str(symbol).upper(), style)
+    if _t.time() - _OVERRIDE_LOGGED.get(k, 0.0) > 3600.0:
+        _OVERRIDE_LOGGED[k] = _t.time()
+        logger.warning("DEPLOYMENT OVERRIDE %s %s (%s): trading despite %s; live %+.3fR over %d since %s",
+                       symbol, style, o.get("reason", "operator"), evidence, r, n, since)
+    return None
+
+
+def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str]:
+    """Why `symbol` (optionally in trade `style`) may not trade live, or None if it may.
+
+    The evidence decides (see `_evidence_refusal`). An operator override in
+    settings gates.deployment_overrides can allow one refused symbol x style, on probation:
+    once its live trades since `since` reach `stop_after_trades` with mean R below
+    `stop_below_r`, the override stops and the evidence refusal stands. Without a style, an
+    override that is not stopped counts as a passing cell."""
+    evidence = _evidence_refusal(symbol, style)
+    if evidence is None or evidence.startswith("DEPLOYMENT_GATE_UNVERIFIED"):
+        return evidence
+    try:
+        overrides = _overrides_for(symbol)
+    except Exception:  # noqa: BLE001 - no readable override = evidence alone
+        return evidence
+    want = _norm_style(style) if style else None
+    stopped = None
+    for o in overrides:
+        st = _norm_style(o.get("style"))
+        if want is not None and st != want:
+            continue
+        stopped = _override_verdict(symbol, st, o, evidence)
+        if stopped is None:
+            return None
+    return stopped if (want is not None and stopped) else evidence
 
 
 def live_target_r(symbol: str) -> Optional[float]:
