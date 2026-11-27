@@ -75,6 +75,13 @@ def _exit_policy(payload: Dict[str, Any]) -> Tuple[str, Optional[List[str]]]:
             sorted(str(s).upper() for s in hold) if isinstance(hold, list) else None)
 
 
+def _exit_cells(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The per-cell exit modes a report was measured with (trading.exit_cells), or None for a
+    report from before they were recorded."""
+    cells = (payload or {}).get("exit_cells")
+    return {str(k).upper(): str(v).lower() for k, v in cells.items()} if isinstance(cells, dict) else None
+
+
 def holdout_end(payload: Optional[Dict[str, Any]]) -> Optional[_dt.date]:
     try:
         return _dt.date.fromisoformat(str((payload or {}).get("holdout_window", "")).split("..")[1][:10])
@@ -94,6 +101,11 @@ def integrity_refusal(payload: Optional[Dict[str, Any]], today: Optional[_dt.dat
     if mode != live_mode or (hold is not None and hold != live_hold):
         return (f"EVIDENCE_MISMATCH: evidence measured on exit {mode} hold={hold}, live trades exit {live_mode} "
                 f"hold={live_hold}; revalidate on the live exit policy")
+    cells = _exit_cells(payload)
+    live_cells = {str(k).upper(): str(v).lower() for k, v in (getattr(SETTINGS.trading, "exit_cells", None) or {}).items()}
+    if (cells or {}) != live_cells:  # an older report (None) can only vouch for no per-cell exits
+        return (f"EVIDENCE_MISMATCH: evidence measured with exit_cells={cells}, live trades exit_cells={live_cells}; "
+                f"approve the matching evidence version or revalidate")
     end = holdout_end(payload)
     max_age = float(getattr(SETTINGS.gates, "evidence_max_age_days", 35.0) or 35.0)
     age = ((today or _dt.datetime.now(_dt.timezone.utc).date()) - end).days if end else None
@@ -143,6 +155,8 @@ def plan(active: Optional[Dict[str, Any]], candidate: Dict[str, Any]) -> Tuple[D
     # A report from before exit_hold_symbols was recorded (None) replayed the same settings file.
     if active and (am != cm or (ah is not None and ch is not None and ah != ch)):
         policy.append(f"exit policy {(am, ah)} -> {(cm, ch)}")
+    if active and (_exit_cells(active) or {}) != (_exit_cells(cand) or {}):
+        policy.append(f"exit_cells {_exit_cells(active) or {}} -> {_exit_cells(cand) or {}}")
     return cand, {"tighten": tighten, "loosen": loosen, "exit_policy": policy}
 
 
@@ -239,3 +253,75 @@ def status() -> Dict[str, Any]:
             "age_days": (_dt.datetime.now(_dt.timezone.utc).date() - end).days if end else None,
             "integrity": integrity_refusal(payload), "pending": pending, "live_differs": live_differs,
             "refused_cells": sorted(f"{k[0]}|{k[1]}" for k, r in cells(payload).items() if r.get("refused"))}
+
+
+# ── Per-cell exits (exit audit 2026-11-27): approval needs the shadow forward test ─────────
+_NO_SHADOW_NEEDED = ("institutional_lock", "hold")     # the measured live policies
+
+
+def shadow_failures(changed: Dict[str, str], db_path: Optional[str] = None) -> List[str]:
+    """Why each changed cell's new exit mode has not passed its live shadow, or [] when all have:
+    >= SHADOW_MIN_CLOSES complete demo/live shadow closes in that cell, mean shadow R >= mean real R."""
+    import sqlite3
+    from jarvis.data.symbol_registry import resolve
+    from jarvis.execution.exit_shadow import SHADOW_MIN_CLOSES, SHADOW_MODES
+    from jarvis.execution.exit_policy import _STYLE_ALIASES
+    bad = []
+    rows = None
+    for key, mode in sorted(changed.items()):
+        if mode in _NO_SHADOW_NEEDED:
+            continue
+        if mode not in SHADOW_MODES:
+            bad.append(f"{key} -> {mode}: no live shadow exists for this mode (only {SHADOW_MODES} are shadowed)")
+            continue
+        if rows is None:
+            if db_path is None:
+                from jarvis.config.paths import resolve_db_path
+                db_path = resolve_db_path("jarvis_history.db")
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                rows = con.execute("SELECT symbol, trade_style, mode, shadow_r, actual_r FROM shadow_exits "
+                                   "WHERE complete = 1 AND lower(COALESCE(execution_mode, '')) IN ('demo', 'live')").fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            finally:
+                con.close()
+        who, st = key.split("|", 1)
+        sel = [(s, a) for sym, sty, m, s, a in rows if m == mode
+               and _STYLE_ALIASES.get(str(sty or "").upper(), str(sty or "").upper()) == st
+               and who in (str(resolve(sym).canonical).upper(), str(resolve(sym).asset_class).upper())]
+        n = len(sel)
+        ms, ma = (sum(s for s, _ in sel) / n, sum(a for _, a in sel) / n) if n else (None, None)
+        if n < SHADOW_MIN_CLOSES or ms < ma:
+            bad.append(f"{key} -> {mode}: {n} shadow closes (needs {SHADOW_MIN_CLOSES})"
+                       + (f", shadow {ms:+.3f}R vs real {ma:+.3f}R" if n else ""))
+    return bad
+
+
+def install(version: str, reason: str, author: str = "operator", require_shadow: bool = True) -> Dict[str, Any]:
+    """Make evidence `version` active together with the per-cell exits it was measured with
+    (settings trading.exit_cells, a governed write). Approval requires the shadow forward test for
+    every changed cell; a rollback (require_shadow=False) restores an earlier, already-approved pair.
+    Between the two writes the gate sees a mismatch and refuses: it never trades a pair it has not."""
+    from jarvis.config.settings import SETTINGS, _LIVE_SETTINGS_PATH
+    meta = reg.versions(NAME).get("versions", {}).get(version)
+    if not meta:
+        raise KeyError(f"{NAME} has no version {version}")
+    new_cells = _exit_cells(load(os.path.join(reg._dir(NAME), meta["file"]))) or {}
+    live_cells = {str(k).upper(): str(v).lower() for k, v in (SETTINGS.trading.exit_cells or {}).items()}
+    changed = {k: v for k, v in new_cells.items() if live_cells.get(k) != v}
+    if require_shadow:
+        bad = shadow_failures(changed)
+        if bad:
+            reg.audit("evidence_approval_refused", model=NAME, version=version, reasons=bad)
+            raise ValueError("shadow forward test not passed: " + "; ".join(bad))
+    if new_cells != live_cells:
+        with open(_LIVE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+        doc.setdefault("trading", {})["exit_cells"] = new_cells
+        reg.governed_write("settings", _LIVE_SETTINGS_PATH, json.dumps(doc, indent=2), reason=f"{reason} ({NAME} {version})",
+                           author=author, approve=True, validation={"exit_cells": new_cells})
+        SETTINGS.trading.exit_cells = dict(new_cells)
+    reg.deploy_version(NAME, version, live_path(), reason=reason, author=author)
+    _ACTIVE["mt"] = None
+    return {"version": version, "exit_cells": new_cells, "changed": changed}

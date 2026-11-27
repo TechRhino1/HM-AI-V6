@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 import threading
 import re
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from jarvis.config.paths import resolve_db_path, ensure_data_dir
 from jarvis.data.broker_time import broker_utc_offset
@@ -112,7 +112,7 @@ def _empty_pnl():
 #       a closed row carried no outcome at all: `realized_pnl` defaulted to 0.0
 #       (a scratch trade) whether the trade had closed or not, and the exit price
 #       was never stored.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _migration_1(conn) -> None:
@@ -296,8 +296,19 @@ def _migration_7(conn) -> None:
     })
 
 
+def _migration_8(conn) -> None:
+    """Shadow exits (exit audit 2026-11-27, jarvis.execution.exit_shadow): per closed live position,
+    each pre-registered exit variant's virtual exit next to the real one - the forward test a
+    variant must pass before it may manage real positions."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS shadow_exits (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket INTEGER, "
+        "symbol TEXT, trade_style TEXT, mode TEXT, entry REAL, initial_sl REAL, shadow_exit REAL, shadow_r REAL, "
+        "actual_exit REAL, actual_r REAL, shadow_hit INTEGER, complete INTEGER, execution_mode TEXT, closed_at TEXT, "
+        "UNIQUE(ticket, mode))")
+
+
 MIGRATIONS = {1: _migration_1, 2: _migration_2, 3: _migration_3, 4: _migration_4, 5: _migration_5,
-              6: _migration_6, 7: _migration_7}
+              6: _migration_6, 7: _migration_7, 8: _migration_8}
 
 # MT5 DEAL_REASON_* of a closing deal -> why the trade ended. The engine's own
 # reason (TIME_STOP, REVERSAL, ...) is written first by set_exit_reason and wins.
@@ -568,6 +579,27 @@ class SQLiteTradeDB:
             conn.commit()
         except Exception as e:
             logger.debug(f"exit_reason write failed for #{position_id}: {e}")
+
+    def record_shadow_exits(self, rows: List[Dict[str, Any]], execution_mode: Optional[str]) -> int:
+        """Persist ExitShadow.pop() rows; one per (ticket, mode). Returns rows written. Never raises."""
+        if not rows:
+            return 0
+        try:
+            import datetime as _dt
+            now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            conn = self._get_conn()
+            conn.executemany(
+                "INSERT OR REPLACE INTO shadow_exits (ticket, symbol, trade_style, mode, entry, initial_sl, shadow_exit, "
+                "shadow_r, actual_exit, actual_r, shadow_hit, complete, execution_mode, closed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(r["ticket"], r["symbol"], r["trade_style"], r["mode"], r["entry"], r["initial_sl"], r["shadow_exit"],
+                  r["shadow_r"], r["actual_exit"], r["actual_r"], int(bool(r["shadow_hit"])), int(bool(r["complete"])),
+                  execution_mode, now) for r in rows])
+            conn.commit()
+            return len(rows)
+        except Exception as e:
+            logger.error(f"shadow exit write failed: {e}")
+            return 0
 
     def record_excursions(self, position_id: int, mfe: Optional[float], mae: Optional[float]) -> None:
         """Max favourable / adverse excursion measured by the position monitor (price units)."""

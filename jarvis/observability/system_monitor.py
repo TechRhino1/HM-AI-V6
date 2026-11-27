@@ -378,6 +378,48 @@ def check_overrides(rows: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
             "detail": detail, "overrides": rows}
 
 
+EXIT_QUALITY_MIN_N = 5          # trades that reached +1R in a cell before its give-back is judged
+STOP_SLIP_WARN_R = 0.10          # mean stop fill beyond the stop, in R, over >= EXIT_QUALITY_MIN_N stop exits
+
+
+def check_exit_quality(trades: Optional[List[Dict[str, Any]]], bench: Optional[Dict[str, Dict[str, Any]]],
+                       min_n: int = EXIT_QUALITY_MIN_N) -> Dict[str, Any]:
+    """Profit protection of recent live closes (exit audit 2026-11-27). `trades`: {"cell", "mfe_r",
+    "exit_r", "stop_slip_r"}; `bench`: {cell: evidence row with giveback_r}. WARN when a cell gives
+    back more than its holdout by over 2 standard errors, or stops fill > STOP_SLIP_WARN_R beyond
+    their level on average. Missed protection (reached +1R, closed <= 0R) is reported."""
+    from jarvis.analytics.performance import excursion_stats
+    trades = trades or []
+    if not trades:
+        return {"status": OK, "value": None, "threshold": None, "detail": "no live closes with a measured MFE yet",
+                "cells": {}}
+    by: Dict[str, list] = {}
+    for t in trades:
+        by.setdefault(t["cell"], []).append(t)
+    cells, bad = {}, []
+    for cell, ts in sorted(by.items()):
+        ex = excursion_stats((t["mfe_r"], t["exit_r"]) for t in ts)
+        b = (bench or {}).get(cell) or {}
+        row = {**ex, "holdout_giveback_r": b.get("giveback_r"), "status": OK}
+        if ex["reached_1r"] >= min_n and ex["giveback_r"] is not None and b.get("giveback_r") is not None:
+            se = (ex["giveback_sd"] or 0.0) / ex["reached_1r"] ** 0.5
+            if ex["giveback_r"] > float(b["giveback_r"]) + 2.0 * se:
+                row["status"] = WARN
+                bad.append(f"{cell} gives back {ex['giveback_r']:.2f}R vs holdout {float(b['giveback_r']):.2f}R "
+                           f"(n={ex['reached_1r']})")
+        cells[cell] = row
+    slips = [t["stop_slip_r"] for t in trades if t.get("stop_slip_r") is not None]
+    if len(slips) >= min_n and sum(slips) / len(slips) > STOP_SLIP_WARN_R:
+        bad.append(f"stops fill {sum(slips) / len(slips):.2f}R beyond their level on average (n={len(slips)})")
+    tot = excursion_stats((t["mfe_r"], t["exit_r"]) for t in trades)
+    detail = (f"{tot['measured']} closes: capture {tot['capture_pct']}% of +1R peaks, give-back {tot['giveback_r']}R, "
+              f"missed protection {tot['missed_protection']}"
+              + (f"; avg stop slip {sum(slips) / len(slips):.3f}R" if slips else "")
+              + (f"; {'; '.join(bad)}" if bad else ""))
+    return {"status": WARN if bad else OK, "value": tot["giveback_r"], "threshold": None, "detail": detail,
+            "cells": cells}
+
+
 def check_evidence(st: Optional[Dict[str, Any]], warn_age_days: float = 14.0) -> Dict[str, Any]:
     """The governed deployment evidence (jarvis.learning.evidence.status()): CRITICAL when the gate
     cannot trust it (stale or another exit policy: every cell refused); WARN when it is ageing, a

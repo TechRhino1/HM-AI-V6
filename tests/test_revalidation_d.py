@@ -204,7 +204,7 @@ def test_runner_replays_the_live_exit_reuses_cells_and_promotes(ev_env, monkeypa
     assert rv.main(argv, run=fake) == 0
     grids = [c for c in calls if "run_mode_backtest.py" in c[1]]
     assert [c[c.index("--styles") + 1] for c in grids] == ["SCALP,DAY_TRADING", "DAY_TRADING"]   # no SCALP train
-    assert all(c[c.index("--exit-mode") + 1] == "institutional_lock" for c in grids)
+    assert all(c[c.index("--exit-mode") + 1] == "live" for c in grids)       # what live resolves per cell
     assert grids[0][grids[0].index("--end") + 1] == str(END)
     assert _verdicts()["EURUSD|DAY_TRADING"] is not None                     # the tightening went live
     calls.clear()

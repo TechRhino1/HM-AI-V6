@@ -211,6 +211,9 @@ class PositionMonitorEngine:
         # still read them. Bounded: the monitor runs for the life of the process,
         # so an unbounded map grows with every trade the account ever takes.
         self._closed_excursions: Dict[int, tuple] = {}
+        # Forward test of the pre-registered exit variants: virtual stops only, never sent.
+        from jarvis.execution.exit_shadow import ExitShadow
+        self.exit_shadow = ExitShadow()
         self._closed_excursions_order: list = []
         self._closed_excursions_cap = 512
 
@@ -268,11 +271,18 @@ class PositionMonitorEngine:
         cannot tell them apart is being fed a fabricated zero.
 
         The value is removed once read, so a ticket cannot be credited twice.
+        The close handler usually runs before the monitor's next tick has retired the ticket
+        (broker-side SL/TP closes, and the last position closing, which ends the tick early), so
+        the live peak maps are read too: before 2026-11-27 that left 54 of 55 broker closes NULL.
         """
         try:
-            return self._closed_excursions.pop(int(ticket))
-        except (KeyError, TypeError, ValueError):
+            t = int(ticket)
+        except (TypeError, ValueError):
             return None
+        if t in self._closed_excursions:
+            return self._closed_excursions.pop(t)
+        mfe, mae = self._peak_mfe.pop(t, None), self._peak_mae.pop(t, None)
+        return None if mfe is None and mae is None else (mfe, mae)
 
     @staticmethod
     def _coerce_positive_float(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -355,7 +365,7 @@ class PositionMonitorEngine:
         self._manual_trade_modes = {t: m for t, m in self._manual_trade_modes.items() if t in active_tickets}
         self._layer_last = {k: v for k, v in getattr(self, "_layer_last", {}).items() if k[0] in active_tickets}
         for _name in ("_initial_tp", "_initial_risk_usd", "_entry_ml_prob", "_last_modify_time", "_bar_peak_at",
-                      "_modify_backoff", "_modify_times", "_peak_mfe", "_peak_mae"):
+                      "_modify_backoff", "_modify_times"):  # _peak_mfe/_peak_mae are retired below, not dropped
             _d = getattr(self, _name, None)
             if isinstance(_d, dict):
                 for _t in [t for t in _d if t not in active_tickets]:
@@ -1549,6 +1559,12 @@ class PositionMonitorEngine:
                 hold_minutes=(open_dur_sec / 60.0) if open_dur_sec else None,
                 peak_favorable_dist=self._peak_mfe.get(pos.ticket),
             )
+            self.exit_shadow.update(
+                ticket=pos.ticket, symbol=symbol, style=pos_style, side=pos.type, entry=pos.open_price,
+                initial_sl=self._initial_sl[pos.ticket], price=c_price, favorable_dist=favorable_dist, atr=atr,
+                policy=policy, struct_level=struct_level, regime=regime_str,
+                partial_executable=self._partial_executable(pos, policy), open_dur_sec=open_dur_sec,
+                peak_favorable_dist=self._peak_mfe.get(pos.ticket))
 
             if exit_dec.should_close:
                 _ts_r = favorable_dist / max(risk_dist, 1e-6)
@@ -1857,8 +1873,9 @@ class PositionMonitorEngine:
             if open_dur_sec > 0:
                 # Scalp: 45 min max hold without progress (R <= 0.0) -> Close position
                 if style == "SCALP" and open_dur_sec >= 2700.0 and current_r <= 0.0:
-                    self._execute_exit(pos, reason="SCALP_STAGNATION")
-                    return
+                    if self._execute_exit(pos, reason="SCALP_STAGNATION"):
+                        return
+                    # Refused (layer shadow/off, or the close failed): keep managing the stop this tick.
 
                 # Institutional lock: only the scalp stagnation exit above is kept (measured helpful).
                 elif _lock:

@@ -161,12 +161,25 @@ def main() -> int:
                 print(f"  {k}  {meta['created']}  {meta.get('status', '-'):7}  {meta['reason']}  "
                       f"passed={meta.get('validation', {}).get('passed', '-')}")
         return 0
+    if a.cmd == "approve" and a.name == "mode_evidence":
+        from jarvis.learning import evidence
+        try:
+            res = evidence.install(a.version, reason=a.reason)
+        except ValueError as exc:
+            print(f"REFUSED: {exc}")
+            return 2
+        print(f"mode_evidence {a.version} active; exit_cells {res['exit_cells']} (changed: {res['changed']}).")
+        return 0
     if a.cmd == "approve":
         reg.deploy_version(a.name, a.version, GOVERNED[a.name], reason=a.reason)
         print(f"{a.name} {a.version} installed at {GOVERNED[a.name]} and activated.")
         return 0
     if a.cmd == "rollback":
-        if a.name in GOVERNED:
+        if a.name == "mode_evidence":
+            from jarvis.learning import evidence
+            res = evidence.install(a.version, reason=a.approve, require_shadow=False)
+            print(f"mode_evidence -> {a.version} with exit_cells {res['exit_cells']} (hot-reloaded).")
+        elif a.name in GOVERNED:
             reg.deploy_version(a.name, a.version, GOVERNED[a.name], reason=a.approve)
             print(f"{a.name} -> {a.version}: file restored at {GOVERNED[a.name]} "
                   "(settings need an engine restart; profiles hot-reload).")

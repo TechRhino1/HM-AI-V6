@@ -117,6 +117,11 @@ class ExitPolicy:
     lock_floor_r: Optional[float] = None
     trail_r: Optional[float] = None
     lock_partial_pct: float = 0.0
+    # Exit-audit variants (2026-11-27, EXIT_VARIANTS): a breakeven stop once the peak reaches
+    # early_protect_r (< be_at_r), and a give-back that shrinks with the peak: trail_ladder =
+    # ((peak_r, trail_r), ...) - the tightest rung reached applies. None = the measured lock.
+    early_protect_r: Optional[float] = None
+    trail_ladder: Optional[tuple] = None
 
     # ── Construction ────────────────────────────────────────────────────────
     @classmethod
@@ -131,21 +136,15 @@ class ExitPolicy:
             from jarvis.data.symbol_registry import resolve
             canon = str(getattr(resolve(symbol), "canonical", symbol) or symbol).upper()
             hold_set = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+            in_hold = canon in hold_set or str(symbol).upper() in hold_set
             if is_offline():
                 # A backtest replays the live exit only when asked (JARVIS_BACKTEST_EXIT_MODE), so
                 # the evidence the deployment gate reads is measured on the policy that trades.
                 mode = backtest_exit_mode()
-                if mode == "institutional_lock":
-                    return institutional_lock(pol, hold=canon in hold_set or str(symbol).upper() in hold_set)
-                if mode == "hold":
-                    return institutional_lock(pol, hold=True)
-                if mode == "chandelier":
-                    import dataclasses
-                    return dataclasses.replace(pol, trail_mode="institutional", be_at_r=1.0, profit_locks=False)
-                return pol
-            mode = str(getattr(SETTINGS.trading, "exit_mode", "legacy") or "legacy").lower()
-            if mode == "institutional_lock":
-                return institutional_lock(pol, hold=canon in hold_set or str(symbol).upper() in hold_set)
+                if mode == "live":
+                    return apply_exit_mode(pol, live_exit_mode(symbol, trade_style))
+                return apply_exit_mode(pol, mode, hold=in_hold) if mode else pol
+            return apply_exit_mode(pol, live_exit_mode(symbol, trade_style))
         except Exception:
             pass
         return pol
@@ -612,10 +611,19 @@ def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_
     """Initial stop until +be_at_r; then the tightest of breakeven+buffer, the chandelier
     (best price since entry - k x ATR) and the last swing beyond entry - 0.25 ATR. One-way.
     With lock_floor_r/trail_r set (the institutional lock) the candidates are only breakeven,
-    the floor and the R trail - the rule that was measured - plus the partial when splittable."""
-    if peak_dist < policy.be_at_r * risk_dist:
-        return dec
+    the floor and the R trail - the rule that was measured - plus the partial when splittable.
+    early_protect_r moves the stop to breakeven+buffer from that peak; trail_ladder narrows trail_r."""
     sgn = 1 if is_buy else -1
+    guard = max(policy.pip_size * 2.0, 1e-5)
+    if peak_dist < policy.be_at_r * risk_dist:
+        ep = policy.early_protect_r
+        if ep is not None and risk_dist > 0 and peak_dist >= ep * risk_dist:
+            level = round(entry + sgn * buffer_dist, policy.digits)
+            if sgn * (price - level) > guard and (dec.new_sl == 0 or sgn * (level - dec.new_sl) > 0):
+                dec.new_sl = level
+                dec.actions.append(f"EARLY_BE_{ep:.1f}R@{level}")
+                dec.be_locked = True
+        return dec
     cands = [(entry + sgn * buffer_dist, "BE_1R")]
     if policy.lock_floor_r is not None or policy.trail_r is not None:
         split = policy.lock_partial_pct > 0 and partial_executable
@@ -627,13 +635,17 @@ def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_
             cands.append((entry + sgn * max(policy.lock_floor_r * risk_dist, buffer_dist),
                           f"LOCK_{policy.lock_floor_r:.1f}R"))
         if policy.trail_r is not None:
-            cands.append((entry + sgn * (peak_dist - policy.trail_r * risk_dist), f"R_TRAIL_{policy.trail_r:.1f}R"))
+            trail = policy.trail_r
+            peak_r = peak_dist / risk_dist if risk_dist > 0 else 0.0
+            for at_r, tr in (policy.trail_ladder or ()):
+                if peak_r >= at_r:
+                    trail = min(trail, tr)
+            cands.append((entry + sgn * (peak_dist - trail * risk_dist), f"R_TRAIL_{trail:.1f}R"))
     elif atr > 0:
         cands.append((entry + sgn * (peak_dist - policy.chandelier_atr_mult * atr),
                       f"CHANDELIER_{policy.chandelier_atr_mult:.1f}ATR"))
         if struct_level and sgn * (struct_level - entry) > 0:
             cands.append((struct_level - sgn * 0.25 * atr, "STRUCT_TRAIL"))
-    guard = max(policy.pip_size * 2.0, 1e-5)
     for level, tag in cands:
         level = round(level, policy.digits)
         if sgn * (price - level) <= guard:                 # never at or through the market
@@ -644,6 +656,57 @@ def _institutional_trail(dec, is_buy, entry, current_sl, price, risk_dist, peak_
     dec.be_locked = sgn * (dec.new_sl - entry) >= 0
     dec.trail_active = True
     return dec
+
+
+# Pre-registered 2026-11-27 (exit audit), fixed before any run - one hypothesis each, no grid:
+#   early_protect: trades that peak at 0.5-1.0R and still lose -1R (holdout: -341R over 471 trades)
+#                  get a breakeven stop from a 0.6R peak.
+#   ratchet:       winners give back ~0.8R from the peak; the 0.7R trail narrows to 0.5R from a
+#                  1.5R peak and 0.4R from 2.5R.
+# All are never looser than the lock, so a live shadow of them always completes (E5).
+EXIT_VARIANTS = {
+    "early_protect": {"early_protect_r": 0.6},
+    "ratchet": {"trail_ladder": ((1.5, 0.5), (2.5, 0.4))},
+    "early_ratchet": {"early_protect_r": 0.6, "trail_ladder": ((1.5, 0.5), (2.5, 0.4))},
+}
+_STYLE_ALIASES = {"DAY": "DAY_TRADING", "INTRADAY": "DAY_TRADING"}
+
+
+def apply_exit_mode(pol: "ExitPolicy", mode: Optional[str], hold: bool = False) -> "ExitPolicy":
+    """`pol` switched to exit `mode` (runtime.EXIT_MODES); legacy/unknown/None keep `pol`."""
+    import dataclasses
+    mode = str(mode or "").lower()
+    if mode == "institutional_lock":
+        return institutional_lock(pol, hold=hold)
+    if mode == "hold":
+        return institutional_lock(pol, hold=True)
+    if mode == "chandelier":
+        return dataclasses.replace(pol, trail_mode="institutional", be_at_r=1.0, profit_locks=False,
+                                   lock_floor_r=None, trail_r=None, lock_partial_pct=0.0)
+    if mode in EXIT_VARIANTS:
+        return dataclasses.replace(institutional_lock(pol), **EXIT_VARIANTS[mode])
+    return pol
+
+
+def live_exit_mode(symbol: str, trade_style: str) -> str:
+    """The exit mode live trading uses for `symbol` x `trade_style`: trading.exit_cells
+    "SYMBOL|STYLE", then "ASSETCLASS|STYLE", then "hold" for trading.exit_hold_symbols when the
+    lock is on, else trading.exit_mode. With no exit_cells this is exactly the pre-2026-11-27 rule."""
+    from jarvis.config.settings import SETTINGS, reload_deployment_overrides
+    from jarvis.data.symbol_registry import resolve
+    reload_deployment_overrides()  # also picks up trading.exit_cells edited in settings.json
+    spec = resolve(symbol)
+    canon = str(getattr(spec, "canonical", symbol) or symbol).upper()
+    st = _STYLE_ALIASES.get(str(trade_style or "").upper(), str(trade_style or "").upper())
+    cells = {str(k).upper(): str(v).lower() for k, v in (getattr(SETTINGS.trading, "exit_cells", None) or {}).items()}
+    for key in (f"{canon}|{st}", f"{str(getattr(spec, 'asset_class', '') or '').upper()}|{st}"):
+        if key in cells:
+            return cells[key]
+    mode = str(getattr(SETTINGS.trading, "exit_mode", "legacy") or "legacy").lower()
+    hold_set = {str(s).upper() for s in (getattr(SETTINGS.trading, "exit_hold_symbols", None) or [])}
+    if mode == "institutional_lock" and (canon in hold_set or str(symbol).upper() in hold_set):
+        return "hold"
+    return mode
 
 
 def institutional_lock(pol: "ExitPolicy", hold: bool = False) -> "ExitPolicy":
