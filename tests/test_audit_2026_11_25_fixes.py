@@ -59,8 +59,12 @@ def test_live_spec_failure_falls_back_to_the_symbol_registry_not_eurusd_defaults
     with patch.dict(type(client)._symbol_spec_cache, clear=True), \
          patch("jarvis.execution.mt5_client.mt5", fake), \
          patch("jarvis.execution.mt5_client.MT5_AVAILABLE", True):
+        import time as _time
         spec = client.get_symbol_trading_spec("XAUUSD")
-        assert "XAUUSD" not in client._symbol_spec_cache  # retried next call, not cached
+        # Retried soon, not pinned for the hour: the fallback is negative-cached for 60 s only
+        # (2026-11-27: XAGUSD re-asked the broker under the lock on every call, 9,813 times).
+        stamp = client._symbol_spec_cache["XAUUSD"][0]
+        assert _time.time() - stamp > 3600.0 - 61.0
     # The EURUSD-shaped default valued gold at 1.0 / 0.0001 per price unit.
     assert (spec["trade_tick_value"], spec["trade_tick_size"]) != (1.0, 0.0001)
 
