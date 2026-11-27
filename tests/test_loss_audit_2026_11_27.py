@@ -130,6 +130,7 @@ def test_gate_judges_engine_holdout_per_style_when_calibrated_policy_off(monkeyp
     from jarvis.config.settings import SETTINGS
     monkeypatch.setattr(runtime, "is_offline", lambda: False)
     monkeypatch.setattr(SETTINGS.trading, "use_calibrated_entry_policy", False, raising=False)
+    monkeypatch.setattr(SETTINGS.gates, "deployment_overrides", [], raising=False)  # evidence alone
     ev = {"DAY_TRADING": {"trades": 120, "expectancy_r": 0.08}, "SCALP": {"trades": 300, "expectancy_r": -0.05}}
     monkeypatch.setattr(exit_geometry, "_engine_evidence", lambda s: ev if s == "XAUUSD" else ({} if s == "NZDUSD" else None))
     assert exit_geometry.deployment_refusal("XAUUSD", "DAY_TRADING") is None

@@ -226,3 +226,35 @@ The existing `system_monitor`:
 - R1, R5, R8 and R9 are live-path fixes that a bar replay cannot measure; the drift monitor is the check.
 - The backtest does not model the news blackout widening (G9) or the always-long gold benchmark comparison (G5); both are not done.
 - The live bot runs from the main checkout. These changes apply only after `main` is pulled and the bot restarted.
+
+## 12. Addendum (2026-11-27): gold scalp override, AUTO style, and unlocking styles
+
+User decisions after the merge of PR #26:
+- gold trades SCALP now;
+- other styles unlock on evidence plus affordability;
+- the override stops itself on live losses;
+- AUTO applies to all symbols.
+
+- **Override:** `config/settings.json` `gates.deployment_overrides` allows **XAUUSD SCALP** despite its evidence (holdout +0.010R over 230, under the +0.020R hurdle).
+  - **Probation:** once at least 30 live (non-paper) gold scalps have closed since 2026-11-27, and their mean net R is below −0.10R, the gate refuses with `OVERRIDE_STOPPED`. R is net P&L divided by the risk at the entry stop.
+  - An unreadable trade DB refuses (`OVERRIDE_UNVERIFIED`).
+  - To re-enable after a stop, edit the entry (for example a new `since`). Nothing re-enables itself.
+- **AUTO:** `trading.trade_style: "AUTO"` is the startup style. Each sweep keeps one style per symbol: the best arbiter utility × earned score, among the styles that
+  1. the deployment gate allows, and
+  2. the account can carry at 0.01 lot under `account_tier.min_lot_risk_cap`.
+
+  Skips are counted in the AUTO journal entry (`refused_by_gate`, `unaffordable`). Before this change AUTO could pick a style that the gate or sizer then refused, which cost the symbol its trade.
+- **How gold's other styles unlock:**
+  - Affordability at the 3.5% gold cap: SWING/H4 (typical stop about $18) from about $520–530; DAY (about $39) from about $1,115.
+  - **Evidence:** they must also pass the gate on a fresh re-run. Today DAY lost on train, SWING lost on the holdout, and H4 has too few trades.
+  - Re-run monthly with new windows:
+
+    ```bash
+    bash tools/backtests/run_loss_audit_grid.sh 3 holdout_lock train
+    python tools/loss_audit_eval.py reports/loss_audit/after_holdout_institutional_lock \
+      --write-mode-report reports/mode_backtest_report.json --holdout-window <start>..<end> \
+      --exit-mode institutional_lock --train-run reports/loss_audit/after_train_institutional_lock
+    ```
+
+    Adjust the dates in `run_loss_audit_grid.sh` first. Nothing re-runs or rewrites the evidence automatically.
+- **Dry sweep at $466** (paper, no dispatch): AUTO picked XAUUSD SCALP, SOLUSD DAY and ETHUSD DAY. BTCUSD and NZDUSD setups were skipped as refused by the gate.

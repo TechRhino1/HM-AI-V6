@@ -88,6 +88,9 @@ class TradingSettings:
     # Under institutional_lock, these symbols hold to their original stop/target instead (no lock,
     # no trail): measured better in both halves for crypto on 353 clean live trades, 2026-11-24.
     exit_hold_symbols: List[str] = field(default_factory=list)
+    # Startup trade style (the API can change it for the session): ALL = every style competes;
+    # AUTO = one style per symbol, from those the gate allows and the balance can afford.
+    trade_style: str = "ALL"
     # Symbol-universe auto-tune: "off" (manual button only) or "dynamic" (AutoTuneEngine DYNAMIC
     # every 30 min from the watchdog; see reports/AUTO_TUNE_RESEARCH_2026-11-24.md).
     auto_tune: str = "off"
@@ -138,6 +141,7 @@ _LIVE_SETTINGS_PATH = os.path.normcase(os.path.abspath(os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", "settings.json")))
 
 GATE_MODES = ("off", "shadow", "enforce")
+TRADE_STYLES = ("ALL", "AUTO", "SCALP", "DAY_TRADING", "SWING", "H4_SWING", "D1_SWING")
 
 
 @dataclass
@@ -148,6 +152,10 @@ class GateSettings:
     promotion_hole_mode: str = "shadow"
     # Elite bypass of the calibrated entry policy (ai>=80): kept, but off until validated.
     elite_bypass_enabled: bool = False
+    # Operator overrides of the deployment gate, one symbol x style each, with a live probation
+    # stop: {"symbol", "style", "since", "stop_after_trades", "stop_below_r", "reason"}.
+    # See exit_geometry.deployment_refusal. Empty = evidence decides alone.
+    deployment_overrides: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -235,6 +243,11 @@ def _load_section(obj: Any, section: str, data: Dict[str, Any]) -> None:
         try:
             if isinstance(default, bool):
                 val: Any = raw if isinstance(raw, bool) else str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(default, list):
+                if not isinstance(raw, list):
+                    logger.warning(f"Ignoring invalid {section}.{key}={raw!r}: expected a list")
+                    continue
+                val = [dict(x) for x in raw if isinstance(x, dict)]
             elif isinstance(default, (int, float)):
                 val = type(default)(raw)
                 lo, hi = _BOUNDS.get((section, key), (float("-inf"), float("inf")))
@@ -334,6 +347,8 @@ class JarvisConfig:
                     cfg.trading.exit_mode = str(t_data["exit_mode"]).lower()
                 if str(t_data.get("auto_tune", "")).lower() in AUTO_TUNE_MODES:
                     cfg.trading.auto_tune = str(t_data["auto_tune"]).lower()
+                if str(t_data.get("trade_style", "")).upper() in TRADE_STYLES:
+                    cfg.trading.trade_style = str(t_data["trade_style"]).upper()
                 if isinstance(t_data.get("exit_hold_symbols"), list):
                     cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
                 if "calibrated_policy_trader" in t_data:
