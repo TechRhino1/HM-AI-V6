@@ -129,3 +129,6 @@ data/markets.db
 data/alerts/
 data/backups/
 data/jarvis_loss_cooldown_*.json
+
+# Weekly revalidation working files (tools/revalidate.py)
+reports/staging/

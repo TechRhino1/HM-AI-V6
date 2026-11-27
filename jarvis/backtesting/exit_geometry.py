@@ -507,40 +507,60 @@ def live_exit_geometry(symbol: str) -> Optional["ExitGeometry"]:
         return None
 
 
-_ENGINE_EVIDENCE: Dict[str, Any] = {"mtime": None, "rows": None}
+_ENGINE_EVIDENCE: Dict[str, Any] = {"key": None, "rows": None, "payload": None}
 _STYLE_ALIASES = {"DAY": "DAY_TRADING", "INTRADAY": "DAY_TRADING"}
 
 
 def _engine_evidence(symbol: str) -> Optional[Dict[str, Dict[str, Any]]]:
     """{style: holdout row} for `symbol` from the engine-in-the-loop holdout report, or None.
 
-    The report is reports/mode_backtest_report.json - the same file the AUTO style selector's
-    prior (ModeReliabilityModel) reads - and counts as gate evidence only when it says it is a
-    holdout run (`holdout_window`); the legacy in-sample report and a missing file return None."""
-    import json
+    The report is the ACTIVE version of the governed evidence (jarvis.learning.evidence: frozen
+    from reports/mode_backtest_report.json on first use, changed only through promotion), and
+    counts as gate evidence only when it says it is a holdout run (`holdout_window`); the legacy
+    in-sample report and a missing file return None. Evidence measured on another exit policy,
+    or older than gates.evidence_max_age_days, refuses every cell (EVIDENCE_MISMATCH / _STALE)."""
     import os
     try:
-        from jarvis.config.paths import REPO_ROOT
         from jarvis.data.symbol_registry import resolve
-        path = os.path.join(REPO_ROOT, "reports", "mode_backtest_report.json")
-        mt = os.path.getmtime(path) if os.path.exists(path) else None
-        if mt != _ENGINE_EVIDENCE["mtime"]:
+        from jarvis.learning import evidence as _ev
+        path = _ev.active_file()
+        key = (path, os.path.getmtime(path)) if path and os.path.exists(path) else None
+        if key != _ENGINE_EVIDENCE["key"]:
+            payload = _ev.load(path) if key else None
             rows = None
-            if mt is not None:
-                payload = json.load(open(path, encoding="utf-8"))
-                if payload.get("holdout_window"):
-                    rows = {}
-                    for mode in payload.get("modes", []) or []:
-                        st = str(mode.get("style") or "").upper()
-                        for r in mode.get("per_symbol", []) or []:
-                            rows.setdefault(str(r.get("symbol") or "").upper(), {})[st] = r
-            _ENGINE_EVIDENCE.update(mtime=mt, rows=rows)
+            if payload and payload.get("holdout_window"):
+                rows = {}
+                for (sym, st), r in _ev.cells(payload).items():
+                    rows.setdefault(sym, {})[st] = r
+            _ENGINE_EVIDENCE.update(key=key, rows=rows, payload=payload)
         rows = _ENGINE_EVIDENCE["rows"]
         if rows is None:
             return None
-        return rows.get(str(resolve(symbol).canonical).upper()) or rows.get(str(symbol).upper()) or {}
+        out = rows.get(str(resolve(symbol).canonical).upper()) or rows.get(str(symbol).upper()) or {}
+        bad = _ev.integrity_refusal(_ENGINE_EVIDENCE["payload"])
+        return {st: {**r, "refused": bad} for st, r in out.items()} if bad else out
     except Exception:  # noqa: BLE001 - unreadable evidence falls back to the stamped profile
         return None
+
+
+def cell_refusal(symbol: str, style: str, row: Optional[Dict[str, Any]], min_trades: int,
+                 min_exp: float) -> Optional[str]:
+    """Why one engine-evidence cell may not trade, or None. A row marked `refused` (live drift,
+    the promotion rule, stale or mismatched evidence) is refused with that reason verbatim."""
+    if row is None:
+        return f"STYLE_HOLDOUT_GATE: {symbol} {style} has no engine holdout evidence"
+    if row.get("refused"):
+        return str(row["refused"])
+    n, e = int(row.get("trades") or 0), float(row.get("expectancy_r") or 0.0)
+    if n < min_trades or e < min_exp:
+        return (f"STYLE_HOLDOUT_GATE: {symbol} {style} engine holdout {e:+.3f}R over {n} trades "
+                f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
+    # A holdout win after a train loss is a sign flip between regimes, not a stable edge.
+    tn, te = int(row.get("train_trades") or 0), row.get("train_expectancy_r")
+    if te is not None and tn >= HOLDOUT_MIN_TRADES and float(te) < 0.0:
+        return (f"STYLE_TRAIN_GATE: {symbol} {style} lost on the train window ({float(te):+.3f}R over {tn} trades) "
+                f"before its holdout {e:+.3f}R")
+    return None
 
 
 def _hurdle(symbol: str) -> tuple:
@@ -580,18 +600,7 @@ def _evidence_refusal(symbol: str, style: Optional[str] = None) -> Optional[str]
     ev = None if calibrated_on else _engine_evidence(symbol)
     if ev is not None:
         def _fails(st: str, row: Optional[Dict[str, Any]]) -> Optional[str]:
-            if row is None:
-                return f"STYLE_HOLDOUT_GATE: {symbol} {st} has no engine holdout evidence"
-            n, e = int(row.get("trades") or 0), float(row.get("expectancy_r") or 0.0)
-            if n < min_trades or e < min_exp:
-                return (f"STYLE_HOLDOUT_GATE: {symbol} {st} engine holdout {e:+.3f}R over {n} trades "
-                        f"(needs >= {min_exp:+.3f}R over >= {min_trades})")
-            # A holdout win after a train loss is a sign flip between regimes, not a stable edge.
-            tn, te = int(row.get("train_trades") or 0), row.get("train_expectancy_r")
-            if te is not None and tn >= HOLDOUT_MIN_TRADES and float(te) < 0.0:
-                return (f"STYLE_TRAIN_GATE: {symbol} {st} lost on the train window ({float(te):+.3f}R over {tn} trades) "
-                        f"before its holdout {e:+.3f}R")
-            return None
+            return cell_refusal(symbol, st, row, min_trades, min_exp)
         if style:
             st = _STYLE_ALIASES.get(str(style).upper(), str(style).upper())
             return _fails(st, ev.get(st))
@@ -629,8 +638,9 @@ def _norm_style(style: Any) -> str:
 
 def _overrides_for(symbol: str) -> List[Dict[str, Any]]:
     """The operator overrides (settings gates.deployment_overrides) that name `symbol`."""
-    from jarvis.config.settings import SETTINGS
+    from jarvis.config.settings import SETTINGS, reload_deployment_overrides
     from jarvis.data.symbol_registry import resolve
+    reload_deployment_overrides()  # an edit to settings.json applies without a restart
     names = {str(symbol).upper(), str(resolve(symbol).canonical).upper()}
     return [o for o in (getattr(SETTINGS.gates, "deployment_overrides", None) or [])
             if str(o.get("symbol", "")).upper() in names and o.get("style")]
@@ -698,7 +708,9 @@ def deployment_refusal(symbol: str, style: Optional[str] = None) -> Optional[str
     `stop_below_r`, the override stops and the evidence refusal stands. Without a style, an
     override that is not stopped counts as a passing cell."""
     evidence = _evidence_refusal(symbol, style)
-    if evidence is None or evidence.startswith("DEPLOYMENT_GATE_UNVERIFIED"):
+    # Unverifiable, stale or mismatched evidence is an integrity failure, not a verdict an
+    # operator override was written against.
+    if evidence is None or evidence.startswith(("DEPLOYMENT_GATE_UNVERIFIED", "EVIDENCE_STALE", "EVIDENCE_MISMATCH")):
         return evidence
     try:
         overrides = _overrides_for(symbol)

@@ -7,6 +7,7 @@ Learning continues in shadow; nothing reaches live trading except through this t
     python tools/promote_model.py promote online_ml [--min-trades 30] [--margin 0.005]
     python tools/promote_model.py promote strategy_bandit --approve "why" [--min-trades 30]
     python tools/promote_model.py rollback <name> <version> --approve "why"
+    python tools/promote_model.py approve mode_evidence <version> --reason "why"   (PENDING loosening)
 
 online_ml validation: a PREQUENTIAL replay of every closed demo/live trade recorded after
 the active version was frozen. Each trade is predicted by the active and the candidate model
@@ -41,6 +42,8 @@ GOVERNED = {
     "settings": os.path.join(REPO, "config", "settings.json"),
     "winrate_profiles": os.path.join(REPO, "config", "winrate_profiles.json"),
     "devil_gate_calibration": os.path.join(REPO, "config", "devil_gate_calibration.json"),
+    # Deployment evidence (jarvis.learning.evidence): tools/revalidate.py promotes, loosening waits here.
+    "mode_evidence": os.path.join(REPO, "reports", "mode_backtest_report.json"),
 }
 
 
