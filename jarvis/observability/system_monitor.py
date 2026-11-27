@@ -378,6 +378,30 @@ def check_overrides(rows: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
             "detail": detail, "overrides": rows}
 
 
+def check_evidence(st: Optional[Dict[str, Any]], warn_age_days: float = 14.0) -> Dict[str, Any]:
+    """The governed deployment evidence (jarvis.learning.evidence.status()): CRITICAL when the gate
+    cannot trust it (stale or another exit policy: every cell refused); WARN when it is ageing, a
+    promotion waits for approval, or reports/mode_backtest_report.json was edited outside promotion."""
+    if not st or not st.get("version"):
+        return {"status": WARN, "value": None, "threshold": warn_age_days,
+                "detail": "no governed evidence version yet (the gate has not read it)"}
+    bad = []
+    if st.get("pending"):
+        bad.append(f"pending approval: {', '.join(st['pending'])} (promote_model approve mode_evidence <v>)")
+    if st.get("age_days") is not None and st["age_days"] > warn_age_days:
+        bad.append(f"holdout ended {st['age_days']} days ago (run tools/revalidate.py)")
+    if st.get("live_differs"):
+        bad.append("reports/mode_backtest_report.json differs from the active version (ignored until promoted)")
+    refused = st.get("refused_cells") or []
+    detail = (f"{st['version']} holdout {st.get('holdout_window')}"
+              + (f"; refused by drift/rule: {', '.join(refused)}" if refused else "")
+              + (f"; {'; '.join(bad)}" if bad else ""))
+    if st.get("integrity"):
+        return {"status": CRITICAL, "value": st.get("age_days"), "threshold": warn_age_days,
+                "detail": f"{st['integrity']} ({detail})"}
+    return {"status": WARN if bad else OK, "value": st.get("age_days"), "threshold": warn_age_days, "detail": detail}
+
+
 def check_resources(cpu_pct: Optional[float], mem_pct: Optional[float], disk_free_gb: Optional[float],
                     data_gb: Optional[float], cfg: Any, threads: Optional[int] = None,
                     handles: Optional[int] = None) -> Dict[str, Any]:

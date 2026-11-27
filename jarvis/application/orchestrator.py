@@ -724,6 +724,11 @@ class JarvisOrchestrator:
             now, getattr(self.state_synchronizer, "last_sync_ok_at", None), cfg))
         _safe("symbol_feeds", lambda: _sm.check_symbol_feeds(self.data_feed.symbol_health(), cfg))
 
+        def _evidence_status():
+            from jarvis.learning import evidence as _ev
+            return _sm.check_evidence(_ev.status())
+        _safe("evidence", _evidence_status)
+
         def _synthetic():
             by = _sm.counter_by(MT5_RATES_FETCHES, "source")
             return _sm.check_share("synthetic bars", now, sum(v for k, v in by.items() if k != "live_mt5"),
@@ -1021,6 +1026,14 @@ class JarvisOrchestrator:
                 extra_checks=self._monitor_extras(now),
                 **self._live_drift_inputs())
             _sm.record_drift_advisory(self.monitor_state)
+            # Drift is a tightening: a cell trading well below its holdout stops (a new evidence
+            # version; promote_model rollback mode_evidence <v> undoes it). Paper never refuses live.
+            if str(self.mode).lower() != "paper":
+                try:
+                    from jarvis.learning import evidence as _ev
+                    _ev.refuse_drifting_cells(self.monitor_state)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("drift refusal failed: %s", exc)
             # Service chips were hardcoded READY/ACTIVE; derive them from what was just measured.
             _c = self.monitor_state.get("checks", {})
             _st = lambda k: (_c.get(k) or {}).get("status")  # noqa: E731

@@ -156,6 +156,9 @@ class GateSettings:
     # stop: {"symbol", "style", "since", "stop_after_trades", "stop_below_r", "reason"}.
     # See exit_geometry.deployment_refusal. Empty = evidence decides alone.
     deployment_overrides: List[Dict[str, Any]] = field(default_factory=list)
+    # Engine evidence whose holdout ended longer ago than this refuses every cell (EVIDENCE_STALE):
+    # the weekly revalidation (tools/revalidate.py) keeps it fresh; 35 days = four missed runs.
+    evidence_max_age_days: float = 35.0
 
 
 @dataclass
@@ -471,6 +474,41 @@ def persist_allowed_symbols(symbols: List[str]) -> bool:
     if not _persist_trading("allowed_symbols", clean):
         return False
     SETTINGS.trading.symbols = list(clean)
+    return True
+
+
+_OVERRIDES_SEEN: Dict[str, Any] = {"mtime": None}
+
+
+def reload_deployment_overrides() -> bool:
+    """Re-read gates.deployment_overrides when config/settings.json changed on disk, so an
+    override can be added, renewed or removed without a restart. Audited; True when it changed.
+    A half-written or invalid file keeps the list already loaded."""
+    try:
+        mt = os.path.getmtime(_LIVE_SETTINGS_PATH)
+    except OSError:
+        return False
+    if _OVERRIDES_SEEN["mtime"] is None or mt == _OVERRIDES_SEEN["mtime"]:
+        _OVERRIDES_SEEN["mtime"] = _OVERRIDES_SEEN["mtime"] or mt
+        return False
+    _OVERRIDES_SEEN["mtime"] = mt
+    try:
+        with open(_LIVE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            new = (json.load(f).get("gates") or {}).get("deployment_overrides", [])
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not isinstance(new, list) or not all(isinstance(o, dict) for o in new):
+        return False
+    old = list(SETTINGS.gates.deployment_overrides or [])
+    if new == old:
+        return False
+    SETTINGS.gates.deployment_overrides = new
+    try:
+        from jarvis.learning.model_registry import audit
+        audit("deployment_overrides_reloaded", old=old, new=new)
+    except Exception:
+        pass
+    logger.warning("gates.deployment_overrides reloaded from settings.json: %d override(s)", len(new))
     return True
 
 

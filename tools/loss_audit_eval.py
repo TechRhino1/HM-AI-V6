@@ -216,6 +216,8 @@ def main() -> int:
                          "the deployment gate and the AUTO prior read it")
     ap.add_argument("--holdout-window", default="", help="e.g. 2026-05-24..2026-11-26 (required with --write-mode-report)")
     ap.add_argument("--exit-mode", default="", help="exit policy the run replayed (recorded in the report)")
+    ap.add_argument("--exit-hold-symbols", default=None,
+                    help="comma list of trading.exit_hold_symbols the run replayed (recorded; the gate checks it)")
     ap.add_argument("--train-run", default="", help="same exit mode on the train window; each row gets train_* so the gate "
                                                     "refuses a cell that lost on train")
     a = ap.parse_args()
@@ -243,11 +245,22 @@ def main() -> int:
         if not a.holdout_window:
             raise SystemExit("--holdout-window is required: the gate only trusts a report that says it is a holdout")
         train = evaluate(load_run(a.train_run)) if a.train_run else None
-        write_mode_report(ev, a.write_mode_report, a.holdout_window, a.exit_mode, a.run, n_trials, train)
+        hold = None if a.exit_hold_symbols is None else [s for s in a.exit_hold_symbols.upper().split(",") if s]
+        write_mode_report(ev, a.write_mode_report, a.holdout_window, a.exit_mode, a.run, n_trials, train, hold)
     return 0
 
 
-def write_mode_report(ev, path: str, window: str, exit_mode: str, run: str, n_trials: int, train=None) -> None:
+def lcb80(rs: List[float]) -> Optional[float]:
+    """One-sided 80% lower confidence bound of the mean R (the promotion rule's bar)."""
+    if len(rs) < 2:
+        return None
+    mu = sum(rs) / len(rs)
+    sd = (sum((x - mu) ** 2 for x in rs) / (len(rs) - 1)) ** 0.5
+    return round(mu - 1.2816 * sd / len(rs) ** 0.5, 4)
+
+
+def write_mode_report(ev, path: str, window: str, exit_mode: str, run: str, n_trials: int, train=None,
+                      hold=None) -> None:
     """Holdout evidence per style with per-symbol rows (schema of reports/mode_backtest_report.json)."""
     import datetime
     modes = {}
@@ -256,13 +269,16 @@ def write_mode_report(ev, path: str, window: str, exit_mode: str, run: str, n_tr
             continue
         modes.setdefault(st, []).append({"symbol": sym, "trades": m["n"], "expectancy_r": m["exp_r"],
                                          "profit_factor": m["pf"] or 0.0, "win_rate_pct": m["win_pct"],
-                                         "max_dd_r": m["max_dd_r"], "dsr": m.get("dsr")})
+                                         "max_dd_r": m["max_dd_r"], "dsr": m.get("dsr"),
+                                         "lcb80_r": lcb80(m.get("_rs", []))})
         tm = (train or {}).get((sym, st))
         if tm and tm.get("n"):
             modes[st][-1].update(train_trades=tm["n"], train_expectancy_r=tm["exp_r"])
     out = {"generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
            "source": run, "holdout_window": window, "exit_mode": exit_mode or "default",
            "n_trials": n_trials, "data": "MT5 real bars, data/market/real/*_365d.parquet", "modes": []}
+    if hold is not None:
+        out["exit_hold_symbols"] = sorted(hold)
     for st, rows in sorted(modes.items()):
         rs = [r for (s2, t2), m in ev.items() if t2 == st for r in m.get("_rs", [])]
         pm = metrics(rs, 1.0) if rs else {"n": 0}
