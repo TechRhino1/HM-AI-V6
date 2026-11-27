@@ -23,10 +23,12 @@ from jarvis.data.schemas import (
 
 class TestAutomatedExecutionRootCauseFixes:
 
-    def test_deployment_refusal_follows_the_real_profile_stats(self):
+    def test_deployment_refusal_follows_the_real_profile_stats(self, monkeypatch):
         """The gate decides from calibrated OOS stats; it was never meant to pass a fixed list.
         (c3ac298 hand-edited 4 profiles so this list passed; 2026-11-19 restored real output.)"""
         import json
+        from jarvis.backtesting import exit_geometry
+        monkeypatch.setattr(exit_geometry, "_engine_evidence", lambda s: None)  # judge the stamps, not the engine report
         raw = json.load(open("config/winrate_profiles.json", encoding="utf-8"))["profiles"]
         target_symbols = ["BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "SOLUSD", "USDCAD", "USDJPY", "XAUUSD"]
         for sym in target_symbols:

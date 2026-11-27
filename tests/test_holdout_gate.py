@@ -87,6 +87,7 @@ def test_gate_applies_with_calibrated_entry_policy_off(monkeypatch):
     monkeypatch.setattr(SETTINGS.trading, "use_calibrated_entry_policy", False, raising=False)
     profs = {"LOSS": _p(-0.05, 40), "WIN": _p(0.08, 40)}
     monkeypatch.setattr(exit_geometry, "_stamped_profile", lambda s: profs.get(s))
+    monkeypatch.setattr(exit_geometry, "_engine_evidence", lambda s: None)  # stamps path, not the report
     assert exit_geometry.deployment_refusal("LOSS").startswith("HOLDOUT_GATE")
     assert exit_geometry.deployment_refusal("WIN") is None
     assert exit_geometry.deployment_refusal("NOPROFILE").startswith("NO_VALIDATED_PROFILE")
