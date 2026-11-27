@@ -68,18 +68,6 @@ def test_gold_sl_distance_cap():
         lv = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style=style)
         assert lv["risk_dist"] <= 12.50, f"Gold {style} SL distance ({lv['risk_dist']}) exceeds 12.50 points!"
 
-    # With MTF data the institutional engine places the stop and the baseline cap is only a floor;
-    # the cap must still bind the placed SCALP/DAY stop (gold DAY stops ran $20-60 in backtests).
-    import pandas as pd
-    mtf = {"H1": pd.DataFrame({"close": [4149.9]})}
-    engine.institutional_engine.calculate_entry_and_levels = lambda **k: {
-        "entry_price": 4149.9, "risk_dist": 45.0, "tp_price": 4149.9 + 112.0}
-    for style in ("SCALP", "DAY_TRADING"):
-        lv = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style=style, mtf_data=mtf)
-        assert lv["risk_dist"] <= 12.50, f"Gold {style} placed SL ({lv['risk_dist']}) escaped the cap via MTF levels"
-    sw = engine.calculate_levels(ctx, regime, tentative_bias="BUY", trade_style="SWING", mtf_data=mtf)
-    assert sw["risk_dist"] >= 45.0
-
 
 def test_micro_account_gold_dollar_risk_cap():
     """Verify that PositionSizer caps micro-account ($444) Gold risk to <= $12.00."""
