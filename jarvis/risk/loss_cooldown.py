@@ -50,7 +50,7 @@ class LossCooldownManager:
         """Record trade outcome and update streak tracking."""
         import time
         if current_date is not None and current_date != self.current_date:
-            self.reset_daily(current_date)
+            self._start_day(current_date)
             
         self.daily_pnl += pnl
         self.trades_today += 1
@@ -118,10 +118,8 @@ class LossCooldownManager:
         live = not is_offline()
         if live:
             today = datetime.now(timezone.utc).date().isoformat()
-            if self.current_date is None:
-                self.current_date = today
-            elif self.current_date != today:
-                self.reset_daily(today)
+            if self.current_date != today:
+                self._start_day(today)
 
         # 0. Global cooldown. Live uses wall-clock expiry because nothing calls
         # tick_bar() outside the backtester; the old bar counter never reached
@@ -254,6 +252,31 @@ class LossCooldownManager:
                 if self.cooldown_bars_by_symbol[k] > 0:
                     self.cooldown_bars_by_symbol[k] -= 1
 
+    def _start_day(self, day: str) -> None:
+        """Begin `day`. A fresh live process rebuilds the day from the trade history: the
+        counters live in memory, so a restart used to clear a tripped 4% daily-loss lockout
+        (2026-11-27 05:11 UTC: 3 orders within 10 minutes of a restart mid-lockout)."""
+        if self.current_date is not None:
+            self.reset_daily(day)
+            return
+        self.current_date = day
+        if self.trades_today or self.daily_pnl:
+            return  # this process already recorded today's trades itself
+        from jarvis.config.runtime import is_offline
+        if is_offline():
+            return
+        try:
+            pnl, n, by_sym = closed_today_from_history(day)
+        except Exception as exc:  # noqa: BLE001 - an unreadable history keeps today's in-memory zero
+            logger.warning("LossCooldownManager: could not rebuild %s from trade history (%s)", day, exc)
+            return
+        # shortcut: a close recorded right after a restart may be counted twice (history + this
+        # event); that only makes the lockout stricter.
+        self.daily_pnl, self.trades_today = pnl, n
+        self.trades_today_by_symbol.update(by_sym)
+        if n:
+            logger.info("LossCooldownManager: rebuilt %s from history: %d closed trades, P&L %+.2f", day, n, pnl)
+
     def reset_daily(self, current_date=None) -> None:
         """Reset daily counters."""
         self.daily_pnl = 0.0
@@ -261,3 +284,29 @@ class LossCooldownManager:
         self.trades_today_by_symbol.clear()
         self.current_date = current_date
         logger.info(f"LossCooldownManager: Daily counters reset for {current_date}")
+
+
+def closed_today_from_history(day: str):
+    """(net P&L, trade count, {symbol: count}) of real (non-paper) trades closed on UTC `day`,
+    read-only from executed_trades."""
+    import sqlite3
+    from datetime import date, timedelta
+    from jarvis.config.paths import resolve_db_path
+    nxt = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+    con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "SELECT symbol, realized_pnl FROM executed_trades WHERE realized_pnl IS NOT NULL "
+            "AND closed_at >= ? AND closed_at < ? AND COALESCE(execution_mode, '') != 'paper'",
+            (day, nxt)).fetchall()
+    finally:
+        con.close()
+    by_sym: Dict[str, int] = {}
+    for sym, _ in rows:
+        try:
+            from jarvis.data.symbol_registry import resolve
+            key = resolve(sym).canonical.upper()
+        except Exception:
+            key = str(sym).upper()
+        by_sym[key] = by_sym.get(key, 0) + 1
+    return float(sum(p for _, p in rows)), len(rows), by_sym

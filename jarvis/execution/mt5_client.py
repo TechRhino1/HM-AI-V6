@@ -63,6 +63,10 @@ class MT5Client:
         self.is_connected = False
         #: De-duplicates the "cannot reach the broker" log line. See `_init()`.
         self._last_init_error = None
+        # Mid-session reconnect: one attempt per broker call at most every _reconnect_backoff
+        # seconds (2..60), never the startup sleep loop on a caller's thread.
+        self._next_reconnect_at = 0.0
+        self._reconnect_backoff = 0.0
         self.symbol_alias_cache: Dict[str, str] = {}
         self._paper_positions = MT5Client._shared_paper_positions
         self._paper_pending_orders = MT5Client._shared_paper_pending_orders
@@ -74,7 +78,7 @@ class MT5Client:
     def is_paper_or_offline(self) -> bool:
         return self.mode in ("paper", "offline", "backtest") or os.environ.get("JARVIS_BACKTEST_MODE") == "1"
 
-    def init_connection(self) -> bool:
+    def init_connection(self, retries: bool = True) -> bool:
         if self.is_paper_or_offline:
             self.is_connected = True
             logger.info("MT5Client running in simulated/offline execution mode.")
@@ -91,7 +95,7 @@ class MT5Client:
             return True
 
         import random
-        delays = [1.0, 2.0, 4.0, 8.0, 16.0]
+        delays = [1.0, 2.0, 4.0, 8.0, 16.0] if retries else []
         
         for attempt in range(len(delays) + 1):
             def _init():
@@ -142,8 +146,34 @@ class MT5Client:
         return False
 
     def _reconnect_if_needed(self):
-        if not self.is_connected:
-            self.init_connection()
+        """Reconnect after a drop without blocking the caller: the watchdog, position monitor and
+        HTTP threads all call here, and the startup retry loop used to sleep them 31 s each."""
+        if self.is_connected:
+            return
+        now = time.monotonic()
+        if now < self._next_reconnect_at:
+            return
+        ok = self.init_connection(retries=False)
+        self._reconnect_backoff = 0.0 if ok else min(60.0, max(2.0, self._reconnect_backoff * 2))
+        self._next_reconnect_at = now + self._reconnect_backoff
+        if ok and self._reconnect_backoff == 0.0 and getattr(self, "_was_dropped", False):
+            self._was_dropped = False
+            logger.warning("MT5 reconnected.")
+
+    def mark_disconnected(self, why: str) -> None:
+        """The broker link is down: drop the connected flag and the terminal latch so the next
+        call re-initialises. Before, is_connected stayed True after a terminal restart and the
+        bot never reconnected until the process was restarted."""
+        if self.is_paper_or_offline or not self.is_connected:
+            return
+        self.is_connected = False
+        self._was_dropped = True
+        try:
+            from jarvis.data.broker_symbols import reset_cache
+            reset_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.error("MT5 link lost (%s); broker calls will reconnect with backoff.", why)
 
     def resolve_symbol_name(self, symbol: str) -> str:
         if symbol in self.symbol_alias_cache:
@@ -151,6 +181,17 @@ class MT5Client:
 
         if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             return symbol
+
+        # The canonical resolver (the data feed's): it knows XAGUSD -> SILVER.i#, which the
+        # substring search below never found, so XAGUSD sized from the registry 9,813 times.
+        try:
+            from jarvis.data.broker_symbols import resolve_broker_symbol
+            broker_name = resolve_broker_symbol(symbol)
+        except Exception:  # noqa: BLE001 - fall back to the search below
+            broker_name = None
+        if broker_name:
+            self.symbol_alias_cache[symbol] = broker_name
+            return broker_name
 
         def _resolve():
             with self._lock:
@@ -202,10 +243,10 @@ class MT5Client:
                 return symbol
     
         res = TimeoutGuard.run_sync(_resolve, timeout_sec=5.0, default=None, task_name=f"ResolveSymbol_{symbol}")
-        if res:
+        if res and res != symbol:  # an unresolved raw name is not cached, so it is retried
             self.symbol_alias_cache[symbol] = res
             return res
-        return symbol
+        return res or symbol
 
     def get_symbol_trading_spec(self, symbol: str) -> Dict[str, Any]:
         """Fetches live broker trading specifications for a symbol with fallback to symbol registry."""
@@ -277,7 +318,11 @@ class MT5Client:
         # at 1.0/0.0001 = $10k/lot; for a 5-digit FX pair it is $100k, so sizing
         # off them oversized lots up to 10x. Use the symbol's registry spec, uncached.
         logger.warning(f"Live symbol_info unavailable for {resolved}; sizing from registry spec.")
-        return _registry_spec(cache=False)
+        spec = _registry_spec(cache=False)
+        # Negative cache for 60 s (the hit window is 3600 s): retries, but not on every call
+        # under the broker lock.
+        self._symbol_spec_cache[resolved] = (now_ts - 3600.0 + 60.0, dict(spec))
+        return spec
 
     def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
         """Convenience alias for get_symbol_trading_spec to ensure backward compatibility."""
@@ -370,6 +415,8 @@ class MT5Client:
             try:
                 with self._lock:
                     acc = mt5.account_info()
+                    if acc is None:
+                        self.mark_disconnected(f"account_info() returned None, {mt5.last_error()}")
                     if acc is not None:
                         return AccountSnapshot(
                             login=int(acc.login),

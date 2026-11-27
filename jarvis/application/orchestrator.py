@@ -75,6 +75,8 @@ def unsplit_rr_block(symbol: str, decision_rr: float) -> Optional[float]:
 
 # profile.score_col -> the decision attribute signal_scan recorded under that column
 _NEVER_FILLED_SQL = " AND NOT (closed_at IS NOT NULL AND exit_price IS NULL AND realized_pnl IS NULL)"
+# A stale frame whose symbol has had no quote for this long is a market not trading (holiday).
+NO_QUOTES_CLOSED_SEC = 600.0
 _CALIBRATED_SCORE_ATTR = {"score": "model_confidence", "master_score": "master_confluence_score",
                           "dissection_score": "dissection_score"}
 STYLE_SPEED = {"SCALP": 0, "DAY_TRADING": 1, "INTRADAY": 1, "DAY": 1, "SWING": 2, "H4_SWING": 3, "D1_SWING": 4}
@@ -215,6 +217,7 @@ class JarvisOrchestrator:
                 )
         self.mode = verify_execution_mode(mode)
         self.trade_style = trade_style
+        self._no_quote_logged: set = set()
         logger.info(f"JarvisOrchestrator initialized in [{self.mode.upper()}] mode.")
 
         self.state_manager = GLOBAL_STATE
@@ -1896,11 +1899,28 @@ class JarvisOrchestrator:
         if bad_role:
             if bad_reason == "stale":
                 detail = f"stale {bad_role} candles ({bad_age:.0f}s old)"
-                logger.warning(
-                    "Refusing to decide on %s (%s): the %s timeframe frame is STALE "
-                    "(%.0fs old) while the market is open.",
-                    symbol, active_trade_style, bad_role, bad_age,
-                )
+                # Old bars with no quotes either is a market not trading (holiday / early close,
+                # e.g. US Thanksgiving 2026-11-26), not a broken feed. Both still refuse; only the
+                # diagnosis differs, so the health monitor and the log stop blaming the feed.
+                _tick = None
+                try:
+                    _tick = self.mt5_client.get_tick(symbol)
+                except Exception:  # noqa: BLE001
+                    pass
+                if _tick is not None and float(_tick.get("age_s", 0.0)) > NO_QUOTES_CLOSED_SEC:
+                    detail = f"market not quoting ({_tick['age_s']:.0f}s since last tick)"
+                    _k = (symbol, "no_quotes")
+                    if _k not in self._no_quote_logged:
+                        self._no_quote_logged.add(_k)
+                        logger.info("Not deciding on %s: no quotes for %.0fs (market closed or holiday).",
+                                    symbol, _tick["age_s"])
+                else:
+                    self._no_quote_logged.discard((symbol, "no_quotes"))
+                    logger.warning(
+                        "Refusing to decide on %s (%s): the %s timeframe frame is STALE "
+                        "(%.0fs old) while the market is open.",
+                        symbol, active_trade_style, bad_role, bad_age,
+                    )
             else:
                 detail = f"unverifiable {bad_role} candle age"
                 logger.warning(
