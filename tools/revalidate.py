@@ -136,6 +136,7 @@ def main(argv: Optional[List[str]] = None, run: Callable[[List[str], object], in
     win = windows(end)
     mode = str(SETTINGS.trading.exit_mode or "legacy").lower()
     hold = sorted(str(s).upper() for s in (SETTINGS.trading.exit_hold_symbols or []))
+    cells_cfg = {str(k).upper(): str(v).lower() for k, v in (getattr(SETTINGS.trading, "exit_cells", None) or {}).items()}
     os.makedirs(STAGING, exist_ok=True)
     lock = os.path.join(STAGING, "revalidate.lock")
     try:
@@ -161,7 +162,7 @@ def main(argv: Optional[List[str]] = None, run: Callable[[List[str], object], in
             if gaps:
                 summary["outcome"] = f"DATA_GAPS: nothing promoted ({'; '.join(gaps)})"
                 return 2
-            fp = fingerprint(symbols, {"exit_mode": mode, "exit_hold_symbols": hold}, win)
+            fp = fingerprint(symbols, {"exit_mode": mode, "exit_hold_symbols": hold, "exit_cells": cells_cfg}, win)
             summary["fingerprint"] = fp
             cells = os.path.join(STAGING, "cells", fp["all"])
             stages = [("holdout", styles, win["holdout_start"], win["holdout_end"]),
@@ -174,8 +175,7 @@ def main(argv: Optional[List[str]] = None, run: Callable[[List[str], object], in
                 cmd = [py, "tools/backtests/run_mode_backtest.py", "--workers", str(a.workers), "--days", str(CACHE_DAYS),
                        "--symbols", ",".join(sorted({t.split("__")[0] for t in todo})), "--styles", ",".join(sts),
                        "--start", str(start), "--end", str(stop), "--out", out]
-                if mode != "legacy":
-                    cmd += ["--exit-mode", mode]
+                cmd += ["--exit-mode", "live"]   # exactly what live resolves per symbol x style
                 run(cmd, log)
                 still = _missing(out, symbols, sts)
                 if still:
@@ -193,6 +193,7 @@ def main(argv: Optional[List[str]] = None, run: Callable[[List[str], object], in
             with open(cand, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             payload["scope"] = {"symbols": symbols, "styles": styles}   # what this run measured
+            payload["exit_cells"] = cells_cfg
             payload["fingerprint"] = fp["all"]
             with open(cand, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)

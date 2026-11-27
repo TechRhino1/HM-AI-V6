@@ -205,12 +205,13 @@ def main() -> int:
     ap.add_argument("--out", default=OUT_DIR)
     ap.add_argument("--start", default="", help="ISO start for an explicit evaluation window")
     ap.add_argument("--end", default="", help="ISO end for an explicit evaluation window")
-    ap.add_argument("--exit-mode", default="", choices=["", "legacy", "institutional_lock", "hold", "chandelier"],
-                    help="replay this exit policy offline (default: calibrated/legacy); sets JARVIS_BACKTEST_EXIT_MODE")
+    from jarvis.config.runtime import BACKTEST_EXIT_MODES
+    ap.add_argument("--exit-mode", default="live", choices=list(BACKTEST_EXIT_MODES),
+                    help="exit policy to replay offline (default: live = exactly what live trading resolves per "
+                         "symbol x style; legacy = the calibrated/style-profile policy); sets JARVIS_BACKTEST_EXIT_MODE")
     args = ap.parse_args()
-    if args.exit_mode:
-        import os as _os
-        _os.environ["JARVIS_BACKTEST_EXIT_MODE"] = args.exit_mode
+    import os as _os
+    _os.environ["JARVIS_BACKTEST_EXIT_MODE"] = args.exit_mode
 
     from jarvis.data.symbol_registry import all_symbols
 

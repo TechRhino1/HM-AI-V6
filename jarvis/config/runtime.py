@@ -67,7 +67,10 @@ def offline_mode() -> Iterator[None]:
             _OFFLINE = previous
 
 
-BACKTEST_EXIT_MODES = ("legacy", "institutional_lock", "hold", "chandelier")
+# The pre-registered lock variants (exit audit 2026-11-27, jarvis.execution.exit_policy.EXIT_VARIANTS)
+# and "live": replay exactly what live resolves per symbol x style (exit_mode, hold set, exit_cells).
+EXIT_MODES = ("legacy", "institutional_lock", "hold", "chandelier", "early_protect", "ratchet", "early_ratchet")
+BACKTEST_EXIT_MODES = EXIT_MODES + ("live",)
 
 
 def backtest_exit_mode() -> Optional[str]:
@@ -78,4 +81,4 @@ def backtest_exit_mode() -> Optional[str]:
     return mode if mode in BACKTEST_EXIT_MODES else None
 
 
-__all__ = ["is_offline", "set_offline", "offline_mode", "backtest_exit_mode", "BACKTEST_EXIT_MODES"]
+__all__ = ["is_offline", "set_offline", "offline_mode", "backtest_exit_mode", "BACKTEST_EXIT_MODES", "EXIT_MODES"]

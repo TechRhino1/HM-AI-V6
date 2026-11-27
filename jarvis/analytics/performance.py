@@ -36,6 +36,22 @@ def net_r_multiple(symbol: Any, entry: Any, sl: Any, volume: Any, pnl: Any) -> O
         return None
 
 
+def excursion_stats(pairs) -> Dict[str, Any]:
+    """Profit protection over (mfe_r, exit_r) pairs, both price R against the entry stop:
+    give-back = MFE - exit R over the trades that reached +1R; capture = their exit R / MFE;
+    missed protection = reached +1R and still closed at or below 0R. Exit audit 2026-11-27."""
+    pairs = [(float(m), float(x)) for m, x in pairs if m is not None and x is not None]
+    reached = [(m, x) for m, x in pairs if m >= 1.0]
+    gb = [m - x for m, x in reached]
+    n = len(gb)
+    mean_gb = sum(gb) / n if n else None
+    sd = (sum((g - mean_gb) ** 2 for g in gb) / (n - 1)) ** 0.5 if n > 1 else None
+    return {"measured": len(pairs), "mean_mfe_r": round(sum(m for m, _ in pairs) / len(pairs), 3) if pairs else None,
+            "reached_1r": n, "giveback_r": round(mean_gb, 3) if n else None, "giveback_sd": round(sd, 3) if sd else None,
+            "capture_pct": round(100.0 * sum(x for _, x in reached) / sum(m for m, _ in reached), 1) if n else None,
+            "missed_protection": sum(1 for m, x in reached if x <= 0.0)}
+
+
 def performance_report(db, group_by: str = "symbol", execution_mode: Optional[str] = None,
                        account_login: Optional[int] = None) -> Dict[str, Any]:
     from jarvis.backtesting.metrics import PerformanceMetricsCalculator
@@ -50,7 +66,8 @@ def performance_report(db, group_by: str = "symbol", execution_mode: Optional[st
         where.append("account_login = ?"); params.append(int(account_login))
     conn = db._get_conn()
     cols = {r[1] for r in conn.execute("PRAGMA table_info(executed_trades)").fetchall()}
-    xq = [c for c in ("requested_price", "fill_price", "spread_at_fill", "fill_latency_ms") if c in cols]
+    xq = [c for c in ("requested_price", "fill_price", "spread_at_fill", "fill_latency_ms", "mfe", "exit_price")
+          if c in cols]
     key_sql = _GROUP_SQL.get(group_by, group_by)
     rows = conn.execute(
         f"SELECT {key_sql}, symbol, entry_price, sl, volume, realized_pnl, action"
@@ -60,6 +77,7 @@ def performance_report(db, group_by: str = "symbol", execution_mode: Optional[st
 
     buckets: Dict[str, list] = defaultdict(list)
     quality: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    excursions: Dict[str, list] = defaultdict(list)
     for row in rows:
         key, sym, entry, sl, vol, pnl, action = row[:7]
         extra = dict(zip(xq, row[7:]))
@@ -77,6 +95,10 @@ def performance_report(db, group_by: str = "symbol", execution_mode: Optional[st
         for c in ("spread_at_fill", "fill_latency_ms"):
             if extra.get(c) is not None:
                 quality[k][c].append(float(extra[c]))
+        if extra.get("mfe") is not None and extra.get("exit_price") and sl and entry and float(entry) != float(sl):
+            risk = abs(float(entry) - float(sl))
+            sgn = 1.0 if str(action or "BUY").upper().startswith("BUY") else -1.0
+            excursions[k].append((float(extra["mfe"]) / risk, sgn * (float(extra["exit_price"]) - float(entry)) / risk))
 
     groups = {k: PerformanceMetricsCalculator.calculate_metrics(v, initial_balance=1.0)
               for k, v in sorted(buckets.items())}
@@ -85,5 +107,6 @@ def performance_report(db, group_by: str = "symbol", execution_mode: Optional[st
             m.pop(drop, None)
         m["execution"] = {f"avg_{c}": round(sum(v) / len(v), 4) for c, v in quality[k].items() if v}
         m["execution"]["measured_fills"] = len(quality[k].get("slippage_r", []))
+        m["excursion"] = excursion_stats(excursions.get(k, []))
     return {"group_by": group_by, "execution_mode": execution_mode, "account_login": account_login,
             "closed_trades": len(rows), "groups": groups}

@@ -179,6 +179,10 @@ def evaluate(run: Dict[tuple, Dict[str, Any]], filt: Optional[str] = None) -> Di
         rs = [float(tr.get("pnl_r", 0.0) or 0.0) for tr in trades]
         out[(sym, st)] = metrics(rs, float(r.get("window_days") or 1.0))
         out[(sym, st)]["_rs"] = rs
+        from jarvis.analytics.performance import excursion_stats
+        out[(sym, st)]["excursion"] = excursion_stats(
+            (float(tr["mfe"]) / float(tr["risk_dist"]), float(tr.get("pnl_r", 0.0) or 0.0))
+            for tr in trades if tr.get("mfe") is not None and float(tr.get("risk_dist") or 0) > 0)
     return out
 
 
@@ -270,7 +274,9 @@ def write_mode_report(ev, path: str, window: str, exit_mode: str, run: str, n_tr
         modes.setdefault(st, []).append({"symbol": sym, "trades": m["n"], "expectancy_r": m["exp_r"],
                                          "profit_factor": m["pf"] or 0.0, "win_rate_pct": m["win_pct"],
                                          "max_dd_r": m["max_dd_r"], "dsr": m.get("dsr"),
-                                         "lcb80_r": lcb80(m.get("_rs", []))})
+                                         "lcb80_r": lcb80(m.get("_rs", [])),
+                                         **{k: (m.get("excursion") or {}).get(k) for k in
+                                            ("giveback_r", "giveback_sd", "reached_1r", "capture_pct", "mean_mfe_r")}})
         tm = (train or {}).get((sym, st))
         if tm and tm.get("n"):
             modes[st][-1].update(train_trades=tm["n"], train_expectancy_r=tm["exp_r"])

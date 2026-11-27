@@ -88,6 +88,10 @@ class TradingSettings:
     # Under institutional_lock, these symbols hold to their original stop/target instead (no lock,
     # no trail): measured better in both halves for crypto on 353 clean live trades, 2026-11-24.
     exit_hold_symbols: List[str] = field(default_factory=list)
+    # Per-cell exit mode {"SYMBOL|STYLE" or "ASSETCLASS|STYLE": mode}, mode in runtime.EXIT_MODES.
+    # Empty = exit_mode / exit_hold_symbols decide (exit_policy.live_exit_mode). Set only by an
+    # approved evidence promotion (tools/promote_model.py approve mode_evidence).
+    exit_cells: Dict[str, str] = field(default_factory=dict)
     # Startup trade style (the API can change it for the session): ALL = every style competes;
     # AUTO = one style per symbol, from those the gate allows and the balance can afford.
     trade_style: str = "ALL"
@@ -383,6 +387,8 @@ class JarvisConfig:
                     cfg.trading.trade_style = str(t_data["trade_style"]).upper()
                 if isinstance(t_data.get("exit_hold_symbols"), list):
                     cfg.trading.exit_hold_symbols = [str(s).upper() for s in t_data["exit_hold_symbols"]]
+                if isinstance(t_data.get("exit_cells"), dict):
+                    cfg.trading.exit_cells = _valid_exit_cells(t_data["exit_cells"])
                 if "calibrated_policy_trader" in t_data:
                     raw = t_data["calibrated_policy_trader"]
                     cfg.trading.calibrated_policy_trader = (
@@ -480,10 +486,22 @@ def persist_allowed_symbols(symbols: List[str]) -> bool:
 _OVERRIDES_SEEN: Dict[str, Any] = {"mtime": None}
 
 
+def _valid_exit_cells(raw: Any) -> Dict[str, str]:
+    """{"KEY|STYLE": mode} with only known exit modes; an unknown mode is dropped and logged."""
+    from jarvis.config.runtime import EXIT_MODES
+    out = {}
+    for k, v in (raw or {}).items():
+        if str(v).lower() in EXIT_MODES and "|" in str(k):
+            out[str(k).upper()] = str(v).lower()
+        else:
+            logger.error("trading.exit_cells: ignored %r -> %r (mode must be one of %s)", k, v, EXIT_MODES)
+    return out
+
+
 def reload_deployment_overrides() -> bool:
-    """Re-read gates.deployment_overrides when config/settings.json changed on disk, so an
-    override can be added, renewed or removed without a restart. Audited; True when it changed.
-    A half-written or invalid file keeps the list already loaded."""
+    """Re-read gates.deployment_overrides and trading.exit_cells when config/settings.json changed
+    on disk, so an override or an approved per-cell exit applies without a restart. Audited; True
+    when either changed. A half-written or invalid file keeps what is already loaded."""
     try:
         mt = os.path.getmtime(_LIVE_SETTINGS_PATH)
     except OSError:
@@ -494,14 +512,29 @@ def reload_deployment_overrides() -> bool:
     _OVERRIDES_SEEN["mtime"] = mt
     try:
         with open(_LIVE_SETTINGS_PATH, "r", encoding="utf-8") as f:
-            new = (json.load(f).get("gates") or {}).get("deployment_overrides", [])
+            doc = json.load(f)
+        new = (doc.get("gates") or {}).get("deployment_overrides", [])
+        cells = (doc.get("trading") or {}).get("exit_cells", {})
     except (OSError, ValueError, AttributeError):
         return False
+    changed = False
+    if isinstance(cells, dict):
+        cells = _valid_exit_cells(cells)
+        if cells != dict(SETTINGS.trading.exit_cells or {}):
+            old_cells = dict(SETTINGS.trading.exit_cells or {})
+            SETTINGS.trading.exit_cells = cells
+            changed = True
+            logger.warning("trading.exit_cells reloaded from settings.json: %s", cells)
+            try:
+                from jarvis.learning.model_registry import audit
+                audit("exit_cells_reloaded", old=old_cells, new=cells)
+            except Exception:
+                pass
     if not isinstance(new, list) or not all(isinstance(o, dict) for o in new):
-        return False
+        return changed
     old = list(SETTINGS.gates.deployment_overrides or [])
     if new == old:
-        return False
+        return changed
     SETTINGS.gates.deployment_overrides = new
     try:
         from jarvis.learning.model_registry import audit

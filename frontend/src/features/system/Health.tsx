@@ -23,7 +23,7 @@ const LABEL: Record<string, string> = {
   loop_heartbeat: "Orchestration loop", position_monitor: "Position monitor (open trades)", no_trade: "Order flow", rejection_spike: "Rejection rate",
   analyst_fallbacks: "Analyst fallbacks", currency_exposure: "Correlated currency risk",
   stops_and_gap_risk: "Broker stops & gap risk", verifier_health: "Pre-send verifier", forward_test_exposure: "Forward-test exposure",
-  live_vs_calibrated: "Live vs validated expectancy", evidence: "Deployment evidence", state_sync: "Broker state sync", symbol_feeds: "Market data per symbol",
+  live_vs_calibrated: "Live vs validated expectancy", evidence: "Deployment evidence", exit_quality: "Exit quality (profit protection)", state_sync: "Broker state sync", symbol_feeds: "Market data per symbol",
   synthetic_bars: "Synthetic bars", news_calendar: "News calendar", timeouts: "Stuck broker calls",
   risk_guards: "Risk guards & daily loss", deployment_overrides: "Deployment overrides", resources: "Machine resources",
 };

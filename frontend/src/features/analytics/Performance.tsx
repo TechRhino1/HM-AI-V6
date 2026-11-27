@@ -12,6 +12,8 @@ interface Group {
   expectancy_dollars: number; avg_r: number; max_drawdown_dollars: number; max_consecutive_losses: number;
   /** Measured at fill since 2026-11-27 (older trades have none). Slippage is adverse, in R. */
   execution?: { avg_slippage_r?: number; avg_fill_latency_ms?: number; avg_spread_at_fill?: number; measured_fills?: number };
+  /** Profit protection (MFE recorded for every close since 2026-11-27): trades that reached +1R. */
+  excursion?: { measured?: number; reached_1r?: number; giveback_r?: number | null; capture_pct?: number | null; missed_protection?: number };
 }
 const BY = [["symbol", "Symbol"], ["symbol_style", "Symbol × style"], ["strategy", "Strategy"], ["trade_style", "Style"], ["exit_reason", "Exit reason"], ["account_login", "Account"]];
 type SortKey = keyof Group | "key";
@@ -113,7 +115,10 @@ export function Performance() {
                   {th("profit_factor", "PF")}{th("expectancy_dollars", "Expectancy")}{th("avg_r", "Avg R")}{th("net_profit", "Net")}
                   {th("max_drawdown_dollars", "Max DD")}{th("max_consecutive_losses", "Loss streak")}
                   <th className="num" title="Average adverse slippage vs the requested price, in R (fills measured since 2026-11-27)">Slippage R</th>
-                  <th className="num" title="Average order round trip">Latency</th></tr>
+                  <th className="num" title="Average order round trip">Latency</th>
+                  <th className="num" title="Of trades that reached +1R: share of the peak kept at exit (MFE recorded since 2026-11-27)">Capture</th>
+                  <th className="num" title="Of trades that reached +1R: average R given back from the peak">Give-back R</th>
+                  <th className="num" title="Reached +1R and still closed at or below 0R">Missed</th></tr>
               </thead>
               <tbody>
                 {groups.map((g) => (
@@ -131,6 +136,10 @@ export function Performance() {
                       title={`${g.execution?.measured_fills ?? 0} measured fill(s)`}>
                       {isNum(g.execution?.avg_slippage_r) ? fixed(g.execution?.avg_slippage_r as number, 3) : "—"}</td>
                     <td className="num">{isNum(g.execution?.avg_fill_latency_ms) ? `${fixed(g.execution?.avg_fill_latency_ms as number, 0)} ms` : "—"}</td>
+                    <td className="num" title={`${g.excursion?.reached_1r ?? 0} of ${g.excursion?.measured ?? 0} measured close(s) reached +1R`}>
+                      {isNum(g.excursion?.capture_pct) ? pct(g.excursion?.capture_pct as number, 0) : "—"}</td>
+                    <td className="num">{isNum(g.excursion?.giveback_r) ? fixed(g.excursion?.giveback_r as number, 2) : "—"}</td>
+                    <td className={`num ${(g.excursion?.missed_protection ?? 0) > 0 ? "down" : ""}`}>{g.excursion?.measured ? g.excursion?.missed_protection ?? 0 : "—"}</td>
                   </tr>
                 ))}
               </tbody>

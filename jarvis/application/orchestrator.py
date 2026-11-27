@@ -724,6 +724,8 @@ class JarvisOrchestrator:
             now, getattr(self.state_synchronizer, "last_sync_ok_at", None), cfg))
         _safe("symbol_feeds", lambda: _sm.check_symbol_feeds(self.data_feed.symbol_health(), cfg))
 
+        _safe("exit_quality", lambda: _sm.check_exit_quality(*self._exit_quality_inputs()))
+
         def _evidence_status():
             from jarvis.learning import evidence as _ev
             return _sm.check_evidence(_ev.status())
@@ -956,6 +958,39 @@ class JarvisOrchestrator:
         st = pm.get_status()
         return {k: st.get(k) for k in ("running", "thread_alive", "last_tick_at", "tick_errors",
                                        "last_tick_error", "last_tick_ms", "monitored_symbols")}
+
+    def _exit_quality_inputs(self, limit: int = 200) -> tuple:
+        """([{"cell", "mfe_r", "exit_r", "stop_slip_r"}], {cell: engine evidence row}) for the last
+        `limit` closes of this mode with a measured MFE; stop slip = fill beyond the last stop sent."""
+        import sqlite3
+        from jarvis.backtesting import exit_geometry as _eg
+        from jarvis.config.paths import resolve_db_path
+        from jarvis.data.symbol_registry import resolve as _resolve
+        con = sqlite3.connect(f"file:{resolve_db_path('jarvis_history.db')}?mode=ro", uri=True, timeout=5.0)
+        try:
+            rows = con.execute(
+                "SELECT ticket, position_id, symbol, trade_style, action, entry_price, sl, exit_price, mfe, exit_reason "
+                "FROM executed_trades WHERE closed_at IS NOT NULL AND mfe IS NOT NULL AND exit_price IS NOT NULL "
+                "AND lower(execution_mode) = ? AND COALESCE(regime, '') <> 'FORWARD_TEST' "
+                "ORDER BY closed_at DESC, id DESC LIMIT ?", (str(self.mode).lower(), int(limit))).fetchall()
+            last_sl = dict(con.execute(
+                "SELECT ticket, new_sl FROM sl_events WHERE id IN (SELECT MAX(id) FROM sl_events GROUP BY ticket)").fetchall())
+        finally:
+            con.close()
+        trades, bench = [], {}
+        for ticket, pid, sym, style, action, entry, sl, exit_px, mfe, reason in rows:
+            if not entry or not sl or float(entry) == float(sl) or not style:
+                continue
+            risk, sgn = abs(float(entry) - float(sl)), (1.0 if str(action).upper().startswith("BUY") else -1.0)
+            stop = last_sl.get(pid) or last_sl.get(ticket)
+            cell = f"{str(_resolve(sym).canonical).upper()}|{_eg._norm_style(style)}"
+            trades.append({"cell": cell, "mfe_r": float(mfe) / risk, "exit_r": sgn * (float(exit_px) - float(entry)) / risk,
+                           "stop_slip_r": (sgn * (float(stop) - float(exit_px)) / risk
+                                           if stop and str(reason or "").upper() == "STOP_LOSS" else None)})
+            if cell not in bench:
+                sym_c, st = cell.split("|", 1)
+                bench[cell] = (_eg._engine_evidence(sym_c) or {}).get(st) or {}
+        return trades, bench
 
     def _live_drift_inputs(self) -> Dict[str, Any]:
         """Live net R per symbol x style (this mode, forward tests excluded) and the benchmark each
@@ -1441,6 +1476,10 @@ class JarvisOrchestrator:
             mfe, mae = excursions if excursions else (None, None)
             from jarvis.data import database
             database.TRADE_DB.record_excursions(ticket, mfe, mae)
+            # Each exit variant's virtual exit for this position (the shadow forward test).
+            _shadow = getattr(self.position_monitor, "exit_shadow", None)
+            if _shadow is not None and exit_price > 0:
+                database.TRADE_DB.record_shadow_exits(_shadow.pop(ticket, exit_price), execution_mode=self.mode)
             # A price of 0 means the event did not carry one; pass it as None so
             # the column stays NULL ("not recorded") rather than 0.0, which would
             # claim the trade exited at zero — the same reason the `executed_trades`

@@ -61,12 +61,14 @@ class TestUnmeasuredIsNullNotZero:
     def test_a_ticket_the_monitor_never_saw_returns_none(self, monitor):
         monitor._closed_excursions = {}
         monitor._closed_excursions_order = []
+        monitor._peak_mfe, monitor._peak_mae = {}, {}
         assert monitor.pop_excursions(TICKET) is None
 
     def test_reading_a_twice_credits_it_once(self, monitor):
         """A ticket must not be able to donate its excursion to two closes."""
         monitor._closed_excursions = {TICKET: (1.5, 0.75)}
         monitor._closed_excursions_order = [TICKET]
+        monitor._peak_mfe, monitor._peak_mae = {TICKET: 1.5}, {TICKET: 0.75}   # also still live
         assert monitor.pop_excursions(TICKET) == (1.5, 0.75)
         assert monitor.pop_excursions(TICKET) is None
 
