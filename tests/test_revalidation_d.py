@@ -96,6 +96,20 @@ def test_a_changed_exit_policy_waits_for_approval(ev_env):
     assert out["result"]["status"] == "PENDING" and out["changes"]["exit_policy"]
 
 
+def test_partial_runs_do_not_refuse_what_they_did_not_measure(ev_env):
+    write, tmp = ev_env
+    write(_report([_row("EURUSD", 0.10), _row("GBPUSD", 0.10)], hold=None))   # a pre-PR-D report
+    evidence.active_file()
+    part = _report([_row("EURUSD", 0.10)])
+    part["scope"] = {"symbols": ["EURUSD"], "styles": ["DAY_TRADING"]}
+    with pytest.raises(ValueError, match="partial revalidation"):
+        evidence.promote(write(part, tmp / "p.json"), reason="t")
+    full = _report([_row("EURUSD", 0.10), _row("GBPUSD", 0.10)])
+    full["scope"] = {"symbols": ["EURUSD", "GBPUSD"], "styles": ["DAY_TRADING"]}
+    out = evidence.promote(write(full, tmp / "f.json"), reason="t")
+    assert out["result"]["status"] == "ACTIVE" and not out["changes"]["exit_policy"]   # hold list now recorded, same policy
+
+
 def test_gate_refuses_mismatched_or_stale_evidence_even_with_an_override(ev_env, monkeypatch):
     from jarvis.config.settings import SETTINGS
     write, _ = ev_env

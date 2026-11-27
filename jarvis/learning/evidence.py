@@ -139,8 +139,10 @@ def plan(active: Optional[Dict[str, Any]], candidate: Dict[str, Any]) -> Tuple[D
         elif was and not now:
             tighten.append(f"{key[0]} {key[1]} stops: {_gate(key, row)}")
     policy = []
-    if active and _exit_policy(active) != _exit_policy(cand):
-        policy.append(f"exit policy {_exit_policy(active)} -> {_exit_policy(cand)}")
+    (am, ah), (cm, ch) = _exit_policy(active or {}), _exit_policy(cand)
+    # A report from before exit_hold_symbols was recorded (None) replayed the same settings file.
+    if active and (am != cm or (ah is not None and ch is not None and ah != ch)):
+        policy.append(f"exit policy {(am, ah)} -> {(cm, ch)}")
     return cand, {"tighten": tighten, "loosen": loosen, "exit_policy": policy}
 
 
@@ -158,6 +160,14 @@ def promote(candidate_path: str, reason: str, author: str = "revalidate") -> Dic
     if not cand.get("holdout_window"):
         raise ValueError(f"{candidate_path} is not a holdout report (no holdout_window)")
     active = load(active_file())
+    scope = cand.get("scope")
+    if scope and active:
+        # A run over some symbols/styles says nothing about the rest: it must not refuse them.
+        uncovered = sorted(f"{s}|{t}" for s, t in cells(active)
+                           if s not in scope.get("symbols", []) or t not in scope.get("styles", []))
+        if uncovered:
+            raise ValueError(f"partial revalidation does not cover {len(uncovered)} active cell(s), "
+                             f"e.g. {uncovered[:3]}; run every symbol x style to promote")
     cand, changes = plan(active, cand)
     high = changes["loosen"] + changes["exit_policy"]
     out: Dict[str, Any] = {"changes": changes}

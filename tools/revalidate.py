@@ -190,12 +190,22 @@ def main(argv: Optional[List[str]] = None, run: Callable[[List[str], object], in
                     "--json", os.path.join(STAGING, f"eval_{stamp}.json")], log) != 0:
                 summary["outcome"] = "EVAL_FAILED: nothing promoted"
                 return 2
+            with open(cand, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            payload["scope"] = {"symbols": symbols, "styles": styles}   # what this run measured
+            payload["fingerprint"] = fp["all"]
+            with open(cand, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
             if a.no_promote:
                 summary["outcome"] = f"DRY_RUN: candidate at {cand}"
                 summary["plan"] = evidence.plan(evidence.load(evidence.active_file()), evidence.load(cand))[1]
                 return 0
-            res = evidence.promote(cand, reason=f"weekly revalidation {win['holdout_start']}..{win['holdout_end']} "
-                                                f"fp={fp['all']}")
+            try:
+                res = evidence.promote(cand, reason=f"weekly revalidation {win['holdout_start']}..{win['holdout_end']} "
+                                                    f"fp={fp['all']}")
+            except ValueError as exc:
+                summary["outcome"] = f"NOT_PROMOTED: {exc}"
+                return 2
             summary["promotion"] = res
             summary["outcome"] = (res.get("result") or {}).get("status")
             return 0
